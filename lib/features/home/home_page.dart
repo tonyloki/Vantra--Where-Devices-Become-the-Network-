@@ -35,10 +35,24 @@ class HomePage extends StatelessWidget {
               ),
             ),
             Center(
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.search),
-                label: const Text('Search Nearby'),
-                onPressed: () => context.push('/nearby'),
+              child: Column(
+                children: [
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.search),
+                    label: const Text('Search Nearby'),
+                    onPressed: () => context.push('/nearby'),
+                  ),
+                  const SizedBox(height: 12),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.wifi),
+                    label: const Text('Launch Communication POC'),
+                    onPressed: () => context.push('/poc'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.deepPurple,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),

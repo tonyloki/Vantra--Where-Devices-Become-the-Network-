@@ -7,6 +7,7 @@ import 'features/home/home_page.dart';
 import 'features/discovery/discovery_page.dart';
 import 'features/messaging/chat_page.dart';
 import 'features/profile/profile_page.dart';
+import 'features/poc/poc_page.dart';
 
 void main() {
   runApp(
@@ -45,6 +46,10 @@ final GoRouter _router = GoRouter(
     GoRoute(
       path: '/profile',
       builder: (context, state) => const ProfilePage(),
+    ),
+    GoRoute(
+      path: '/poc',
+      builder: (context, state) => const PocPage(),
     ),
   ],
 );

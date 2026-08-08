@@ -6,11 +6,18 @@ VANTRA is a decentralized, offline-first peer-to-peer communication platform des
 
 ## Phase Status
 
-*   **Current Phase:** Phase 0
-*   **Status:** Foundation and project setup.
+*   **Current Phase:** Phase 1
+*   **Status:** Communication Proof of Concept (POC) completed.
+
+> [!WARNING]
+> Phase 1 communication is a transport proof-of-concept and must not be considered secure or production-ready.
+
+## Completed
+*   Scaffold Foundation (Phase 0)
+*   Direct P2P Connectivity & Raw Byte Transfer (Phase 1)
 
 ## Not Implemented Yet
-*   Peer discovery (Phase 2)
+*   Peer discovery & tracking state (Phase 2)
 *   Connections & Trust (Phase 3)
 *   Identity & Security (Phase 4)
 *   Protocol Buffer Compilation (Phase 5)
