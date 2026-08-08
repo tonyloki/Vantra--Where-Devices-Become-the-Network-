@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+option java_package = "me.vantra.proto";
+option java_outer_classname = "VantraProto";
+
+message VantraMessage {
+  uint32 protocol_version = 1;
+  string message_id       = 2;
+  string conversation_id  = 3;
+  string sender_id        = 4;
+  string receiver_id      = 5;
+  int64  timestamp_ms     = 6;
+  MessageType type        = 7;
+  bytes  payload          = 8;
+  bytes  auth_tag         = 9;
+}
+
+enum MessageType {
+  TEXT = 0;
+  ACK  = 1;
+}
