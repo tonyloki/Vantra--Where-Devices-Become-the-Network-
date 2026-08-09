@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/models/peer_trust_state.dart';
 import 'package:vantra/core/models/message_status.dart';
+import 'package:vantra/core/peers/peer_provider.dart';
 import 'package:vantra/core/utils/logger.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
@@ -19,6 +21,16 @@ class ChatPage extends ConsumerStatefulWidget {
 class _ChatPageState extends ConsumerState<ChatPage> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(messagingStateProvider.notifier).setActiveConversation(widget.peerId);
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -61,89 +73,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
-  void _showSecurityDetails(PeerSession? session) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        final fingerprint = session?.fingerprint ?? 'Pending Exchange';
-        final isTrusted = session?.trustState == PeerTrustState.trusted;
-        return Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    session?.isSecure == true ? Icons.lock : Icons.lock_open,
-                    color: session?.isSecure == true ? Colors.greenAccent : Colors.amberAccent,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    session?.isSecure == true ? 'Encrypted Session' : 'Security Pending',
-                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              const Text('Cryptographic Fingerprint (SHA-256):', style: TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(height: 6),
-              SelectableText(
-                fingerprint,
-                style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontFamily: 'monospace'),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Text('Trust State: ', style: TextStyle(color: Colors.white70)),
-                  Text(
-                    session?.trustState.name.toUpperCase() ?? 'UNTRUSTED',
-                    style: TextStyle(
-                      color: isTrusted ? Colors.greenAccent : Colors.orangeAccent,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: isTrusted ? Colors.orangeAccent : Colors.greenAccent,
-                    foregroundColor: Colors.black,
-                  ),
-                  icon: Icon(isTrusted ? Icons.warning_amber : Icons.verified),
-                  label: Text(isTrusted ? 'Mark as Untrusted' : 'Verify & Mark as Trusted'),
-                  onPressed: () {
-                    Navigator.pop(context);
-                    final newState = isTrusted ? PeerTrustState.untrusted : PeerTrustState.trusted;
-                    ref.read(messagingStateProvider.notifier).setPeerTrustState(widget.peerId, newState);
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final localId = ref.watch(localIdentityStateProvider);
     final messagingState = ref.watch(messagingStateProvider);
+    final peerProfileAsync = ref.watch(peerProfileStreamProvider(widget.peerId));
 
     final session = messagingState.sessions[widget.peerId];
     final messagesAsync = ref.watch(conversationStreamProvider(widget.peerId));
 
-    final displayName = session?.displayName ?? 'Peer ${widget.peerId.substring(0, 6)}';
+    final peerProfile = peerProfileAsync.value;
+    final displayName = peerProfile?.effectiveName ?? session?.displayName ?? 'Peer ${widget.peerId.length >= 6 ? widget.peerId.substring(0, 6) : widget.peerId}';
     final isConnected = session?.status == SessionStatus.connected;
+    final isBlocked = peerProfile?.isBlocked ?? false;
+    final isTrusted = peerProfile?.isTrusted ?? (session?.trustState == PeerTrustState.trusted);
 
     // Trigger auto-scroll on new message
     _scrollToBottom();
@@ -162,41 +105,61 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         actions: [
           IconButton(
             icon: Icon(
-              session?.isSecure == true ? Icons.security : Icons.security_outlined,
-              color: session?.trustState == PeerTrustState.trusted ? Colors.greenAccent : Colors.white70,
+              isTrusted ? Icons.verified : Icons.shield_outlined,
+              color: isTrusted ? Colors.greenAccent : Colors.amberAccent,
             ),
-            tooltip: 'Security & Fingerprint',
-            onPressed: () => _showSecurityDetails(session),
+            tooltip: isTrusted ? 'Verified Contact' : 'Untrusted (Tap for Profile)',
+            onPressed: () => context.push('/peer/${widget.peerId}'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: 'Peer Profile',
+            onPressed: () => context.push('/peer/${widget.peerId}'),
           ),
         ],
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              displayName,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-            ),
-            Row(
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: isConnected ? Colors.greenAccent : Colors.redAccent,
-                    shape: BoxShape.circle,
+        title: InkWell(
+          onTap: () => context.push('/peer/${widget.peerId}'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                displayName,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: isBlocked
+                          ? Colors.redAccent
+                          : isConnected
+                              ? Colors.greenAccent
+                              : Colors.grey,
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  isConnected ? (session?.isSecure == true ? 'Securely Connected' : 'Connected') : 'Disconnected',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isConnected ? Colors.greenAccent : Colors.redAccent,
+                  const SizedBox(width: 6),
+                  Text(
+                    isBlocked
+                        ? 'Blocked'
+                        : isConnected
+                            ? (session?.isSecure == true ? 'Securely Connected' : 'Connected')
+                            : 'Disconnected',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isBlocked
+                          ? Colors.redAccent
+                          : isConnected
+                              ? Colors.greenAccent
+                              : Colors.grey,
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
       body: Container(
@@ -209,19 +172,37 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         ),
         child: Column(
           children: [
-            if (!isConnected)
+            if (isBlocked)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                color: Colors.redAccent.withValues(alpha: 0.2),
+                color: Colors.red.shade900.withValues(alpha: 0.4),
                 child: const Row(
                   children: [
-                    Icon(Icons.wifi_off, color: Colors.redAccent, size: 20),
+                    Icon(Icons.block, color: Colors.redAccent, size: 20),
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Session disconnected. Text messaging is disabled.',
+                        'This peer is blocked. Messages and connections are rejected.',
                         style: TextStyle(color: Colors.redAccent, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (!isConnected)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                color: Colors.amber.shade900.withValues(alpha: 0.25),
+                child: const Row(
+                  children: [
+                    Icon(Icons.wifi_off, color: Colors.amberAccent, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Session offline. You will be able to send messages once in range.',
+                        style: TextStyle(color: Colors.amberAccent, fontSize: 13),
                       ),
                     ),
                   ],
@@ -248,103 +229,97 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           Icon(
                             Icons.chat_bubble_outline_rounded,
                             size: 64,
-                            color: Colors.grey.withValues(alpha: 0.3),
+                            color: Colors.deepPurple.withValues(alpha: 0.5),
                           ),
                           const SizedBox(height: 16),
-                          Text(
+                          const Text(
                             'No messages yet',
-                            style: TextStyle(color: Colors.grey.withValues(alpha: 0.6), fontSize: 16),
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Type a message below to start chat',
-                            style: TextStyle(color: Colors.grey.withValues(alpha: 0.4), fontSize: 12),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'End-to-End Encrypted with ChaCha20-Poly1305',
+                            style: TextStyle(
+                              color: Colors.white38,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
                     );
                   }
-
                   return ListView.builder(
                     controller: _scrollController,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     itemCount: messages.length,
                     itemBuilder: (context, index) {
-                      final message = messages[index];
-                      final isMe = message.senderId == localId.peerId;
+                      final msg = messages[index];
+                      final isMe = msg.senderId == localId.peerId;
 
                       return Align(
                         alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                         child: Container(
                           margin: const EdgeInsets.symmetric(vertical: 4),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                           constraints: BoxConstraints(
                             maxWidth: MediaQuery.of(context).size.width * 0.75,
                           ),
                           decoration: BoxDecoration(
                             gradient: isMe
                                 ? const LinearGradient(
-                                    colors: [Colors.deepPurpleAccent, Colors.indigoAccent],
+                                    colors: [Colors.deepPurple, Colors.indigoAccent],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                   )
-                                : LinearGradient(
-                                    colors: [Colors.grey[850]!, Colors.grey[900]!],
+                                : const LinearGradient(
+                                    colors: [Color(0xFF2C2C2E), Color(0xFF3A3A3C)],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                   ),
                             borderRadius: BorderRadius.only(
                               topLeft: const Radius.circular(16),
                               topRight: const Radius.circular(16),
-                              bottomLeft: isMe ? const Radius.circular(16) : const Radius.circular(0),
-                              bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(16),
+                              bottomLeft: isMe ? const Radius.circular(16) : const Radius.circular(2),
+                              bottomRight: isMe ? const Radius.circular(2) : const Radius.circular(16),
                             ),
                             boxShadow: [
                               BoxShadow(
                                 color: Colors.black.withValues(alpha: 0.2),
                                 blurRadius: 4,
-                                offset: const Offset(2, 2),
+                                offset: const Offset(0, 2),
                               ),
                             ],
                           ),
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                             children: [
-                              if (!isMe)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 4),
-                                  child: Text(
-                                    displayName,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.cyanAccent,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ),
                               Text(
-                                message.text,
-                                style: const TextStyle(color: Colors.white, fontSize: 15),
+                                msg.text,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                ),
                               ),
                               const SizedBox(height: 4),
-                              Align(
-                                alignment: Alignment.bottomRight,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      _formatTimestamp(message.timestamp),
-                                      style: TextStyle(
-                                        color: Colors.white70.withValues(alpha: 0.6),
-                                        fontSize: 10,
-                                      ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    _formatTimestamp(msg.timestamp),
+                                    style: const TextStyle(
+                                      color: Colors.white54,
+                                      fontSize: 10,
                                     ),
-                                    if (isMe) ...[
-                                      const SizedBox(width: 4),
-                                      _buildStatusIcon(message.status),
-                                    ],
+                                  ),
+                                  if (isMe) ...[
+                                    const SizedBox(width: 4),
+                                    _buildStatusIcon(msg.status),
                                   ],
-                                ),
+                                ],
                               ),
                             ],
                           ),
@@ -356,59 +331,66 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               ),
             ),
             Container(
-              padding: const EdgeInsets.only(left: 16, right: 8, top: 8, bottom: 24),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
                 color: const Color(0xFF1E1E1E),
-                border: Border(
-                  top: BorderSide(color: Colors.grey[900]!),
-                ),
+                border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.05))),
               ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      key: const Key('chat_input_field'),
-                      controller: _controller,
-                      enabled: isConnected,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: InputDecoration(
-                        hintText: isConnected ? 'Type a message...' : 'Connecting offline...',
-                        hintStyle: const TextStyle(color: Colors.grey),
-                        border: InputBorder.none,
+              child: SafeArea(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2C2C2E),
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: TextField(
+                          key: const Key('chat_input_field'),
+                          controller: _controller,
+                          enabled: isConnected && !isBlocked,
+                          textCapitalization: TextCapitalization.sentences,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: InputDecoration(
+                            hintText: isBlocked
+                                ? 'Peer is blocked'
+                                : isConnected
+                                    ? 'Type an encrypted message...'
+                                    : 'Disconnected',
+                            hintStyle: const TextStyle(color: Colors.white38),
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          ),
+                        ),
                       ),
-                      onSubmitted: isConnected ? (_) => _sendMessage() : null,
                     ),
-                  ),
-                  IconButton(
-                    key: const Key('chat_send_button'),
-                    icon: const Icon(Icons.send_rounded),
-                    color: Colors.deepPurpleAccent,
-                    disabledColor: Colors.grey,
-                    onPressed: isConnected ? _sendMessage : null,
-                  ),
-                ],
+                    const SizedBox(width: 8),
+                    Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.deepPurple,
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        key: const Key('chat_send_button'),
+                        icon: const Icon(Icons.send_rounded, color: Colors.white),
+                        onPressed: (isConnected && !isBlocked)
+                            ? () {
+                                final text = _controller.text.trim();
+                                if (text.isNotEmpty) {
+                                  _controller.clear();
+                                  ref.read(messagingStateProvider.notifier).sendTextMessage(widget.peerId, text);
+                                }
+                              }
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
         ),
       ),
     );
-  }
-
-  void _sendMessage() {
-    final text = _controller.text.trim();
-    if (text.isEmpty) return;
-
-    _controller.clear();
-    ref.read(messagingStateProvider.notifier).sendTextMessage(widget.peerId, text).catchError((e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Send failed: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-    });
   }
 }

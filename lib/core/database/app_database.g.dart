@@ -97,6 +97,19 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         type: DriftSqlType.string,
         requiredDuringInsert: true,
       ).withConverter<MessageStatus>($MessagesTable.$converterstatus);
+  static const VerificationMeta _isReadMeta = const VerificationMeta('isRead');
+  @override
+  late final GeneratedColumn<bool> isRead = GeneratedColumn<bool>(
+    'is_read',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_read" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -118,6 +131,7 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     timestamp,
     type,
     status,
+    isRead,
     createdAt,
   ];
   @override
@@ -186,6 +200,12 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     } else if (isInserting) {
       context.missing(_typeMeta);
     }
+    if (data.containsKey('is_read')) {
+      context.handle(
+        _isReadMeta,
+        isRead.isAcceptableOrUnknown(data['is_read']!, _isReadMeta),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -237,6 +257,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
           data['${effectivePrefix}status'],
         )!,
       ),
+      isRead: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_read'],
+      )!,
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}created_at'],
@@ -262,6 +286,7 @@ class Message extends DataClass implements Insertable<Message> {
   final int timestamp;
   final String type;
   final MessageStatus status;
+  final bool isRead;
   final int createdAt;
   const Message({
     required this.localId,
@@ -272,6 +297,7 @@ class Message extends DataClass implements Insertable<Message> {
     required this.timestamp,
     required this.type,
     required this.status,
+    required this.isRead,
     required this.createdAt,
   });
   @override
@@ -289,6 +315,7 @@ class Message extends DataClass implements Insertable<Message> {
         $MessagesTable.$converterstatus.toSql(status),
       );
     }
+    map['is_read'] = Variable<bool>(isRead);
     map['created_at'] = Variable<int>(createdAt);
     return map;
   }
@@ -303,6 +330,7 @@ class Message extends DataClass implements Insertable<Message> {
       timestamp: Value(timestamp),
       type: Value(type),
       status: Value(status),
+      isRead: Value(isRead),
       createdAt: Value(createdAt),
     );
   }
@@ -321,6 +349,7 @@ class Message extends DataClass implements Insertable<Message> {
       timestamp: serializer.fromJson<int>(json['timestamp']),
       type: serializer.fromJson<String>(json['type']),
       status: serializer.fromJson<MessageStatus>(json['status']),
+      isRead: serializer.fromJson<bool>(json['isRead']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
     );
   }
@@ -336,6 +365,7 @@ class Message extends DataClass implements Insertable<Message> {
       'timestamp': serializer.toJson<int>(timestamp),
       'type': serializer.toJson<String>(type),
       'status': serializer.toJson<MessageStatus>(status),
+      'isRead': serializer.toJson<bool>(isRead),
       'createdAt': serializer.toJson<int>(createdAt),
     };
   }
@@ -349,6 +379,7 @@ class Message extends DataClass implements Insertable<Message> {
     int? timestamp,
     String? type,
     MessageStatus? status,
+    bool? isRead,
     int? createdAt,
   }) => Message(
     localId: localId ?? this.localId,
@@ -359,6 +390,7 @@ class Message extends DataClass implements Insertable<Message> {
     timestamp: timestamp ?? this.timestamp,
     type: type ?? this.type,
     status: status ?? this.status,
+    isRead: isRead ?? this.isRead,
     createdAt: createdAt ?? this.createdAt,
   );
   Message copyWithCompanion(MessagesCompanion data) {
@@ -375,6 +407,7 @@ class Message extends DataClass implements Insertable<Message> {
       timestamp: data.timestamp.present ? data.timestamp.value : this.timestamp,
       type: data.type.present ? data.type.value : this.type,
       status: data.status.present ? data.status.value : this.status,
+      isRead: data.isRead.present ? data.isRead.value : this.isRead,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -390,6 +423,7 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('timestamp: $timestamp, ')
           ..write('type: $type, ')
           ..write('status: $status, ')
+          ..write('isRead: $isRead, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -405,6 +439,7 @@ class Message extends DataClass implements Insertable<Message> {
     timestamp,
     type,
     status,
+    isRead,
     createdAt,
   );
   @override
@@ -419,6 +454,7 @@ class Message extends DataClass implements Insertable<Message> {
           other.timestamp == this.timestamp &&
           other.type == this.type &&
           other.status == this.status &&
+          other.isRead == this.isRead &&
           other.createdAt == this.createdAt);
 }
 
@@ -431,6 +467,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int> timestamp;
   final Value<String> type;
   final Value<MessageStatus> status;
+  final Value<bool> isRead;
   final Value<int> createdAt;
   const MessagesCompanion({
     this.localId = const Value.absent(),
@@ -441,6 +478,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.timestamp = const Value.absent(),
     this.type = const Value.absent(),
     this.status = const Value.absent(),
+    this.isRead = const Value.absent(),
     this.createdAt = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -452,6 +490,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     required int timestamp,
     required String type,
     required MessageStatus status,
+    this.isRead = const Value.absent(),
     required int createdAt,
   }) : messageId = Value(messageId),
        senderId = Value(senderId),
@@ -470,6 +509,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? timestamp,
     Expression<String>? type,
     Expression<String>? status,
+    Expression<bool>? isRead,
     Expression<int>? createdAt,
   }) {
     return RawValuesInsertable({
@@ -481,6 +521,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (timestamp != null) 'timestamp': timestamp,
       if (type != null) 'type': type,
       if (status != null) 'status': status,
+      if (isRead != null) 'is_read': isRead,
       if (createdAt != null) 'created_at': createdAt,
     });
   }
@@ -494,6 +535,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int>? timestamp,
     Value<String>? type,
     Value<MessageStatus>? status,
+    Value<bool>? isRead,
     Value<int>? createdAt,
   }) {
     return MessagesCompanion(
@@ -505,6 +547,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       timestamp: timestamp ?? this.timestamp,
       type: type ?? this.type,
       status: status ?? this.status,
+      isRead: isRead ?? this.isRead,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -538,6 +581,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
         $MessagesTable.$converterstatus.toSql(status.value),
       );
     }
+    if (isRead.present) {
+      map['is_read'] = Variable<bool>(isRead.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<int>(createdAt.value);
     }
@@ -555,6 +601,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('timestamp: $timestamp, ')
           ..write('type: $type, ')
           ..write('status: $status, ')
+          ..write('isRead: $isRead, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -585,6 +632,17 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nicknameMeta = const VerificationMeta(
+    'nickname',
+  );
+  @override
+  late final GeneratedColumn<String> nickname = GeneratedColumn<String>(
+    'nickname',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _lastKnownEndpointIdMeta =
       const VerificationMeta('lastKnownEndpointId');
@@ -677,6 +735,7 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
   List<GeneratedColumn> get $columns => [
     peerId,
     displayName,
+    nickname,
     lastKnownEndpointId,
     publicKey,
     fingerprint,
@@ -716,6 +775,12 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
       );
     } else if (isInserting) {
       context.missing(_displayNameMeta);
+    }
+    if (data.containsKey('nickname')) {
+      context.handle(
+        _nicknameMeta,
+        nickname.isAcceptableOrUnknown(data['nickname']!, _nicknameMeta),
+      );
     }
     if (data.containsKey('last_known_endpoint_id')) {
       context.handle(
@@ -791,6 +856,10 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
         DriftSqlType.string,
         data['${effectivePrefix}display_name'],
       )!,
+      nickname: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}nickname'],
+      ),
       lastKnownEndpointId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}last_known_endpoint_id'],
@@ -840,6 +909,7 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
 class Peer extends DataClass implements Insertable<Peer> {
   final String peerId;
   final String displayName;
+  final String? nickname;
   final String? lastKnownEndpointId;
   final String? publicKey;
   final String? fingerprint;
@@ -851,6 +921,7 @@ class Peer extends DataClass implements Insertable<Peer> {
   const Peer({
     required this.peerId,
     required this.displayName,
+    this.nickname,
     this.lastKnownEndpointId,
     this.publicKey,
     this.fingerprint,
@@ -865,6 +936,9 @@ class Peer extends DataClass implements Insertable<Peer> {
     final map = <String, Expression>{};
     map['peer_id'] = Variable<String>(peerId);
     map['display_name'] = Variable<String>(displayName);
+    if (!nullToAbsent || nickname != null) {
+      map['nickname'] = Variable<String>(nickname);
+    }
     if (!nullToAbsent || lastKnownEndpointId != null) {
       map['last_known_endpoint_id'] = Variable<String>(lastKnownEndpointId);
     }
@@ -892,6 +966,9 @@ class Peer extends DataClass implements Insertable<Peer> {
     return PeersCompanion(
       peerId: Value(peerId),
       displayName: Value(displayName),
+      nickname: nickname == null && nullToAbsent
+          ? const Value.absent()
+          : Value(nickname),
       lastKnownEndpointId: lastKnownEndpointId == null && nullToAbsent
           ? const Value.absent()
           : Value(lastKnownEndpointId),
@@ -919,6 +996,7 @@ class Peer extends DataClass implements Insertable<Peer> {
     return Peer(
       peerId: serializer.fromJson<String>(json['peerId']),
       displayName: serializer.fromJson<String>(json['displayName']),
+      nickname: serializer.fromJson<String?>(json['nickname']),
       lastKnownEndpointId: serializer.fromJson<String?>(
         json['lastKnownEndpointId'],
       ),
@@ -937,6 +1015,7 @@ class Peer extends DataClass implements Insertable<Peer> {
     return <String, dynamic>{
       'peerId': serializer.toJson<String>(peerId),
       'displayName': serializer.toJson<String>(displayName),
+      'nickname': serializer.toJson<String?>(nickname),
       'lastKnownEndpointId': serializer.toJson<String?>(lastKnownEndpointId),
       'publicKey': serializer.toJson<String?>(publicKey),
       'fingerprint': serializer.toJson<String?>(fingerprint),
@@ -951,6 +1030,7 @@ class Peer extends DataClass implements Insertable<Peer> {
   Peer copyWith({
     String? peerId,
     String? displayName,
+    Value<String?> nickname = const Value.absent(),
     Value<String?> lastKnownEndpointId = const Value.absent(),
     Value<String?> publicKey = const Value.absent(),
     Value<String?> fingerprint = const Value.absent(),
@@ -962,6 +1042,7 @@ class Peer extends DataClass implements Insertable<Peer> {
   }) => Peer(
     peerId: peerId ?? this.peerId,
     displayName: displayName ?? this.displayName,
+    nickname: nickname.present ? nickname.value : this.nickname,
     lastKnownEndpointId: lastKnownEndpointId.present
         ? lastKnownEndpointId.value
         : this.lastKnownEndpointId,
@@ -981,6 +1062,7 @@ class Peer extends DataClass implements Insertable<Peer> {
       displayName: data.displayName.present
           ? data.displayName.value
           : this.displayName,
+      nickname: data.nickname.present ? data.nickname.value : this.nickname,
       lastKnownEndpointId: data.lastKnownEndpointId.present
           ? data.lastKnownEndpointId.value
           : this.lastKnownEndpointId,
@@ -1005,6 +1087,7 @@ class Peer extends DataClass implements Insertable<Peer> {
     return (StringBuffer('Peer(')
           ..write('peerId: $peerId, ')
           ..write('displayName: $displayName, ')
+          ..write('nickname: $nickname, ')
           ..write('lastKnownEndpointId: $lastKnownEndpointId, ')
           ..write('publicKey: $publicKey, ')
           ..write('fingerprint: $fingerprint, ')
@@ -1021,6 +1104,7 @@ class Peer extends DataClass implements Insertable<Peer> {
   int get hashCode => Object.hash(
     peerId,
     displayName,
+    nickname,
     lastKnownEndpointId,
     publicKey,
     fingerprint,
@@ -1036,6 +1120,7 @@ class Peer extends DataClass implements Insertable<Peer> {
       (other is Peer &&
           other.peerId == this.peerId &&
           other.displayName == this.displayName &&
+          other.nickname == this.nickname &&
           other.lastKnownEndpointId == this.lastKnownEndpointId &&
           other.publicKey == this.publicKey &&
           other.fingerprint == this.fingerprint &&
@@ -1049,6 +1134,7 @@ class Peer extends DataClass implements Insertable<Peer> {
 class PeersCompanion extends UpdateCompanion<Peer> {
   final Value<String> peerId;
   final Value<String> displayName;
+  final Value<String?> nickname;
   final Value<String?> lastKnownEndpointId;
   final Value<String?> publicKey;
   final Value<String?> fingerprint;
@@ -1061,6 +1147,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   const PeersCompanion({
     this.peerId = const Value.absent(),
     this.displayName = const Value.absent(),
+    this.nickname = const Value.absent(),
     this.lastKnownEndpointId = const Value.absent(),
     this.publicKey = const Value.absent(),
     this.fingerprint = const Value.absent(),
@@ -1074,6 +1161,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   PeersCompanion.insert({
     required String peerId,
     required String displayName,
+    this.nickname = const Value.absent(),
     this.lastKnownEndpointId = const Value.absent(),
     this.publicKey = const Value.absent(),
     this.fingerprint = const Value.absent(),
@@ -1091,6 +1179,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   static Insertable<Peer> custom({
     Expression<String>? peerId,
     Expression<String>? displayName,
+    Expression<String>? nickname,
     Expression<String>? lastKnownEndpointId,
     Expression<String>? publicKey,
     Expression<String>? fingerprint,
@@ -1104,6 +1193,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return RawValuesInsertable({
       if (peerId != null) 'peer_id': peerId,
       if (displayName != null) 'display_name': displayName,
+      if (nickname != null) 'nickname': nickname,
       if (lastKnownEndpointId != null)
         'last_known_endpoint_id': lastKnownEndpointId,
       if (publicKey != null) 'public_key': publicKey,
@@ -1120,6 +1210,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   PeersCompanion copyWith({
     Value<String>? peerId,
     Value<String>? displayName,
+    Value<String?>? nickname,
     Value<String?>? lastKnownEndpointId,
     Value<String?>? publicKey,
     Value<String?>? fingerprint,
@@ -1133,6 +1224,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return PeersCompanion(
       peerId: peerId ?? this.peerId,
       displayName: displayName ?? this.displayName,
+      nickname: nickname ?? this.nickname,
       lastKnownEndpointId: lastKnownEndpointId ?? this.lastKnownEndpointId,
       publicKey: publicKey ?? this.publicKey,
       fingerprint: fingerprint ?? this.fingerprint,
@@ -1153,6 +1245,9 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     }
     if (displayName.present) {
       map['display_name'] = Variable<String>(displayName.value);
+    }
+    if (nickname.present) {
+      map['nickname'] = Variable<String>(nickname.value);
     }
     if (lastKnownEndpointId.present) {
       map['last_known_endpoint_id'] = Variable<String>(
@@ -1193,6 +1288,7 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     return (StringBuffer('PeersCompanion(')
           ..write('peerId: $peerId, ')
           ..write('displayName: $displayName, ')
+          ..write('nickname: $nickname, ')
           ..write('lastKnownEndpointId: $lastKnownEndpointId, ')
           ..write('publicKey: $publicKey, ')
           ..write('fingerprint: $fingerprint, ')
@@ -1231,6 +1327,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       required int timestamp,
       required String type,
       required MessageStatus status,
+      Value<bool> isRead,
       required int createdAt,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
@@ -1243,6 +1340,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int> timestamp,
       Value<String> type,
       Value<MessageStatus> status,
+      Value<bool> isRead,
       Value<int> createdAt,
     });
 
@@ -1294,6 +1392,11 @@ class $$MessagesTableFilterComposer
   get status => $composableBuilder(
     column: $table.status,
     builder: (column) => ColumnWithTypeConverterFilters(column),
+  );
+
+  ColumnFilters<bool> get isRead => $composableBuilder(
+    column: $table.isRead,
+    builder: (column) => ColumnFilters(column),
   );
 
   ColumnFilters<int> get createdAt => $composableBuilder(
@@ -1351,6 +1454,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isRead => $composableBuilder(
+    column: $table.isRead,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -1394,6 +1502,9 @@ class $$MessagesTableAnnotationComposer
   GeneratedColumnWithTypeConverter<MessageStatus, String> get status =>
       $composableBuilder(column: $table.status, builder: (column) => column);
 
+  GeneratedColumn<bool> get isRead =>
+      $composableBuilder(column: $table.isRead, builder: (column) => column);
+
   GeneratedColumn<int> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 }
@@ -1434,6 +1545,7 @@ class $$MessagesTableTableManager
                 Value<int> timestamp = const Value.absent(),
                 Value<String> type = const Value.absent(),
                 Value<MessageStatus> status = const Value.absent(),
+                Value<bool> isRead = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
               }) => MessagesCompanion(
                 localId: localId,
@@ -1444,6 +1556,7 @@ class $$MessagesTableTableManager
                 timestamp: timestamp,
                 type: type,
                 status: status,
+                isRead: isRead,
                 createdAt: createdAt,
               ),
           createCompanionCallback:
@@ -1456,6 +1569,7 @@ class $$MessagesTableTableManager
                 required int timestamp,
                 required String type,
                 required MessageStatus status,
+                Value<bool> isRead = const Value.absent(),
                 required int createdAt,
               }) => MessagesCompanion.insert(
                 localId: localId,
@@ -1466,6 +1580,7 @@ class $$MessagesTableTableManager
                 timestamp: timestamp,
                 type: type,
                 status: status,
+                isRead: isRead,
                 createdAt: createdAt,
               ),
           withReferenceMapper: (p0) => p0
@@ -1494,6 +1609,7 @@ typedef $$PeersTableCreateCompanionBuilder =
     PeersCompanion Function({
       required String peerId,
       required String displayName,
+      Value<String?> nickname,
       Value<String?> lastKnownEndpointId,
       Value<String?> publicKey,
       Value<String?> fingerprint,
@@ -1508,6 +1624,7 @@ typedef $$PeersTableUpdateCompanionBuilder =
     PeersCompanion Function({
       Value<String> peerId,
       Value<String> displayName,
+      Value<String?> nickname,
       Value<String?> lastKnownEndpointId,
       Value<String?> publicKey,
       Value<String?> fingerprint,
@@ -1534,6 +1651,11 @@ class $$PeersTableFilterComposer extends Composer<_$AppDatabase, $PeersTable> {
 
   ColumnFilters<String> get displayName => $composableBuilder(
     column: $table.displayName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get nickname => $composableBuilder(
+    column: $table.nickname,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1598,6 +1720,11 @@ class $$PeersTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get nickname => $composableBuilder(
+    column: $table.nickname,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get lastKnownEndpointId => $composableBuilder(
     column: $table.lastKnownEndpointId,
     builder: (column) => ColumnOrderings(column),
@@ -1655,6 +1782,9 @@ class $$PeersTableAnnotationComposer
     column: $table.displayName,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get nickname =>
+      $composableBuilder(column: $table.nickname, builder: (column) => column);
 
   GeneratedColumn<String> get lastKnownEndpointId => $composableBuilder(
     column: $table.lastKnownEndpointId,
@@ -1720,6 +1850,7 @@ class $$PeersTableTableManager
               ({
                 Value<String> peerId = const Value.absent(),
                 Value<String> displayName = const Value.absent(),
+                Value<String?> nickname = const Value.absent(),
                 Value<String?> lastKnownEndpointId = const Value.absent(),
                 Value<String?> publicKey = const Value.absent(),
                 Value<String?> fingerprint = const Value.absent(),
@@ -1732,6 +1863,7 @@ class $$PeersTableTableManager
               }) => PeersCompanion(
                 peerId: peerId,
                 displayName: displayName,
+                nickname: nickname,
                 lastKnownEndpointId: lastKnownEndpointId,
                 publicKey: publicKey,
                 fingerprint: fingerprint,
@@ -1746,6 +1878,7 @@ class $$PeersTableTableManager
               ({
                 required String peerId,
                 required String displayName,
+                Value<String?> nickname = const Value.absent(),
                 Value<String?> lastKnownEndpointId = const Value.absent(),
                 Value<String?> publicKey = const Value.absent(),
                 Value<String?> fingerprint = const Value.absent(),
@@ -1758,6 +1891,7 @@ class $$PeersTableTableManager
               }) => PeersCompanion.insert(
                 peerId: peerId,
                 displayName: displayName,
+                nickname: nickname,
                 lastKnownEndpointId: lastKnownEndpointId,
                 publicKey: publicKey,
                 fingerprint: fingerprint,

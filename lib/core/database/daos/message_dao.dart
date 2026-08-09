@@ -21,6 +21,44 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
     return rowsAffected > 0;
   }
 
+  Future<int> markConversationAsRead(String localPeerId, String remotePeerId) {
+    return (update(messages)
+          ..where((t) =>
+              t.senderId.equals(remotePeerId) &
+              t.receiverId.equals(localPeerId) &
+              t.isRead.equals(false)))
+        .write(const MessagesCompanion(
+      isRead: Value(true),
+    ));
+  }
+
+  Stream<int> watchUnreadCount(String localPeerId, String remotePeerId) {
+    final countExp = messages.localId.count();
+    final query = selectOnly(messages)
+      ..addColumns([countExp])
+      ..where(messages.senderId.equals(remotePeerId) &
+          messages.receiverId.equals(localPeerId) &
+          messages.isRead.equals(false));
+
+    return query.map((row) => row.read(countExp) ?? 0).watchSingle();
+  }
+
+  Future<int> getUnreadCount(String localPeerId, String remotePeerId) async {
+    final countExp = messages.localId.count();
+    final query = selectOnly(messages)
+      ..addColumns([countExp])
+      ..where(messages.senderId.equals(remotePeerId) &
+          messages.receiverId.equals(localPeerId) &
+          messages.isRead.equals(false));
+
+    final row = await query.getSingleOrNull();
+    return row?.read(countExp) ?? 0;
+  }
+
+  Stream<List<Message>> watchAllMessages() {
+    return (select(messages)..orderBy([(t) => OrderingTerm(expression: t.timestamp, mode: OrderingMode.desc)])).watch();
+  }
+
   Future<Message?> getMessageById(String messageId) {
     return (select(messages)..where((t) => t.messageId.equals(messageId))).getSingleOrNull();
   }

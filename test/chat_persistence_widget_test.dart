@@ -10,7 +10,6 @@ import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/models/message_status.dart';
-import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/protocol/protocol_message.dart';
 import 'package:vantra/core/protocol/protocol_version.dart';
 import 'package:vantra/core/protocol/protobuf_codec.dart';

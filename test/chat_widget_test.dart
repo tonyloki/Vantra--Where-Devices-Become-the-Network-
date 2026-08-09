@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:drift/native.dart';
 import 'package:vantra/core/database/app_database.dart';
-import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/networking/transport.dart';
@@ -50,7 +49,7 @@ void main() {
     // Initial state: disconnected, input fields disabled
     expect(find.byType(ChatPage), findsOneWidget);
     expect(find.text('No messages yet'), findsOneWidget);
-    expect(find.text('Disconnected'), findsOneWidget);
+    expect(find.text('Disconnected'), findsNWidgets(2));
 
     final inputFinder = find.byKey(const Key('chat_input_field'));
     final sendFinder = find.byKey(const Key('chat_send_button'));
@@ -159,7 +158,7 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('Disconnected'), findsOneWidget);
+    expect(find.text('Disconnected'), findsNWidgets(2));
     expect(tester.widget<TextField>(inputFinder).enabled, isFalse);
     expect(find.text('Hello from Local Device'), findsOneWidget);
     expect(find.text('Reply from Remote Device'), findsOneWidget);

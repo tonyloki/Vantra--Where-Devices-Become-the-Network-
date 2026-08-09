@@ -6,7 +6,9 @@ import 'package:vantra/core/identity/local_identity_provider.dart';
 
 import 'features/onboarding/onboarding_page.dart';
 import 'features/home/home_page.dart';
-import 'features/discovery/discovery_page.dart';
+import 'features/peers/nearby_peers_page.dart';
+import 'features/peers/contacts_page.dart';
+import 'features/peers/peer_profile_page.dart';
 import 'features/messaging/chat_page.dart';
 import 'features/profile/profile_page.dart';
 import 'features/poc/poc_page.dart';
@@ -41,7 +43,18 @@ final GoRouter _router = GoRouter(
     ),
     GoRoute(
       path: '/nearby',
-      builder: (context, state) => const DiscoveryPage(),
+      builder: (context, state) => const NearbyPeersPage(),
+    ),
+    GoRoute(
+      path: '/contacts',
+      builder: (context, state) => const ContactsPage(),
+    ),
+    GoRoute(
+      path: '/peer/:peerId',
+      builder: (context, state) {
+        final peerId = state.pathParameters['peerId'] ?? 'unknown';
+        return PeerProfilePage(peerId: peerId);
+      },
     ),
     GoRoute(
       path: '/chat/:peerId',

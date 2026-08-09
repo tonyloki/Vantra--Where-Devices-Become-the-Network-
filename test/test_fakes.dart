@@ -12,6 +12,8 @@ class FakeTransport implements Transport {
   final List<String> sentTargets = [];
   bool disconnectCalled = false;
   String? disconnectedTarget;
+  bool isDiscovering = false;
+  bool isAdvertising = false;
 
   @override
   Stream<List<DiscoveredPeer>> get discoveredPeersStream => _peersController.stream;
@@ -61,16 +63,24 @@ class FakeTransport implements Transport {
   }
 
   @override
-  Future<void> startAdvertising(String localEndpointName) async {}
+  Future<void> startAdvertising(String localEndpointName) async {
+    isAdvertising = true;
+  }
 
   @override
-  Future<void> stopAdvertising() async {}
+  Future<void> stopAdvertising() async {
+    isAdvertising = false;
+  }
 
   @override
-  Future<void> startDiscovery(String localName) async {}
+  Future<void> startDiscovery(String localName) async {
+    isDiscovering = true;
+  }
 
   @override
-  Future<void> stopDiscovery() async {}
+  Future<void> stopDiscovery() async {
+    isDiscovering = false;
+  }
 
   Future<void> stopAllEndpoints() async {}
 

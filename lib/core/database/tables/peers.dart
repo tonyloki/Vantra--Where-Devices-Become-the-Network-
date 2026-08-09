@@ -21,6 +21,7 @@ class PeerTrustStateConverter extends TypeConverter<PeerTrustState, String> {
 class Peers extends Table {
   TextColumn get peerId => text()();
   TextColumn get displayName => text()();
+  TextColumn get nickname => text().nullable()();
   TextColumn get lastKnownEndpointId => text().nullable()();
   TextColumn get publicKey => text().nullable()();
   TextColumn get fingerprint => text().nullable()();

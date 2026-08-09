@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:vantra/core/database/tables/messages.dart';
 import 'package:vantra/core/database/tables/peers.dart';
 import 'package:vantra/core/database/daos/message_dao.dart';
@@ -19,7 +20,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration {
@@ -34,6 +35,10 @@ class AppDatabase extends _$AppDatabase {
           await m.addColumn(peers, peers.trustState);
           await m.addColumn(peers, peers.protocolVersion);
         }
+        if (from < 3) {
+          await m.addColumn(peers, peers.nickname);
+          await m.addColumn(messages, messages.isRead);
+        }
       },
       beforeOpen: (details) async {
         // Enforce foreign key constraints if needed in the future
@@ -45,3 +50,5 @@ class AppDatabase extends _$AppDatabase {
     return driftDatabase(name: 'vantra_database');
   }
 }
+
+final appDatabaseProvider = Provider<AppDatabase>((ref) => AppDatabase());
