@@ -11,6 +11,7 @@ import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/networking/transport.dart';
+import 'package:vantra/core/security/crypto_service.dart';
 import 'package:vantra/features/messaging/chat_page.dart';
 import 'test_fakes.dart';
 
@@ -23,6 +24,9 @@ void main() {
     final fakeTransport = FakeTransport();
     final remotePeerId = const Uuid().v4();
     final testDb = AppDatabase.forTesting(NativeDatabase.memory());
+    final cryptoService = CryptoService();
+
+    final fakeSecureStorage = FakeSecureStorageService();
 
     await tester.pumpWidget(
       ProviderScope(
@@ -30,6 +34,7 @@ void main() {
           sharedPreferencesProvider.overrideWithValue(prefs),
           transportProvider.overrideWithValue(fakeTransport),
           appDatabaseProvider.overrideWithValue(testDb),
+          secureStorageServiceProvider.overrideWithValue(fakeSecureStorage),
         ],
         child: MaterialApp(
           home: ChatPage(peerId: remotePeerId),
@@ -37,7 +42,6 @@ void main() {
       ),
     );
 
-    // Pump to process the initial async load of conversation history
     await tester.pumpAndSettle();
 
     // Initial state: disconnected, input fields disabled
@@ -51,21 +55,47 @@ void main() {
     expect(tester.widget<TextField>(inputFinder).enabled, isFalse);
     expect(tester.widget<IconButton>(sendFinder).onPressed, isNull);
 
-    // Establish connection by triggering identity handshake
+    // 1. Establish connection via secure handshake
+    fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+      endpointId: 'QHZD',
+      status: ConnectionStatus.connected,
+      endpointName: 'QHZD',
+    ));
+    await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 50)));
+
+    final remoteIdKeyPair = await cryptoService.generateIdentityKeyPair();
+    final remoteEphKeyPair = await cryptoService.generateEphemeralKeyPair();
+    final remoteIdPub = await remoteIdKeyPair.extractPublicKey();
+    final remoteEphPub = await remoteEphKeyPair.extractPublicKey();
+
+    final sigBytes = await cryptoService.signHandshake(
+      identityKeyPair: remoteIdKeyPair,
+      protocolVersion: 1,
+      peerId: remotePeerId,
+      displayName: 'RemoteFriend',
+      identityPublicKeyBytes: remoteIdPub.bytes,
+      ephemeralPublicKeyBytes: remoteEphPub.bytes,
+    );
+
     final remotePayload = {
-      'type': 'IDENTITY',
+      'type': 'IDENTITY_SECURE',
+      'v': 1,
       'peerId': remotePeerId,
       'displayName': 'RemoteFriend',
+      'identityPublicKey': remoteIdPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+      'ephemeralPublicKey': remoteEphPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+      'signature': sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
     };
+
     fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
     await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
 
-    // Verify status changes to Connected
-    expect(find.text('Connected'), findsOneWidget);
+    // Verify status changes to Securely Connected
+    expect(find.text('Securely Connected'), findsOneWidget);
     expect(tester.widget<TextField>(inputFinder).enabled, isTrue);
 
-    // Type a message and send it
+    // 2. Type a message and send it
     await tester.enterText(inputFinder, 'Hello from Local Device');
     await tester.tap(sendFinder);
     await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 100)));
@@ -74,16 +104,48 @@ void main() {
     // Verify it is displayed in the list
     expect(find.text('Hello from Local Device'), findsOneWidget);
 
-    // Trigger an incoming text payload from remote
+    // 3. Trigger an incoming encrypted text payload from remote
     final localPeerId = prefs.getString('vantra_peer_id') ?? 'me';
-    final incomingPayload = {
-      'type': 'TEXT',
-      'messageId': const Uuid().v4(),
+    final localHandshakeJson = jsonDecode(utf8.decode(fakeTransport.sentPayloads[0])) as Map<String, dynamic>;
+    final localEphPubHex = localHandshakeJson['ephemeralPublicKey'] as String;
+    final localEphPubBytes = <int>[];
+    for (var i = 0; i < localEphPubHex.length; i += 2) {
+      localEphPubBytes.add(int.parse(localEphPubHex.substring(i, i + 2), radix: 16));
+    }
+
+    final remoteDerivedKeys = await cryptoService.deriveSessionKeys(
+      localEphemeralKeyPair: remoteEphKeyPair,
+      remoteEphemeralPublicKeyBytes: localEphPubBytes,
+      isInitiator: false,
+    );
+
+    final incomingMessageId = const Uuid().v4();
+    final remoteCleartext = jsonEncode({
       'senderId': remotePeerId,
       'receiverId': localPeerId,
       'text': 'Reply from Remote Device',
       'timestamp': DateTime.now().millisecondsSinceEpoch,
+      'seq': 1,
+      'sessionId': remoteDerivedKeys.sessionId,
+    });
+
+    final encResult = await cryptoService.encryptPayload(
+      secretKey: remoteDerivedKeys.sendKey,
+      sessionSalt: remoteDerivedKeys.sessionSalt,
+      sequence: 1,
+      messageId: incomingMessageId,
+      plaintextJson: remoteCleartext,
+    );
+
+    final incomingPayload = {
+      'type': 'ENCRYPTED_TEXT',
+      'v': 1,
+      'messageId': incomingMessageId,
+      'nonce': encResult.nonce.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+      'ciphertext': encResult.ciphertext.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+      'mac': encResult.mac.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
     };
+
     fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(incomingPayload))));
     await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
@@ -91,7 +153,7 @@ void main() {
     // Verify remote message is displayed
     expect(find.text('Reply from Remote Device'), findsOneWidget);
 
-    // Trigger disconnection
+    // 4. Trigger disconnection
     fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
       endpointId: 'QHZD',
       status: ConnectionStatus.disconnected,

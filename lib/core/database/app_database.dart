@@ -5,6 +5,7 @@ import 'package:vantra/core/database/tables/peers.dart';
 import 'package:vantra/core/database/daos/message_dao.dart';
 import 'package:vantra/core/database/daos/peer_dao.dart';
 import 'package:vantra/core/models/message_status.dart';
+import 'package:vantra/core/models/peer_trust_state.dart';
 
 part 'app_database.g.dart';
 
@@ -18,7 +19,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration {
@@ -27,7 +28,12 @@ class AppDatabase extends _$AppDatabase {
         await m.createAll();
       },
       onUpgrade: (m, from, to) async {
-        // Handled in future database upgrades
+        if (from < 2) {
+          await m.addColumn(peers, peers.publicKey);
+          await m.addColumn(peers, peers.fingerprint);
+          await m.addColumn(peers, peers.trustState);
+          await m.addColumn(peers, peers.protocolVersion);
+        }
       },
       beforeOpen: (details) async {
         // Enforce foreign key constraints if needed in the future

@@ -7,27 +7,30 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:drift/native.dart';
 import 'package:vantra/core/database/app_database.dart';
-import 'package:vantra/core/models/message_status.dart';
-import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/networking/transport.dart';
+import 'package:vantra/core/models/message_status.dart';
+import 'package:vantra/core/messaging/messaging_provider.dart';
+import 'package:vantra/core/security/crypto_service.dart';
 import 'package:vantra/features/messaging/chat_page.dart';
 import 'test_fakes.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('ChatPage loads historical messages from Drift SQLite and displays them', (WidgetTester tester) async {
+  testWidgets('ChatPage renders historical SQLite messages and reactively displays new messages', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
     final fakeTransport = FakeTransport();
     final remotePeerId = const Uuid().v4();
-    final testDb = AppDatabase.forTesting(NativeDatabase.memory());
-
-    // 1. Pre-populate database with historical conversation messages
-    final localPeerId = 'me';
+    final localPeerId = const Uuid().v4();
     await prefs.setString('vantra_peer_id', localPeerId);
 
+    final testDb = AppDatabase.forTesting(NativeDatabase.memory());
+    final cryptoService = CryptoService();
+
+    // 1. Seed database with historical messages
     final now = DateTime.now().millisecondsSinceEpoch;
     await testDb.messageDao.insertMessage(MessagesCompanion.insert(
       messageId: 'history-1',
@@ -51,6 +54,8 @@ void main() {
       createdAt: now - 1000,
     ));
 
+    final fakeSecureStorage = FakeSecureStorageService();
+
     // 2. Render ChatPage
     await tester.pumpWidget(
       ProviderScope(
@@ -58,6 +63,7 @@ void main() {
           sharedPreferencesProvider.overrideWithValue(prefs),
           transportProvider.overrideWithValue(fakeTransport),
           appDatabaseProvider.overrideWithValue(testDb),
+          secureStorageServiceProvider.overrideWithValue(fakeSecureStorage),
         ],
         child: MaterialApp(
           home: ChatPage(peerId: remotePeerId),
@@ -72,18 +78,44 @@ void main() {
     expect(find.text('Hello from past history'), findsOneWidget);
     expect(find.text('My past response'), findsOneWidget);
 
-    // 4. Connect session
+    // 4. Connect session via secure handshake
+    fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+      endpointId: 'QHZD',
+      status: ConnectionStatus.connected,
+      endpointName: 'QHZD',
+    ));
+    await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 50)));
+
+    final remoteIdKeyPair = await cryptoService.generateIdentityKeyPair();
+    final remoteEphKeyPair = await cryptoService.generateEphemeralKeyPair();
+    final remoteIdPub = await remoteIdKeyPair.extractPublicKey();
+    final remoteEphPub = await remoteEphKeyPair.extractPublicKey();
+
+    final sigBytes = await cryptoService.signHandshake(
+      identityKeyPair: remoteIdKeyPair,
+      protocolVersion: 1,
+      peerId: remotePeerId,
+      displayName: 'VantraRemotePeer',
+      identityPublicKeyBytes: remoteIdPub.bytes,
+      ephemeralPublicKeyBytes: remoteEphPub.bytes,
+    );
+
     final remotePayload = {
-      'type': 'IDENTITY',
+      'type': 'IDENTITY_SECURE',
+      'v': 1,
       'peerId': remotePeerId,
       'displayName': 'VantraRemotePeer',
+      'identityPublicKey': remoteIdPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+      'ephemeralPublicKey': remoteEphPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+      'signature': sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
     };
+
     fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
     await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
 
     // Verify Connected banner visible and textfield active
-    expect(find.text('Connected'), findsOneWidget);
+    expect(find.text('Securely Connected'), findsOneWidget);
 
     // 5. Send new message and verify it appends reactively
     final inputFinder = find.byKey(const Key('chat_input_field'));

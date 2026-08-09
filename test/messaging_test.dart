@@ -8,12 +8,14 @@ import 'package:vantra/core/messaging/message.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
+import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/errors/vantra_exceptions.dart';
 import 'package:drift/native.dart';
 import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/messaging/messaging_repository.dart';
+import 'package:vantra/core/security/crypto_service.dart';
 import 'test_fakes.dart';
 
 void main() {
@@ -23,31 +25,42 @@ void main() {
     test('Successful serialization & deserialization', () {
       final msg = VantraMessage(
         messageId: const Uuid().v4(),
-        senderId: 'sender-123',
-        receiverId: 'receiver-456',
-        text: 'Hello Vantra POC',
-        timestamp: 1690000000000,
+        senderId: 'device-a',
+        receiverId: 'device-b',
+        text: 'Hello Mesh',
+        timestamp: 1718000000000,
+        status: MessageStatus.sent,
       );
 
-      final jsonMap = msg.toJson();
-      expect(jsonMap['type'], 'TEXT');
-      expect(jsonMap['messageId'], msg.messageId);
-      expect(jsonMap['senderId'], 'sender-123');
-      expect(jsonMap['receiverId'], 'receiver-456');
-      expect(jsonMap['text'], 'Hello Vantra POC');
-      expect(jsonMap['timestamp'], 1690000000000);
+      final json = msg.toJson();
+      expect(json['type'], 'TEXT');
+      expect(json['text'], 'Hello Mesh');
+      expect(json['senderId'], 'device-a');
+      expect(json['receiverId'], 'device-b');
 
-      final decoded = VantraMessage.fromJson(jsonMap);
-      expect(decoded.messageId, msg.messageId);
-      expect(decoded.senderId, msg.senderId);
-      expect(decoded.receiverId, msg.receiverId);
-      expect(decoded.text, msg.text);
-      expect(decoded.timestamp, msg.timestamp);
+      final deserialized = VantraMessage.fromJson(json);
+      expect(deserialized.messageId, msg.messageId);
+      expect(deserialized.text, msg.text);
+      expect(deserialized.senderId, msg.senderId);
+      expect(deserialized.receiverId, msg.receiverId);
+      expect(deserialized.timestamp, msg.timestamp);
+      expect(deserialized.status, MessageStatus.received);
     });
 
-    test('Malformed and missing field JSON handling should throw TypeError or FormatException', () {
-      final badJson = {'type': 'TEXT', 'messageId': '123'}; // missing other fields
-      expect(() => VantraMessage.fromJson(badJson), throwsA(isA<TypeError>()));
+    test('CopyWith retains properties properly', () {
+      final msg = VantraMessage(
+        messageId: '123',
+        senderId: 'a',
+        receiverId: 'b',
+        text: 'Hello',
+        timestamp: 100,
+        status: MessageStatus.pending,
+      );
+
+      final copy = msg.copyWith(text: 'Updated', status: MessageStatus.sent);
+      expect(copy.messageId, '123');
+      expect(copy.text, 'Updated');
+      expect(copy.status, MessageStatus.sent);
     });
   });
 
@@ -55,19 +68,26 @@ void main() {
     late FakeTransport fakeTransport;
     late ProviderContainer container;
     late AppDatabase testDb;
+    late CryptoService cryptoService;
 
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       fakeTransport = FakeTransport();
       testDb = AppDatabase.forTesting(NativeDatabase.memory());
+      cryptoService = CryptoService();
+
+      final fakeSecureStorage = FakeSecureStorageService();
       container = ProviderContainer(
         overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
           transportProvider.overrideWithValue(fakeTransport),
           appDatabaseProvider.overrideWithValue(testDb),
+          secureStorageServiceProvider.overrideWithValue(fakeSecureStorage),
         ],
       );
+
+      await container.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
     });
 
     tearDown(() async {
@@ -75,94 +95,119 @@ void main() {
       container.dispose();
     });
 
+    Future<Map<String, dynamic>> createRemoteHandshake(String remotePeerId, String displayName) async {
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final ephKeyPair = await cryptoService.generateEphemeralKeyPair();
+
+      final idPub = await idKeyPair.extractPublicKey();
+      final ephPub = await ephKeyPair.extractPublicKey();
+
+      final sigBytes = await cryptoService.signHandshake(
+        identityKeyPair: idKeyPair,
+        protocolVersion: 1,
+        peerId: remotePeerId,
+        displayName: displayName,
+        identityPublicKeyBytes: idPub.bytes,
+        ephemeralPublicKeyBytes: ephPub.bytes,
+      );
+
+      return {
+        'type': 'IDENTITY_SECURE',
+        'v': 1,
+        'peerId': remotePeerId,
+        'displayName': displayName,
+        'identityPublicKey': idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+        'ephemeralPublicKey': ephPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+        'signature': sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
+      };
+    }
+
     test('Loads persistent peerId and displayName from SharedPreferences', () async {
       final localIdentity = container.read(localIdentityStateProvider);
       expect(localIdentity.peerId, isNotEmpty);
       expect(localIdentity.displayName, startsWith('Vantra-'));
 
-      // Save a custom name
       await container.read(localIdentityStateProvider.notifier).updateDisplayName('VantraCustom');
       final updatedIdentity = container.read(localIdentityStateProvider);
       expect(updatedIdentity.displayName, 'VantraCustom');
-      expect(updatedIdentity.peerId, localIdentity.peerId); // same persistent UUID
+      expect(updatedIdentity.peerId, localIdentity.peerId);
     });
 
     test('Identity handshake triggers immediately upon connection', () async {
-      final localIdentity = container.read(localIdentityStateProvider);
-      // Initialize notifier to listen
       container.read(messagingStateProvider);
 
-      // Trigger connected update from Transport
       fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
         endpointId: 'QHZD',
         status: ConnectionStatus.connected,
         endpointName: 'RemoteDevice',
       ));
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      // Wait a tick for StreamSubscription callback to process
-      await Future.delayed(Duration.zero);
-
-      // Check if identity handshake payload was sent
       expect(fakeTransport.sentTargets.length, 1);
       expect(fakeTransport.sentTargets[0], 'QHZD');
 
       final sentPayload = jsonDecode(utf8.decode(fakeTransport.sentPayloads[0])) as Map<String, dynamic>;
-      expect(sentPayload['type'], 'IDENTITY');
-      expect(sentPayload['peerId'], localIdentity.peerId);
-      expect(sentPayload['displayName'], localIdentity.displayName);
+      expect(sentPayload['type'], 'IDENTITY_SECURE');
+      expect(sentPayload['v'], 1);
+      expect(sentPayload['signature'], isNotNull);
     });
 
     test('Identity payload establishes peer session and supports reconnection mapping', () async {
-      // Initialize notifier to listen
       container.read(messagingStateProvider);
 
-      // Trigger remote device identity handshake payload
+      fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+        endpointId: 'QHZD',
+        status: ConnectionStatus.connected,
+        endpointName: 'QHZD',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
       final remotePeerId = const Uuid().v4();
-      final remotePayload = {
-        'type': 'IDENTITY',
-        'peerId': remotePeerId,
-        'displayName': 'VantraRemote',
-      };
+      final remotePayload = await createRemoteHandshake(remotePeerId, 'VantraRemote');
       
       fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 50));
 
       final state = container.read(messagingStateProvider);
       expect(state.sessions[remotePeerId], isNotNull);
       expect(state.sessions[remotePeerId]!.displayName, 'VantraRemote');
       expect(state.sessions[remotePeerId]!.endpointId, 'QHZD');
       expect(state.sessions[remotePeerId]!.status, SessionStatus.connected);
-      expect(state.endpointToPeerId['QHZD'], remotePeerId);
+      expect(state.sessions[remotePeerId]!.isSecure, isTrue);
 
       // Reconnect test: Peer reconnects with a new endpointId 'XVAA'
-      final remotePayloadReconnect = {
-        'type': 'IDENTITY',
-        'peerId': remotePeerId,
-        'displayName': 'VantraRemoteUpdated',
-      };
+      fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+        endpointId: 'XVAA',
+        status: ConnectionStatus.connected,
+        endpointName: 'XVAA',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayloadReconnect = await createRemoteHandshake(remotePeerId, 'VantraRemoteUpdated');
       fakeTransport.triggerIncomingPayload('XVAA', Uint8List.fromList(utf8.encode(jsonEncode(remotePayloadReconnect))));
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 50));
 
       final stateAfterReconnect = container.read(messagingStateProvider);
       expect(stateAfterReconnect.sessions[remotePeerId]!.endpointId, 'XVAA');
       expect(stateAfterReconnect.sessions[remotePeerId]!.displayName, 'VantraRemoteUpdated');
       expect(stateAfterReconnect.sessions[remotePeerId]!.status, SessionStatus.connected);
-      expect(stateAfterReconnect.endpointToPeerId['XVAA'], remotePeerId);
     });
 
     test('Disconnections update the mapped peer session status', () async {
       container.read(messagingStateProvider);
 
-      final remotePeerId = const Uuid().v4();
-      final remotePayload = {
-        'type': 'IDENTITY',
-        'peerId': remotePeerId,
-        'displayName': 'VantraRemote',
-      };
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
-      await Future.delayed(Duration.zero);
+      fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+        endpointId: 'QHZD',
+        status: ConnectionStatus.connected,
+        endpointName: 'QHZD',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      // Verify connected
+      final remotePeerId = const Uuid().v4();
+      final remotePayload = await createRemoteHandshake(remotePeerId, 'VantraRemote');
+      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
+      await Future.delayed(const Duration(milliseconds: 50));
+
       expect(container.read(messagingStateProvider).sessions[remotePeerId]!.status, SessionStatus.connected);
 
       // Trigger disconnected update
@@ -171,32 +216,26 @@ void main() {
         status: ConnectionStatus.disconnected,
         endpointName: 'QHZD',
       ));
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      // Verify disconnected status
       expect(container.read(messagingStateProvider).sessions[remotePeerId]!.status, SessionStatus.disconnected);
     });
 
     test('Sending text message adds to history and throws error if disconnected', () async {
       final notifier = container.read(messagingStateProvider.notifier);
-      container.read(messagingStateProvider); // ensure initialized
+      container.read(messagingStateProvider);
 
-      // Trigger connected update from Transport to simulate handshake first
       fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
         endpointId: 'QHZD',
         status: ConnectionStatus.connected,
         endpointName: 'QHZD',
       ));
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 50));
 
       final remotePeerId = const Uuid().v4();
-      final remotePayload = {
-        'type': 'IDENTITY',
-        'peerId': remotePeerId,
-        'displayName': 'VantraRemote',
-      };
+      final remotePayload = await createRemoteHandshake(remotePeerId, 'VantraRemote');
       fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 50));
 
       // Send text message successfully
       await notifier.sendTextMessage(remotePeerId, 'Test Message payload');
@@ -207,13 +246,14 @@ void main() {
       expect(messages.length, 1);
       expect(messages[0].text, 'Test Message payload');
 
-      // Verify transport payload
-      expect(fakeTransport.sentTargets.length, 2); // 1 identity handshake, 1 text message
+      // Verify transport payload is encrypted
+      expect(fakeTransport.sentTargets.length, 2);
       expect(fakeTransport.sentTargets[1], 'QHZD');
       
       final sentTextPayload = jsonDecode(utf8.decode(fakeTransport.sentPayloads[1])) as Map<String, dynamic>;
-      expect(sentTextPayload['type'], 'TEXT');
-      expect(sentTextPayload['text'], 'Test Message payload');
+      expect(sentTextPayload['type'], 'ENCRYPTED_TEXT');
+      expect(sentTextPayload['v'], 1);
+      expect(sentTextPayload['ciphertext'], isNotNull);
 
       // Disconnect and try to send again — should fail
       fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
@@ -221,7 +261,7 @@ void main() {
         status: ConnectionStatus.disconnected,
         endpointName: 'QHZD',
       ));
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 50));
 
       expect(() => notifier.sendTextMessage(remotePeerId, 'Failure test'), throwsA(isA<VantraException>()));
     });

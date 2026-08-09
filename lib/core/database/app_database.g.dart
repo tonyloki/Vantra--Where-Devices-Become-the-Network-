@@ -597,6 +597,49 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
         type: DriftSqlType.string,
         requiredDuringInsert: false,
       );
+  static const VerificationMeta _publicKeyMeta = const VerificationMeta(
+    'publicKey',
+  );
+  @override
+  late final GeneratedColumn<String> publicKey = GeneratedColumn<String>(
+    'public_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _fingerprintMeta = const VerificationMeta(
+    'fingerprint',
+  );
+  @override
+  late final GeneratedColumn<String> fingerprint = GeneratedColumn<String>(
+    'fingerprint',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  late final GeneratedColumnWithTypeConverter<PeerTrustState, String>
+  trustState = GeneratedColumn<String>(
+    'trust_state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('untrusted'),
+  ).withConverter<PeerTrustState>($PeersTable.$convertertrustState);
+  static const VerificationMeta _protocolVersionMeta = const VerificationMeta(
+    'protocolVersion',
+  );
+  @override
+  late final GeneratedColumn<int> protocolVersion = GeneratedColumn<int>(
+    'protocol_version',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _lastSeenMeta = const VerificationMeta(
     'lastSeen',
   );
@@ -635,6 +678,10 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
     peerId,
     displayName,
     lastKnownEndpointId,
+    publicKey,
+    fingerprint,
+    trustState,
+    protocolVersion,
     lastSeen,
     createdAt,
     updatedAt,
@@ -676,6 +723,30 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
         lastKnownEndpointId.isAcceptableOrUnknown(
           data['last_known_endpoint_id']!,
           _lastKnownEndpointIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('public_key')) {
+      context.handle(
+        _publicKeyMeta,
+        publicKey.isAcceptableOrUnknown(data['public_key']!, _publicKeyMeta),
+      );
+    }
+    if (data.containsKey('fingerprint')) {
+      context.handle(
+        _fingerprintMeta,
+        fingerprint.isAcceptableOrUnknown(
+          data['fingerprint']!,
+          _fingerprintMeta,
+        ),
+      );
+    }
+    if (data.containsKey('protocol_version')) {
+      context.handle(
+        _protocolVersionMeta,
+        protocolVersion.isAcceptableOrUnknown(
+          data['protocol_version']!,
+          _protocolVersionMeta,
         ),
       );
     }
@@ -724,6 +795,24 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
         DriftSqlType.string,
         data['${effectivePrefix}last_known_endpoint_id'],
       ),
+      publicKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}public_key'],
+      ),
+      fingerprint: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}fingerprint'],
+      ),
+      trustState: $PeersTable.$convertertrustState.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}trust_state'],
+        )!,
+      ),
+      protocolVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}protocol_version'],
+      ),
       lastSeen: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}last_seen'],
@@ -743,12 +832,19 @@ class $PeersTable extends Peers with TableInfo<$PeersTable, Peer> {
   $PeersTable createAlias(String alias) {
     return $PeersTable(attachedDatabase, alias);
   }
+
+  static TypeConverter<PeerTrustState, String> $convertertrustState =
+      const PeerTrustStateConverter();
 }
 
 class Peer extends DataClass implements Insertable<Peer> {
   final String peerId;
   final String displayName;
   final String? lastKnownEndpointId;
+  final String? publicKey;
+  final String? fingerprint;
+  final PeerTrustState trustState;
+  final int? protocolVersion;
   final int lastSeen;
   final int createdAt;
   final int updatedAt;
@@ -756,6 +852,10 @@ class Peer extends DataClass implements Insertable<Peer> {
     required this.peerId,
     required this.displayName,
     this.lastKnownEndpointId,
+    this.publicKey,
+    this.fingerprint,
+    required this.trustState,
+    this.protocolVersion,
     required this.lastSeen,
     required this.createdAt,
     required this.updatedAt,
@@ -767,6 +867,20 @@ class Peer extends DataClass implements Insertable<Peer> {
     map['display_name'] = Variable<String>(displayName);
     if (!nullToAbsent || lastKnownEndpointId != null) {
       map['last_known_endpoint_id'] = Variable<String>(lastKnownEndpointId);
+    }
+    if (!nullToAbsent || publicKey != null) {
+      map['public_key'] = Variable<String>(publicKey);
+    }
+    if (!nullToAbsent || fingerprint != null) {
+      map['fingerprint'] = Variable<String>(fingerprint);
+    }
+    {
+      map['trust_state'] = Variable<String>(
+        $PeersTable.$convertertrustState.toSql(trustState),
+      );
+    }
+    if (!nullToAbsent || protocolVersion != null) {
+      map['protocol_version'] = Variable<int>(protocolVersion);
     }
     map['last_seen'] = Variable<int>(lastSeen);
     map['created_at'] = Variable<int>(createdAt);
@@ -781,6 +895,16 @@ class Peer extends DataClass implements Insertable<Peer> {
       lastKnownEndpointId: lastKnownEndpointId == null && nullToAbsent
           ? const Value.absent()
           : Value(lastKnownEndpointId),
+      publicKey: publicKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(publicKey),
+      fingerprint: fingerprint == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fingerprint),
+      trustState: Value(trustState),
+      protocolVersion: protocolVersion == null && nullToAbsent
+          ? const Value.absent()
+          : Value(protocolVersion),
       lastSeen: Value(lastSeen),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
@@ -798,6 +922,10 @@ class Peer extends DataClass implements Insertable<Peer> {
       lastKnownEndpointId: serializer.fromJson<String?>(
         json['lastKnownEndpointId'],
       ),
+      publicKey: serializer.fromJson<String?>(json['publicKey']),
+      fingerprint: serializer.fromJson<String?>(json['fingerprint']),
+      trustState: serializer.fromJson<PeerTrustState>(json['trustState']),
+      protocolVersion: serializer.fromJson<int?>(json['protocolVersion']),
       lastSeen: serializer.fromJson<int>(json['lastSeen']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
@@ -810,6 +938,10 @@ class Peer extends DataClass implements Insertable<Peer> {
       'peerId': serializer.toJson<String>(peerId),
       'displayName': serializer.toJson<String>(displayName),
       'lastKnownEndpointId': serializer.toJson<String?>(lastKnownEndpointId),
+      'publicKey': serializer.toJson<String?>(publicKey),
+      'fingerprint': serializer.toJson<String?>(fingerprint),
+      'trustState': serializer.toJson<PeerTrustState>(trustState),
+      'protocolVersion': serializer.toJson<int?>(protocolVersion),
       'lastSeen': serializer.toJson<int>(lastSeen),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
@@ -820,6 +952,10 @@ class Peer extends DataClass implements Insertable<Peer> {
     String? peerId,
     String? displayName,
     Value<String?> lastKnownEndpointId = const Value.absent(),
+    Value<String?> publicKey = const Value.absent(),
+    Value<String?> fingerprint = const Value.absent(),
+    PeerTrustState? trustState,
+    Value<int?> protocolVersion = const Value.absent(),
     int? lastSeen,
     int? createdAt,
     int? updatedAt,
@@ -829,6 +965,12 @@ class Peer extends DataClass implements Insertable<Peer> {
     lastKnownEndpointId: lastKnownEndpointId.present
         ? lastKnownEndpointId.value
         : this.lastKnownEndpointId,
+    publicKey: publicKey.present ? publicKey.value : this.publicKey,
+    fingerprint: fingerprint.present ? fingerprint.value : this.fingerprint,
+    trustState: trustState ?? this.trustState,
+    protocolVersion: protocolVersion.present
+        ? protocolVersion.value
+        : this.protocolVersion,
     lastSeen: lastSeen ?? this.lastSeen,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -842,6 +984,16 @@ class Peer extends DataClass implements Insertable<Peer> {
       lastKnownEndpointId: data.lastKnownEndpointId.present
           ? data.lastKnownEndpointId.value
           : this.lastKnownEndpointId,
+      publicKey: data.publicKey.present ? data.publicKey.value : this.publicKey,
+      fingerprint: data.fingerprint.present
+          ? data.fingerprint.value
+          : this.fingerprint,
+      trustState: data.trustState.present
+          ? data.trustState.value
+          : this.trustState,
+      protocolVersion: data.protocolVersion.present
+          ? data.protocolVersion.value
+          : this.protocolVersion,
       lastSeen: data.lastSeen.present ? data.lastSeen.value : this.lastSeen,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
@@ -854,6 +1006,10 @@ class Peer extends DataClass implements Insertable<Peer> {
           ..write('peerId: $peerId, ')
           ..write('displayName: $displayName, ')
           ..write('lastKnownEndpointId: $lastKnownEndpointId, ')
+          ..write('publicKey: $publicKey, ')
+          ..write('fingerprint: $fingerprint, ')
+          ..write('trustState: $trustState, ')
+          ..write('protocolVersion: $protocolVersion, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
@@ -866,6 +1022,10 @@ class Peer extends DataClass implements Insertable<Peer> {
     peerId,
     displayName,
     lastKnownEndpointId,
+    publicKey,
+    fingerprint,
+    trustState,
+    protocolVersion,
     lastSeen,
     createdAt,
     updatedAt,
@@ -877,6 +1037,10 @@ class Peer extends DataClass implements Insertable<Peer> {
           other.peerId == this.peerId &&
           other.displayName == this.displayName &&
           other.lastKnownEndpointId == this.lastKnownEndpointId &&
+          other.publicKey == this.publicKey &&
+          other.fingerprint == this.fingerprint &&
+          other.trustState == this.trustState &&
+          other.protocolVersion == this.protocolVersion &&
           other.lastSeen == this.lastSeen &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
@@ -886,6 +1050,10 @@ class PeersCompanion extends UpdateCompanion<Peer> {
   final Value<String> peerId;
   final Value<String> displayName;
   final Value<String?> lastKnownEndpointId;
+  final Value<String?> publicKey;
+  final Value<String?> fingerprint;
+  final Value<PeerTrustState> trustState;
+  final Value<int?> protocolVersion;
   final Value<int> lastSeen;
   final Value<int> createdAt;
   final Value<int> updatedAt;
@@ -894,6 +1062,10 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     this.peerId = const Value.absent(),
     this.displayName = const Value.absent(),
     this.lastKnownEndpointId = const Value.absent(),
+    this.publicKey = const Value.absent(),
+    this.fingerprint = const Value.absent(),
+    this.trustState = const Value.absent(),
+    this.protocolVersion = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
@@ -903,6 +1075,10 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     required String peerId,
     required String displayName,
     this.lastKnownEndpointId = const Value.absent(),
+    this.publicKey = const Value.absent(),
+    this.fingerprint = const Value.absent(),
+    this.trustState = const Value.absent(),
+    this.protocolVersion = const Value.absent(),
     required int lastSeen,
     required int createdAt,
     required int updatedAt,
@@ -916,6 +1092,10 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     Expression<String>? peerId,
     Expression<String>? displayName,
     Expression<String>? lastKnownEndpointId,
+    Expression<String>? publicKey,
+    Expression<String>? fingerprint,
+    Expression<String>? trustState,
+    Expression<int>? protocolVersion,
     Expression<int>? lastSeen,
     Expression<int>? createdAt,
     Expression<int>? updatedAt,
@@ -926,6 +1106,10 @@ class PeersCompanion extends UpdateCompanion<Peer> {
       if (displayName != null) 'display_name': displayName,
       if (lastKnownEndpointId != null)
         'last_known_endpoint_id': lastKnownEndpointId,
+      if (publicKey != null) 'public_key': publicKey,
+      if (fingerprint != null) 'fingerprint': fingerprint,
+      if (trustState != null) 'trust_state': trustState,
+      if (protocolVersion != null) 'protocol_version': protocolVersion,
       if (lastSeen != null) 'last_seen': lastSeen,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
@@ -937,6 +1121,10 @@ class PeersCompanion extends UpdateCompanion<Peer> {
     Value<String>? peerId,
     Value<String>? displayName,
     Value<String?>? lastKnownEndpointId,
+    Value<String?>? publicKey,
+    Value<String?>? fingerprint,
+    Value<PeerTrustState>? trustState,
+    Value<int?>? protocolVersion,
     Value<int>? lastSeen,
     Value<int>? createdAt,
     Value<int>? updatedAt,
@@ -946,6 +1134,10 @@ class PeersCompanion extends UpdateCompanion<Peer> {
       peerId: peerId ?? this.peerId,
       displayName: displayName ?? this.displayName,
       lastKnownEndpointId: lastKnownEndpointId ?? this.lastKnownEndpointId,
+      publicKey: publicKey ?? this.publicKey,
+      fingerprint: fingerprint ?? this.fingerprint,
+      trustState: trustState ?? this.trustState,
+      protocolVersion: protocolVersion ?? this.protocolVersion,
       lastSeen: lastSeen ?? this.lastSeen,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -966,6 +1158,20 @@ class PeersCompanion extends UpdateCompanion<Peer> {
       map['last_known_endpoint_id'] = Variable<String>(
         lastKnownEndpointId.value,
       );
+    }
+    if (publicKey.present) {
+      map['public_key'] = Variable<String>(publicKey.value);
+    }
+    if (fingerprint.present) {
+      map['fingerprint'] = Variable<String>(fingerprint.value);
+    }
+    if (trustState.present) {
+      map['trust_state'] = Variable<String>(
+        $PeersTable.$convertertrustState.toSql(trustState.value),
+      );
+    }
+    if (protocolVersion.present) {
+      map['protocol_version'] = Variable<int>(protocolVersion.value);
     }
     if (lastSeen.present) {
       map['last_seen'] = Variable<int>(lastSeen.value);
@@ -988,6 +1194,10 @@ class PeersCompanion extends UpdateCompanion<Peer> {
           ..write('peerId: $peerId, ')
           ..write('displayName: $displayName, ')
           ..write('lastKnownEndpointId: $lastKnownEndpointId, ')
+          ..write('publicKey: $publicKey, ')
+          ..write('fingerprint: $fingerprint, ')
+          ..write('trustState: $trustState, ')
+          ..write('protocolVersion: $protocolVersion, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -1285,6 +1495,10 @@ typedef $$PeersTableCreateCompanionBuilder =
       required String peerId,
       required String displayName,
       Value<String?> lastKnownEndpointId,
+      Value<String?> publicKey,
+      Value<String?> fingerprint,
+      Value<PeerTrustState> trustState,
+      Value<int?> protocolVersion,
       required int lastSeen,
       required int createdAt,
       required int updatedAt,
@@ -1295,6 +1509,10 @@ typedef $$PeersTableUpdateCompanionBuilder =
       Value<String> peerId,
       Value<String> displayName,
       Value<String?> lastKnownEndpointId,
+      Value<String?> publicKey,
+      Value<String?> fingerprint,
+      Value<PeerTrustState> trustState,
+      Value<int?> protocolVersion,
       Value<int> lastSeen,
       Value<int> createdAt,
       Value<int> updatedAt,
@@ -1321,6 +1539,27 @@ class $$PeersTableFilterComposer extends Composer<_$AppDatabase, $PeersTable> {
 
   ColumnFilters<String> get lastKnownEndpointId => $composableBuilder(
     column: $table.lastKnownEndpointId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get publicKey => $composableBuilder(
+    column: $table.publicKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fingerprint => $composableBuilder(
+    column: $table.fingerprint,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnWithTypeConverterFilters<PeerTrustState, PeerTrustState, String>
+  get trustState => $composableBuilder(
+    column: $table.trustState,
+    builder: (column) => ColumnWithTypeConverterFilters(column),
+  );
+
+  ColumnFilters<int> get protocolVersion => $composableBuilder(
+    column: $table.protocolVersion,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1364,6 +1603,26 @@ class $$PeersTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get publicKey => $composableBuilder(
+    column: $table.publicKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fingerprint => $composableBuilder(
+    column: $table.fingerprint,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get trustState => $composableBuilder(
+    column: $table.trustState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get protocolVersion => $composableBuilder(
+    column: $table.protocolVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get lastSeen => $composableBuilder(
     column: $table.lastSeen,
     builder: (column) => ColumnOrderings(column),
@@ -1399,6 +1658,25 @@ class $$PeersTableAnnotationComposer
 
   GeneratedColumn<String> get lastKnownEndpointId => $composableBuilder(
     column: $table.lastKnownEndpointId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get publicKey =>
+      $composableBuilder(column: $table.publicKey, builder: (column) => column);
+
+  GeneratedColumn<String> get fingerprint => $composableBuilder(
+    column: $table.fingerprint,
+    builder: (column) => column,
+  );
+
+  GeneratedColumnWithTypeConverter<PeerTrustState, String> get trustState =>
+      $composableBuilder(
+        column: $table.trustState,
+        builder: (column) => column,
+      );
+
+  GeneratedColumn<int> get protocolVersion => $composableBuilder(
+    column: $table.protocolVersion,
     builder: (column) => column,
   );
 
@@ -1443,6 +1721,10 @@ class $$PeersTableTableManager
                 Value<String> peerId = const Value.absent(),
                 Value<String> displayName = const Value.absent(),
                 Value<String?> lastKnownEndpointId = const Value.absent(),
+                Value<String?> publicKey = const Value.absent(),
+                Value<String?> fingerprint = const Value.absent(),
+                Value<PeerTrustState> trustState = const Value.absent(),
+                Value<int?> protocolVersion = const Value.absent(),
                 Value<int> lastSeen = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
@@ -1451,6 +1733,10 @@ class $$PeersTableTableManager
                 peerId: peerId,
                 displayName: displayName,
                 lastKnownEndpointId: lastKnownEndpointId,
+                publicKey: publicKey,
+                fingerprint: fingerprint,
+                trustState: trustState,
+                protocolVersion: protocolVersion,
                 lastSeen: lastSeen,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -1461,6 +1747,10 @@ class $$PeersTableTableManager
                 required String peerId,
                 required String displayName,
                 Value<String?> lastKnownEndpointId = const Value.absent(),
+                Value<String?> publicKey = const Value.absent(),
+                Value<String?> fingerprint = const Value.absent(),
+                Value<PeerTrustState> trustState = const Value.absent(),
+                Value<int?> protocolVersion = const Value.absent(),
                 required int lastSeen,
                 required int createdAt,
                 required int updatedAt,
@@ -1469,6 +1759,10 @@ class $$PeersTableTableManager
                 peerId: peerId,
                 displayName: displayName,
                 lastKnownEndpointId: lastKnownEndpointId,
+                publicKey: publicKey,
+                fingerprint: fingerprint,
+                trustState: trustState,
+                protocolVersion: protocolVersion,
                 lastSeen: lastSeen,
                 createdAt: createdAt,
                 updatedAt: updatedAt,

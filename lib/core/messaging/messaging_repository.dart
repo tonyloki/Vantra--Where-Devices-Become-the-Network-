@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:drift/drift.dart';
 import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/models/message_status.dart';
+import 'package:vantra/core/models/peer_trust_state.dart';
 import 'message.dart';
 
 class MessagingRepository {
@@ -64,7 +65,15 @@ class MessagingRepository {
   }
 
   /// Creates/Updates known peer records in SQLite
-  Future<void> upsertPeer(String peerId, String displayName, {String? endpointId}) async {
+  Future<void> upsertPeer(
+    String peerId,
+    String displayName, {
+    String? endpointId,
+    String? publicKey,
+    String? fingerprint,
+    PeerTrustState? trustState,
+    int? protocolVersion,
+  }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final existing = await _db.peerDao.getPeer(peerId);
 
@@ -73,6 +82,10 @@ class MessagingRepository {
         peerId: peerId,
         displayName: displayName,
         lastKnownEndpointId: endpointId,
+        publicKey: publicKey,
+        fingerprint: fingerprint,
+        trustState: trustState ?? PeerTrustState.untrusted,
+        protocolVersion: protocolVersion ?? 1,
         lastSeen: now,
         createdAt: now,
         updatedAt: now,
@@ -81,8 +94,23 @@ class MessagingRepository {
       await _db.peerDao.insertOrUpdatePeer(existing.copyWith(
         displayName: displayName,
         lastKnownEndpointId: Value(endpointId ?? existing.lastKnownEndpointId),
+        publicKey: Value(publicKey ?? existing.publicKey),
+        fingerprint: Value(fingerprint ?? existing.fingerprint),
+        trustState: trustState ?? existing.trustState,
+        protocolVersion: Value(protocolVersion ?? existing.protocolVersion),
         lastSeen: now,
         updatedAt: now,
+      ));
+    }
+  }
+
+  /// Updates peer trust state directly (e.g. after out-of-band verification)
+  Future<void> updatePeerTrustState(String peerId, PeerTrustState trustState) async {
+    final existing = await _db.peerDao.getPeer(peerId);
+    if (existing != null) {
+      await _db.peerDao.insertOrUpdatePeer(existing.copyWith(
+        trustState: trustState,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
       ));
     }
   }

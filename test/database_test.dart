@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:drift/native.dart';
 import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/models/message_status.dart';
+import 'package:vantra/core/models/peer_trust_state.dart';
 
 void main() {
   late AppDatabase db;
@@ -27,6 +28,7 @@ void main() {
         peerId: 'peer-abc',
         displayName: 'Device A',
         lastKnownEndpointId: 'QHZD',
+        trustState: PeerTrustState.untrusted,
         lastSeen: now,
         createdAt: now,
         updatedAt: now,
@@ -42,6 +44,7 @@ void main() {
         peerId: 'peer-abc',
         displayName: 'Device A New Name',
         lastKnownEndpointId: 'XVAA',
+        trustState: PeerTrustState.untrusted,
         lastSeen: now + 1000,
         createdAt: now,
         updatedAt: now + 1000,

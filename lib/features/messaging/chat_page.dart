@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
+import 'package:vantra/core/models/peer_trust_state.dart';
 import 'package:vantra/core/models/message_status.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
@@ -57,6 +58,79 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  void _showSecurityDetails(PeerSession? session) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        final fingerprint = session?.fingerprint ?? 'Pending Exchange';
+        final isTrusted = session?.trustState == PeerTrustState.trusted;
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    session?.isSecure == true ? Icons.lock : Icons.lock_open,
+                    color: session?.isSecure == true ? Colors.greenAccent : Colors.amberAccent,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    session?.isSecure == true ? 'Encrypted Session' : 'Security Pending',
+                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Text('Cryptographic Fingerprint (SHA-256):', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 6),
+              SelectableText(
+                fingerprint,
+                style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Text('Trust State: ', style: TextStyle(color: Colors.white70)),
+                  Text(
+                    session?.trustState.name.toUpperCase() ?? 'UNTRUSTED',
+                    style: TextStyle(
+                      color: isTrusted ? Colors.greenAccent : Colors.orangeAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isTrusted ? Colors.orangeAccent : Colors.greenAccent,
+                    foregroundColor: Colors.black,
+                  ),
+                  icon: Icon(isTrusted ? Icons.warning_amber : Icons.verified),
+                  label: Text(isTrusted ? 'Mark as Untrusted' : 'Verify & Mark as Trusted'),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    final newState = isTrusted ? PeerTrustState.untrusted : PeerTrustState.trusted;
+                    ref.read(messagingStateProvider.notifier).setPeerTrustState(widget.peerId, newState);
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final localId = ref.watch(localIdentityStateProvider);
@@ -82,6 +156,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             ),
           ),
         ),
+        actions: [
+          IconButton(
+            icon: Icon(
+              session?.isSecure == true ? Icons.security : Icons.security_outlined,
+              color: session?.trustState == PeerTrustState.trusted ? Colors.greenAccent : Colors.white70,
+            ),
+            tooltip: 'Security & Fingerprint',
+            onPressed: () => _showSecurityDetails(session),
+          ),
+        ],
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -101,7 +185,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  isConnected ? 'Connected' : 'Disconnected',
+                  isConnected ? (session?.isSecure == true ? 'Securely Connected' : 'Connected') : 'Disconnected',
                   style: TextStyle(
                     fontSize: 12,
                     color: isConnected ? Colors.greenAccent : Colors.redAccent,

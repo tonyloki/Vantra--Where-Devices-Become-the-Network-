@@ -35,6 +35,9 @@ dependencies:
   protobuf: ^6.0.0
   uuid: ^4.6.0
   shared_preferences: ^2.5.5
+  cryptography: ^2.7.0
+  cryptography_flutter: ^2.3.4
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:

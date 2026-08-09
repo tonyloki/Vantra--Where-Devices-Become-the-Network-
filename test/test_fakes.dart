@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:vantra/core/networking/transport.dart';
+import 'package:vantra/core/security/secure_storage_service.dart';
 
 class FakeTransport implements Transport {
   final _peersController = StreamController<List<DiscoveredPeer>>.broadcast();
@@ -60,14 +61,45 @@ class FakeTransport implements Transport {
   }
 
   @override
-  Future<void> startAdvertising(String localName) async {}
-
-  @override
-  Future<void> startDiscovery(String localName) async {}
+  Future<void> startAdvertising(String localEndpointName) async {}
 
   @override
   Future<void> stopAdvertising() async {}
 
   @override
+  Future<void> startDiscovery(String localName) async {}
+
+  @override
   Future<void> stopDiscovery() async {}
+
+  @override
+  Future<void> stopAllEndpoints() async {}
+
+  @override
+  void dispose() {
+    _peersController.close();
+    _connectionController.close();
+    _payloadController.close();
+  }
+}
+
+class FakeSecureStorageService extends SecureStorageService {
+  final Map<String, List<int>> _storage = {};
+
+  FakeSecureStorageService();
+
+  @override
+  Future<List<int>?> getIdentityPrivateKeySeed() async {
+    return _storage['vantra_identity_private_seed'];
+  }
+
+  @override
+  Future<void> saveIdentityPrivateKeySeed(List<int> seedBytes) async {
+    _storage['vantra_identity_private_seed'] = seedBytes;
+  }
+
+  @override
+  Future<void> clearIdentityKeys() async {
+    _storage.clear();
+  }
 }
