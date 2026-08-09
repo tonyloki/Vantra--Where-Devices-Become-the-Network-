@@ -128,6 +128,11 @@ class NearbyTransport implements Transport {
   @override
   Future<void> connect(String localName, String endpointId) async {
     VantraLogger.log('NearbyTransport: connect to $endpointId');
+    try {
+      await stopDiscovery();
+    } catch (e) {
+      VantraLogger.log('NearbyTransport: failed to stop discovery before connect: $e');
+    }
     final result = await _nearby.requestConnection(
       localName,
       endpointId,

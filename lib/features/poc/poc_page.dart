@@ -87,11 +87,7 @@ class _PocPageState extends ConsumerState<PocPage> {
       _log('Connection update: ${update.endpointId} status: ${update.status.name}');
 
       if (update.status == ConnectionStatus.connecting) {
-        if (update.isIncoming) {
-          _showConnectionRequestDialog(update.endpointId, update.endpointName, update.authenticationToken);
-        } else {
-          _log('Outbound request initiated to ${update.endpointName} (${update.endpointId})');
-        }
+        _showConnectionRequestDialog(update.endpointId, update.endpointName, update.authenticationToken, update.isIncoming);
       } else if (update.status == ConnectionStatus.connected) {
         setState(() {
           _activeEndpointId = update.endpointId;
@@ -149,13 +145,13 @@ class _PocPageState extends ConsumerState<PocPage> {
     });
   }
 
-  void _showConnectionRequestDialog(String endpointId, String name, String? token) {
+  void _showConnectionRequestDialog(String endpointId, String name, String? token, bool isIncoming) {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Connection Request'),
+          title: Text(isIncoming ? 'Incoming Connection Request' : 'Outgoing Connection'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -164,7 +160,9 @@ class _PocPageState extends ConsumerState<PocPage> {
               Text('ID: $endpointId'),
               if (token != null) Text('Auth Token: $token'),
               const SizedBox(height: 8),
-              const Text('Accept connection request?'),
+              Text(isIncoming 
+                  ? 'Accept connection request?' 
+                  : 'Confirm matching Auth Token to establish connection?'),
             ],
           ),
           actions: [
