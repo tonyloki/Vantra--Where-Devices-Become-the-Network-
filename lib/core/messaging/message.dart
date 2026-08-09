@@ -1,9 +1,12 @@
+import 'package:vantra/core/models/message_status.dart';
+
 class VantraMessage {
   final String messageId;
   final String senderId;
   final String receiverId;
   final String text;
   final int timestamp;
+  final MessageStatus status;
 
   const VantraMessage({
     required this.messageId,
@@ -11,6 +14,7 @@ class VantraMessage {
     required this.receiverId,
     required this.text,
     required this.timestamp,
+    this.status = MessageStatus.sent,
   });
 
   Map<String, dynamic> toJson() => {
@@ -29,6 +33,25 @@ class VantraMessage {
       receiverId: json['receiverId'] as String,
       text: json['text'] as String,
       timestamp: json['timestamp'] as int,
+      status: MessageStatus.received,
+    );
+  }
+
+  VantraMessage copyWith({
+    String? messageId,
+    String? senderId,
+    String? receiverId,
+    String? text,
+    int? timestamp,
+    MessageStatus? status,
+  }) {
+    return VantraMessage(
+      messageId: messageId ?? this.messageId,
+      senderId: senderId ?? this.senderId,
+      receiverId: receiverId ?? this.receiverId,
+      text: text ?? this.text,
+      timestamp: timestamp ?? this.timestamp,
+      status: status ?? this.status,
     );
   }
 }

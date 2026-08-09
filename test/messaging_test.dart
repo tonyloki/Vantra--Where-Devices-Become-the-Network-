@@ -11,6 +11,9 @@ import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/errors/vantra_exceptions.dart';
+import 'package:drift/native.dart';
+import 'package:vantra/core/database/app_database.dart';
+import 'package:vantra/core/messaging/messaging_repository.dart';
 import 'test_fakes.dart';
 
 void main() {
@@ -51,20 +54,24 @@ void main() {
   group('MessagingNotifier & Identity Handshake Tests', () {
     late FakeTransport fakeTransport;
     late ProviderContainer container;
+    late AppDatabase testDb;
 
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
       fakeTransport = FakeTransport();
+      testDb = AppDatabase.forTesting(NativeDatabase.memory());
       container = ProviderContainer(
         overrides: [
           sharedPreferencesProvider.overrideWithValue(prefs),
           transportProvider.overrideWithValue(fakeTransport),
+          appDatabaseProvider.overrideWithValue(testDb),
         ],
       );
     });
 
-    tearDown(() {
+    tearDown(() async {
+      await testDb.close();
       container.dispose();
     });
 
@@ -194,9 +201,11 @@ void main() {
       // Send text message successfully
       await notifier.sendTextMessage(remotePeerId, 'Test Message payload');
       
-      final state = container.read(messagingStateProvider);
-      expect(state.messageHistory[remotePeerId]!.length, 1);
-      expect(state.messageHistory[remotePeerId]![0].text, 'Test Message payload');
+      final localIdentity = container.read(localIdentityStateProvider);
+      final MessagingRepository repo = container.read(messagingRepositoryProvider);
+      final messages = await repo.getConversation(localIdentity.peerId, remotePeerId);
+      expect(messages.length, 1);
+      expect(messages[0].text, 'Test Message payload');
 
       // Verify transport payload
       expect(fakeTransport.sentTargets.length, 2); // 1 identity handshake, 1 text message

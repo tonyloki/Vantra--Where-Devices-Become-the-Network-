@@ -50,14 +50,21 @@ class MessagingService {
     await _transport.send(endpointId, bytes);
   }
 
-  Future<VantraMessage> sendTextMessage(String endpointId, String senderId, String receiverId, String text) async {
+  Future<VantraMessage> sendTextMessage(
+    String endpointId,
+    String senderId,
+    String receiverId,
+    String text, {
+    String? messageId,
+    int? timestamp,
+  }) async {
     VantraLogger.log('[VANTRA][MESSAGE] Creating TEXT message for $endpointId');
     final message = VantraMessage(
-      messageId: const Uuid().v4(),
+      messageId: messageId ?? const Uuid().v4(),
       senderId: senderId,
       receiverId: receiverId,
       text: text,
-      timestamp: DateTime.now().millisecondsSinceEpoch,
+      timestamp: timestamp ?? DateTime.now().millisecondsSinceEpoch,
     );
 
     final bytes = Uint8List.fromList(utf8.encode(jsonEncode(message.toJson())));

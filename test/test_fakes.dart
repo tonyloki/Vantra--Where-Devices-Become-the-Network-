@@ -48,8 +48,13 @@ class FakeTransport implements Transport {
     disconnectedTarget = endpointId;
   }
 
+  bool throwErrorOnSend = false;
+
   @override
   Future<void> send(String endpointId, Uint8List data) async {
+    if (throwErrorOnSend) {
+      throw Exception('Fake send error');
+    }
     sentPayloads.add(data);
     sentTargets.add(endpointId);
   }

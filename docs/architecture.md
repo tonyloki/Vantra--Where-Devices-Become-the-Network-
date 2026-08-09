@@ -2,26 +2,51 @@
 
 ## Phase Status
 
-*   **Current Phase:** Phase 1
-*   **Status:** Communication Proof of Concept (POC).
+*   **Current Phase:** Phase 3
+*   **Status:** Offline-First SQLite Local Messaging Persistence.
 
-## Implemented
-*   Layered architecture separation with `Transport` abstraction in `lib/core/networking/transport.dart`.
-*   Concrete `NearbyTransport` implementation in `lib/communication/transport/nearby_transport.dart`.
-*   POC User Interface in `lib/features/poc/poc_page.dart` communicating via `transportProvider` to the transport layer.
+## Implemented Architecture Layers
 
-## Not Implemented Yet
-*   Domain-layer use cases (advertising/discovery managers).
-*   Cryptographic security (Phase 4).
-*   Protocol buffer messaging protocol serialization (Phase 5).
-*   SQLite + Drift local persistence (Phase 7).
+VANTRA uses a layered architecture to decouple presentation, business logic, data persistence, and transport details:
 
-## Overview
-VANTRA uses a layered architecture to separate business logic from specific transport layers:
-1. Presentation Layer (UI Pages and Riverpod providers)
-2. Application / Use Case Layer (to be added)
-3. Domain Layer (to be added)
-4. Communication / Infrastructure Layer (stubs)
-5. Transport Abstraction Layer (`Transport` interface)
-6. Concrete Transport Implementation (e.g. `NearbyTransport` using `nearby_connections`)
+```text
+               Presentation Layer (Flutter Widgets)
+                     [ChatPage / PocPage]
+                              │
+                              ▼
+            Application State Layer (Riverpod Providers)
+           [MessagingNotifier / conversationStreamProvider]
+                              │
+                              ▼
+           Domain Service Layer (Encoding / Wire format)
+                     [MessagingService]
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+       Transport Layer                 Data Layer (Repository)
+     [NearbyTransport]             [MessagingRepository]
+              │                               │
+              ▼                               ▼
+      Nearby Connections               Drift DAO Layer
+    (P2P Hardware Radios)              [MessageDao / PeerDao]
+                                              │
+                                              ▼
+                                        SQLite Database
+```
 
+### 1. Presentation & State Layer
+*   **ChatPage:** Subscribes to `conversationStreamProvider(peerId)` which streams database changes reactively. Locks message input automatically if session status disconnects.
+*   **PocPage:** Displays advertising, discovery, connection logs, and unified active connection statuses.
+*   **MessagingNotifier:** Manages peer handshake triggers and handles sending logic (pending -> transmit -> sent/failed).
+
+### 2. Domain & Wire format Service Layer
+*   **MessagingService:** Responsible for serialization/deserialization of JSON packets (IDENTITY and TEXT).
+*   **LocalIdentity:** Tracks device UUID and displayName using `SharedPreferences`.
+
+### 3. Local Persistence Data Layer
+*   **MessagingRepository:** Acts as a clean boundary wrapping SQLite queries. Enforces duplicate message packet protection at database write time.
+*   **Drift / SQLite Database:** Manages local persistence for messages (ordered chronologically by database primary key `localId` to preserve exact arrival sequence) and known peers.
+*   **Memory Isolation:** Automated tests utilize `NativeDatabase.memory()` to spin up isolated database instances.
+
+### 4. Transport Layer
+*   **NearbyTransport:** Concrete implementation of `Transport` wrapper utilizing `nearby_connections` plugin for local P2P networking.

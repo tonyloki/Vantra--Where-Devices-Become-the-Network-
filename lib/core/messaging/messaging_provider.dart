@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
+import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/utils/logger.dart';
 import 'package:vantra/core/errors/vantra_exceptions.dart';
+import 'package:vantra/core/database/app_database.dart';
+import 'package:vantra/core/messaging/messaging_repository.dart';
 import 'messaging_service.dart';
 import 'message.dart';
 
 class MessagingState {
-  final Map<String, List<VantraMessage>> messageHistory;
   final Map<String, PeerSession> sessions;
   final Map<String, String> endpointToPeerId;
   final String? activeEndpointId;
@@ -18,7 +21,6 @@ class MessagingState {
   final ConnectionStatus connectionStatus;
 
   const MessagingState({
-    required this.messageHistory,
     required this.sessions,
     required this.endpointToPeerId,
     this.activeEndpointId,
@@ -27,15 +29,13 @@ class MessagingState {
   });
 
   MessagingState.initial()
-      : messageHistory = const {},
-        sessions = const {},
+      : sessions = const {},
         endpointToPeerId = const {},
         activeEndpointId = null,
         activeEndpointName = null,
         connectionStatus = ConnectionStatus.idle;
 
   MessagingState copyWith({
-    Map<String, List<VantraMessage>>? messageHistory,
     Map<String, PeerSession>? sessions,
     Map<String, String>? endpointToPeerId,
     String? activeEndpointId,
@@ -43,7 +43,6 @@ class MessagingState {
     ConnectionStatus? connectionStatus,
   }) {
     return MessagingState(
-      messageHistory: messageHistory ?? this.messageHistory,
       sessions: sessions ?? this.sessions,
       endpointToPeerId: endpointToPeerId ?? this.endpointToPeerId,
       activeEndpointId: activeEndpointId ?? this.activeEndpointId,
@@ -52,6 +51,25 @@ class MessagingState {
     );
   }
 }
+
+final appDatabaseProvider = Provider<AppDatabase>((ref) {
+  final db = AppDatabase();
+  ref.onDispose(() {
+    db.close();
+  });
+  return db;
+});
+
+final messagingRepositoryProvider = Provider<MessagingRepository>((ref) {
+  final db = ref.watch(appDatabaseProvider);
+  return MessagingRepository(db);
+});
+
+final conversationStreamProvider = StreamProvider.family<List<VantraMessage>, String>((ref, remotePeerId) {
+  final repository = ref.watch(messagingRepositoryProvider);
+  final localIdentity = ref.watch(localIdentityStateProvider);
+  return repository.watchConversation(localIdentity.peerId, remotePeerId);
+});
 
 final messagingServiceProvider = Provider<MessagingService>((ref) {
   final transport = ref.watch(transportProvider);
@@ -95,13 +113,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   void _handleIncomingMessage(VantraMessage msg) {
     VantraLogger.log('[VANTRA][MESSAGE] Message received, displaying for peer ${msg.senderId}');
-    final currentHistory = state.messageHistory[msg.senderId] ?? [];
-    state = state.copyWith(
-      messageHistory: {
-        ...state.messageHistory,
-        msg.senderId: [...currentHistory, msg],
-      },
-    );
+    ref.read(messagingRepositoryProvider).saveIncomingMessage(msg);
   }
 
   void _handleIdentityReceived(SessionIdentity identity) {
@@ -128,6 +140,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
         status: SessionStatus.connected,
       );
     }
+
+    // Persist peer update to database
+    ref.read(messagingRepositoryProvider).upsertPeer(
+      identity.peerId,
+      identity.displayName,
+      endpointId: identity.endpointId,
+    );
 
     state = state.copyWith(
       sessions: {
@@ -193,19 +212,39 @@ class MessagingNotifier extends Notifier<MessagingState> {
     }
 
     final localIdentity = ref.read(localIdentityStateProvider);
-    final msg = await _service.sendTextMessage(
-      session.endpointId,
-      localIdentity.peerId,
-      peerId,
-      text,
+    final repository = ref.read(messagingRepositoryProvider);
+
+    // 1. Create message model with pending status
+    final messageId = const Uuid().v4();
+    final msg = VantraMessage(
+      messageId: messageId,
+      senderId: localIdentity.peerId,
+      receiverId: peerId,
+      text: text,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      status: MessageStatus.pending,
     );
 
-    final currentHistory = state.messageHistory[peerId] ?? [];
-    state = state.copyWith(
-      messageHistory: {
-        ...state.messageHistory,
-        peerId: [...currentHistory, msg],
-      },
-    );
+    // 2. Persist locally first
+    await repository.saveOutgoingMessage(msg);
+
+    try {
+      // 3. Attempt transmission
+      await _service.sendTextMessage(
+        session.endpointId,
+        localIdentity.peerId,
+        peerId,
+        text,
+        messageId: messageId,
+        timestamp: msg.timestamp,
+      );
+
+      // 4. Update status to sent on success
+      await repository.updateMessageStatus(messageId, MessageStatus.sent);
+    } catch (e) {
+      // 5. Update status to failed on error
+      await repository.updateMessageStatus(messageId, MessageStatus.failed);
+      rethrow;
+    }
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
+import 'package:vantra/core/models/message_status.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
   final String peerId;
@@ -43,13 +44,26 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return '$hour:$minute';
   }
 
+  Widget _buildStatusIcon(MessageStatus status) {
+    switch (status) {
+      case MessageStatus.pending:
+        return const Icon(Icons.access_time, size: 10, color: Colors.white70);
+      case MessageStatus.failed:
+        return const Icon(Icons.error_outline, size: 10, color: Colors.redAccent);
+      case MessageStatus.sent:
+        return const Icon(Icons.check, size: 10, color: Colors.white70);
+      case MessageStatus.received:
+        return const Icon(Icons.check_circle_outline, size: 10, color: Colors.white70);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final localId = ref.watch(localIdentityStateProvider);
     final messagingState = ref.watch(messagingStateProvider);
 
     final session = messagingState.sessions[widget.peerId];
-    final messages = messagingState.messageHistory[widget.peerId] ?? [];
+    final messagesAsync = ref.watch(conversationStreamProvider(widget.peerId));
 
     final displayName = session?.displayName ?? 'Peer ${widget.peerId.substring(0, 6)}';
     final isConnected = session?.status == SessionStatus.connected;
@@ -127,8 +141,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 ),
               ),
             Expanded(
-              child: messages.isEmpty
-                  ? Center(
+              child: messagesAsync.when(
+                loading: () => const Center(
+                  child: CircularProgressIndicator(),
+                ),
+                error: (err, stack) => Center(
+                  child: Text(
+                    'Error loading history: $err',
+                    style: const TextStyle(color: Colors.redAccent),
+                  ),
+                ),
+                data: (messages) {
+                  if (messages.isEmpty) {
+                    return Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -149,85 +174,98 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           ),
                         ],
                       ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                      itemCount: messages.length,
-                      itemBuilder: (context, index) {
-                        final message = messages[index];
-                        final isMe = message.senderId == localId.peerId;
+                    );
+                  }
 
-                        return Align(
-                          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                            constraints: BoxConstraints(
-                              maxWidth: MediaQuery.of(context).size.width * 0.75,
+                  return ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final message = messages[index];
+                      final isMe = message.senderId == localId.peerId;
+
+                      return Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.75,
+                          ),
+                          decoration: BoxDecoration(
+                            gradient: isMe
+                                ? const LinearGradient(
+                                    colors: [Colors.deepPurpleAccent, Colors.indigoAccent],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  )
+                                : LinearGradient(
+                                    colors: [Colors.grey[850]!, Colors.grey[900]!],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(16),
+                              topRight: const Radius.circular(16),
+                              bottomLeft: isMe ? const Radius.circular(16) : const Radius.circular(0),
+                              bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(16),
                             ),
-                            decoration: BoxDecoration(
-                              gradient: isMe
-                                  ? const LinearGradient(
-                                      colors: [Colors.deepPurpleAccent, Colors.indigoAccent],
-                                      begin: Alignment.topLeft,
-                                      end: Alignment.bottomRight,
-                                    )
-                                  : LinearGradient(
-                                      colors: [Colors.grey[850]!, Colors.grey[900]!],
-                                      begin: Alignment.topLeft,
-                                      end: Alignment.bottomRight,
-                                    ),
-                              borderRadius: BorderRadius.only(
-                                topLeft: const Radius.circular(16),
-                                topRight: const Radius.circular(16),
-                                bottomLeft: isMe ? const Radius.circular(16) : const Radius.circular(0),
-                                bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 4,
+                                offset: const Offset(2, 2),
                               ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.2),
-                                  blurRadius: 4,
-                                  offset: const Offset(2, 2),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (!isMe)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
+                                  child: Text(
+                                    displayName,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.cyanAccent,
+                                      fontSize: 11,
+                                    ),
+                                  ),
                                 ),
-                              ],
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (!isMe)
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 4),
-                                    child: Text(
-                                      displayName,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.cyanAccent,
-                                        fontSize: 11,
+                              Text(
+                                message.text,
+                                style: const TextStyle(color: Colors.white, fontSize: 15),
+                              ),
+                              const SizedBox(height: 4),
+                              Align(
+                                alignment: Alignment.bottomRight,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      _formatTimestamp(message.timestamp),
+                                      style: TextStyle(
+                                        color: Colors.white70.withValues(alpha: 0.6),
+                                        fontSize: 10,
                                       ),
                                     ),
-                                  ),
-                                Text(
-                                  message.text,
-                                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                                    if (isMe) ...[
+                                      const SizedBox(width: 4),
+                                      _buildStatusIcon(message.status),
+                                    ],
+                                  ],
                                 ),
-                                const SizedBox(height: 4),
-                                Align(
-                                  alignment: Alignment.bottomRight,
-                                  child: Text(
-                                    _formatTimestamp(message.timestamp),
-                                    style: TextStyle(
-                                      color: Colors.white70.withValues(alpha: 0.6),
-                                      fontSize: 10,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
             ),
             Container(
               padding: const EdgeInsets.only(left: 16, right: 8, top: 8, bottom: 24),
