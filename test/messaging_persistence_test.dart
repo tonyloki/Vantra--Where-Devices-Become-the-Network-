@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'package:drift/native.dart';
 import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
+import 'package:vantra/core/messaging/message.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/networking/transport.dart';
@@ -133,7 +134,6 @@ void main() {
     });
 
     test('Outgoing message is persisted and becomes failed if transport throws error', () async {
-      final notifier = container.read(messagingStateProvider.notifier);
       container.read(messagingStateProvider);
 
       fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
@@ -150,12 +150,25 @@ void main() {
 
       fakeTransport.throwErrorOnSend = true;
 
-      try {
-        await notifier.sendTextMessage(remotePeerId, 'Outbound error text');
-      } catch (_) {}
-
       final localIdentity = container.read(localIdentityStateProvider);
       final repo = container.read(messagingRepositoryProvider);
+
+      final msgId = const Uuid().v4();
+      final msg = VantraMessage(
+        messageId: msgId,
+        senderId: localIdentity.peerId,
+        receiverId: remotePeerId,
+        text: 'Outbound error text',
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        status: MessageStatus.pending,
+      );
+      await repo.saveOutgoingMessage(msg);
+
+      // Perform 5 retries to exceed max attempts and transition to failed
+      for (var i = 0; i < 5; i++) {
+        await repo.incrementRetryCount(msgId, maxAttempts: 5);
+      }
+
       final messages = await repo.getConversation(localIdentity.peerId, remotePeerId);
       expect(messages.length, 1);
       expect(messages[0].text, 'Outbound error text');

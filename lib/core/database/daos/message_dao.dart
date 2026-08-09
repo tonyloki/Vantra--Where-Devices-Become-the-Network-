@@ -88,4 +88,44 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
               (t.senderId.equals(remotePeerId) & t.receiverId.equals(localPeerId))))
         .go();
   }
+
+  Future<List<Message>> getPendingOrFailedMessages(String peerId) {
+    return (select(messages)
+          ..where((t) =>
+              t.receiverId.equals(peerId) &
+              (t.status.equals(MessageStatus.pending.name) | t.status.equals(MessageStatus.failed.name)))
+          ..orderBy([(t) => OrderingTerm(expression: t.localId, mode: OrderingMode.asc)]))
+        .get();
+  }
+
+  Future<List<Message>> getAllPendingOrFailedMessages() {
+    return (select(messages)
+          ..where((t) =>
+              t.status.equals(MessageStatus.pending.name) | t.status.equals(MessageStatus.failed.name))
+          ..orderBy([(t) => OrderingTerm(expression: t.localId, mode: OrderingMode.asc)]))
+        .get();
+  }
+
+  Future<void> recoverSentMessages() async {
+    await (update(messages)..where((t) => t.status.equals(MessageStatus.sent.name)))
+        .write(const MessagesCompanion(
+      status: Value(MessageStatus.pending),
+    ));
+  }
+
+  Future<void> incrementRetryCount(String messageId, {int maxAttempts = 5}) async {
+    final msg = await getMessageById(messageId);
+    if (msg == null) return;
+
+    final newRetryCount = msg.retryCount + 1;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final isFailed = newRetryCount >= maxAttempts;
+
+    await (update(messages)..where((t) => t.messageId.equals(messageId)))
+        .write(MessagesCompanion(
+      retryCount: Value(newRetryCount),
+      lastAttempt: Value(now),
+      status: Value(isFailed ? MessageStatus.failed : MessageStatus.pending),
+    ));
+  }
 }

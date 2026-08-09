@@ -121,6 +121,29 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _retryCountMeta = const VerificationMeta(
+    'retryCount',
+  );
+  @override
+  late final GeneratedColumn<int> retryCount = GeneratedColumn<int>(
+    'retry_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _lastAttemptMeta = const VerificationMeta(
+    'lastAttempt',
+  );
+  @override
+  late final GeneratedColumn<int> lastAttempt = GeneratedColumn<int>(
+    'last_attempt',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     localId,
@@ -133,6 +156,8 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     status,
     isRead,
     createdAt,
+    retryCount,
+    lastAttempt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -214,6 +239,21 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('retry_count')) {
+      context.handle(
+        _retryCountMeta,
+        retryCount.isAcceptableOrUnknown(data['retry_count']!, _retryCountMeta),
+      );
+    }
+    if (data.containsKey('last_attempt')) {
+      context.handle(
+        _lastAttemptMeta,
+        lastAttempt.isAcceptableOrUnknown(
+          data['last_attempt']!,
+          _lastAttemptMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -265,6 +305,14 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.int,
         data['${effectivePrefix}created_at'],
       )!,
+      retryCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}retry_count'],
+      )!,
+      lastAttempt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}last_attempt'],
+      ),
     );
   }
 
@@ -288,6 +336,8 @@ class Message extends DataClass implements Insertable<Message> {
   final MessageStatus status;
   final bool isRead;
   final int createdAt;
+  final int retryCount;
+  final int? lastAttempt;
   const Message({
     required this.localId,
     required this.messageId,
@@ -299,6 +349,8 @@ class Message extends DataClass implements Insertable<Message> {
     required this.status,
     required this.isRead,
     required this.createdAt,
+    required this.retryCount,
+    this.lastAttempt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -317,6 +369,10 @@ class Message extends DataClass implements Insertable<Message> {
     }
     map['is_read'] = Variable<bool>(isRead);
     map['created_at'] = Variable<int>(createdAt);
+    map['retry_count'] = Variable<int>(retryCount);
+    if (!nullToAbsent || lastAttempt != null) {
+      map['last_attempt'] = Variable<int>(lastAttempt);
+    }
     return map;
   }
 
@@ -332,6 +388,10 @@ class Message extends DataClass implements Insertable<Message> {
       status: Value(status),
       isRead: Value(isRead),
       createdAt: Value(createdAt),
+      retryCount: Value(retryCount),
+      lastAttempt: lastAttempt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastAttempt),
     );
   }
 
@@ -351,6 +411,8 @@ class Message extends DataClass implements Insertable<Message> {
       status: serializer.fromJson<MessageStatus>(json['status']),
       isRead: serializer.fromJson<bool>(json['isRead']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
+      retryCount: serializer.fromJson<int>(json['retryCount']),
+      lastAttempt: serializer.fromJson<int?>(json['lastAttempt']),
     );
   }
   @override
@@ -367,6 +429,8 @@ class Message extends DataClass implements Insertable<Message> {
       'status': serializer.toJson<MessageStatus>(status),
       'isRead': serializer.toJson<bool>(isRead),
       'createdAt': serializer.toJson<int>(createdAt),
+      'retryCount': serializer.toJson<int>(retryCount),
+      'lastAttempt': serializer.toJson<int?>(lastAttempt),
     };
   }
 
@@ -381,6 +445,8 @@ class Message extends DataClass implements Insertable<Message> {
     MessageStatus? status,
     bool? isRead,
     int? createdAt,
+    int? retryCount,
+    Value<int?> lastAttempt = const Value.absent(),
   }) => Message(
     localId: localId ?? this.localId,
     messageId: messageId ?? this.messageId,
@@ -392,6 +458,8 @@ class Message extends DataClass implements Insertable<Message> {
     status: status ?? this.status,
     isRead: isRead ?? this.isRead,
     createdAt: createdAt ?? this.createdAt,
+    retryCount: retryCount ?? this.retryCount,
+    lastAttempt: lastAttempt.present ? lastAttempt.value : this.lastAttempt,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -409,6 +477,12 @@ class Message extends DataClass implements Insertable<Message> {
       status: data.status.present ? data.status.value : this.status,
       isRead: data.isRead.present ? data.isRead.value : this.isRead,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      retryCount: data.retryCount.present
+          ? data.retryCount.value
+          : this.retryCount,
+      lastAttempt: data.lastAttempt.present
+          ? data.lastAttempt.value
+          : this.lastAttempt,
     );
   }
 
@@ -424,7 +498,9 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('type: $type, ')
           ..write('status: $status, ')
           ..write('isRead: $isRead, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('lastAttempt: $lastAttempt')
           ..write(')'))
         .toString();
   }
@@ -441,6 +517,8 @@ class Message extends DataClass implements Insertable<Message> {
     status,
     isRead,
     createdAt,
+    retryCount,
+    lastAttempt,
   );
   @override
   bool operator ==(Object other) =>
@@ -455,7 +533,9 @@ class Message extends DataClass implements Insertable<Message> {
           other.type == this.type &&
           other.status == this.status &&
           other.isRead == this.isRead &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.retryCount == this.retryCount &&
+          other.lastAttempt == this.lastAttempt);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -469,6 +549,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<MessageStatus> status;
   final Value<bool> isRead;
   final Value<int> createdAt;
+  final Value<int> retryCount;
+  final Value<int?> lastAttempt;
   const MessagesCompanion({
     this.localId = const Value.absent(),
     this.messageId = const Value.absent(),
@@ -480,6 +562,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.status = const Value.absent(),
     this.isRead = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.lastAttempt = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.localId = const Value.absent(),
@@ -492,6 +576,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     required MessageStatus status,
     this.isRead = const Value.absent(),
     required int createdAt,
+    this.retryCount = const Value.absent(),
+    this.lastAttempt = const Value.absent(),
   }) : messageId = Value(messageId),
        senderId = Value(senderId),
        receiverId = Value(receiverId),
@@ -511,6 +597,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<String>? status,
     Expression<bool>? isRead,
     Expression<int>? createdAt,
+    Expression<int>? retryCount,
+    Expression<int>? lastAttempt,
   }) {
     return RawValuesInsertable({
       if (localId != null) 'local_id': localId,
@@ -523,6 +611,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (status != null) 'status': status,
       if (isRead != null) 'is_read': isRead,
       if (createdAt != null) 'created_at': createdAt,
+      if (retryCount != null) 'retry_count': retryCount,
+      if (lastAttempt != null) 'last_attempt': lastAttempt,
     });
   }
 
@@ -537,6 +627,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<MessageStatus>? status,
     Value<bool>? isRead,
     Value<int>? createdAt,
+    Value<int>? retryCount,
+    Value<int?>? lastAttempt,
   }) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -549,6 +641,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       status: status ?? this.status,
       isRead: isRead ?? this.isRead,
       createdAt: createdAt ?? this.createdAt,
+      retryCount: retryCount ?? this.retryCount,
+      lastAttempt: lastAttempt ?? this.lastAttempt,
     );
   }
 
@@ -587,6 +681,12 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (createdAt.present) {
       map['created_at'] = Variable<int>(createdAt.value);
     }
+    if (retryCount.present) {
+      map['retry_count'] = Variable<int>(retryCount.value);
+    }
+    if (lastAttempt.present) {
+      map['last_attempt'] = Variable<int>(lastAttempt.value);
+    }
     return map;
   }
 
@@ -602,7 +702,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('type: $type, ')
           ..write('status: $status, ')
           ..write('isRead: $isRead, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('lastAttempt: $lastAttempt')
           ..write(')'))
         .toString();
   }
@@ -1329,6 +1431,8 @@ typedef $$MessagesTableCreateCompanionBuilder =
       required MessageStatus status,
       Value<bool> isRead,
       required int createdAt,
+      Value<int> retryCount,
+      Value<int?> lastAttempt,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -1342,6 +1446,8 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<MessageStatus> status,
       Value<bool> isRead,
       Value<int> createdAt,
+      Value<int> retryCount,
+      Value<int?> lastAttempt,
     });
 
 class $$MessagesTableFilterComposer
@@ -1401,6 +1507,16 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<int> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get lastAttempt => $composableBuilder(
+    column: $table.lastAttempt,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1463,6 +1579,16 @@ class $$MessagesTableOrderingComposer
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get lastAttempt => $composableBuilder(
+    column: $table.lastAttempt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -1507,6 +1633,16 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<int> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get lastAttempt => $composableBuilder(
+    column: $table.lastAttempt,
+    builder: (column) => column,
+  );
 }
 
 class $$MessagesTableTableManager
@@ -1547,6 +1683,8 @@ class $$MessagesTableTableManager
                 Value<MessageStatus> status = const Value.absent(),
                 Value<bool> isRead = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<int?> lastAttempt = const Value.absent(),
               }) => MessagesCompanion(
                 localId: localId,
                 messageId: messageId,
@@ -1558,6 +1696,8 @@ class $$MessagesTableTableManager
                 status: status,
                 isRead: isRead,
                 createdAt: createdAt,
+                retryCount: retryCount,
+                lastAttempt: lastAttempt,
               ),
           createCompanionCallback:
               ({
@@ -1571,6 +1711,8 @@ class $$MessagesTableTableManager
                 required MessageStatus status,
                 Value<bool> isRead = const Value.absent(),
                 required int createdAt,
+                Value<int> retryCount = const Value.absent(),
+                Value<int?> lastAttempt = const Value.absent(),
               }) => MessagesCompanion.insert(
                 localId: localId,
                 messageId: messageId,
@@ -1582,6 +1724,8 @@ class $$MessagesTableTableManager
                 status: status,
                 isRead: isRead,
                 createdAt: createdAt,
+                retryCount: retryCount,
+                lastAttempt: lastAttempt,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

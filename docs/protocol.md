@@ -1,88 +1,135 @@
 # VANTRA — Protocol Specifications
 
-## Current Phase Status
+## Phase Status
 
-*   **Current Phase:** Phase 4
-*   **Status:** Secure handshake, versioning, and message wrapping protocol designed.
+*   **Current Phase:** Phase 7
+*   **Status:** Protocol Buffers wire protocol, encrypted ACK model, sequence verification, duplicate-message ACK recovery, and retry queues completed.
 
 ---
 
-## 1. Protocol Wrappers & Formats
+## 1. Protocol Buffers Wire Format
 
-VANTRA wraps payloads in JSON formats. Phase 4 introduces a strict protocol version flag (`v: 1`) on all packets.
+All data transmitted over the Nearby Connections transport is serialized using Protocol Buffers. The outer envelope is always a `VantraWireEnvelope` (version `1`).
 
-### A. Handshake Packet (`IDENTITY_SECURE`)
-Exchanged immediately when a Nearby Connections connection updates to `connected`.
+### A. Outer Wire Envelope (`VantraWireEnvelope`)
+```protobuf
+message VantraWireEnvelope {
+  uint32 protocol_version = 1;
 
-```json
-{
-  "type": "IDENTITY_SECURE",
-  "v": 1,
-  "peerId": "local-peer-uuid",
-  "displayName": "VantraDisplayName",
-  "identityPublicKey": "hex-encoded-ed25519-public-key",
-  "ephemeralPublicKey": "hex-encoded-x25519-public-key",
-  "signature": "hex-encoded-ed25519-signature-over-canonical-bytes"
+  oneof payload {
+    IdentitySecurePayload handshake = 2;
+    EncryptedEnvelope encrypted_message = 3;
+    ProtocolErrorPayload error = 4;
+  }
+}
+```
+
+---
+
+### B. Secure Handshake Payload (`IdentitySecurePayload`)
+Exchanged immediately when a connection transitions to the connected state.
+
+```protobuf
+message IdentitySecurePayload {
+  string peer_id = 1;
+  string display_name = 2;
+  bytes identity_public_key = 3;  // 32 bytes Ed25519
+  bytes ephemeral_public_key = 4; // 32 bytes X25519
+  bytes signature = 5;            // 64 bytes Ed25519 signature
 }
 ```
 
 #### Canonical Handshake Transcript Bytes (Signed Input)
-To ensure signatures are deterministic and unambiguous, the handshake payload must be packed into a binary transcript rather than a delimited string. The bytes are encoded as:
-
-1.  **Domain Separator:** Prefix with `utf8.encode('VANTRA_HANDSHAKE_DOMAIN')` (23 bytes).
+To prevent active signature spoofing, the handshake transcript is formatted into deterministic binary bytes before signing/verification:
+1.  **Domain Separator:** `utf8.encode('VANTRA_HANDSHAKE_DOMAIN')` (23 bytes).
 2.  **Protocol Version:** `v` mapped to a 4-byte big-endian unsigned integer (uint32).
 3.  **Logical Identity (`peerId`):**
-    *   2-byte big-endian unsigned integer length of `peerId` string.
-    *   UTF-8 bytes of `peerId`.
+    *   2-byte big-endian length of the UTF-8 `peerId` string.
+    *   Raw UTF-8 bytes of `peerId`.
 4.  **Display Identity (`displayName`):**
-    *   2-byte big-endian unsigned integer length of `displayName` string.
-    *   UTF-8 bytes of `displayName`.
+    *   2-byte big-endian length of the UTF-8 `displayName` string.
+    *   Raw UTF-8 bytes of `displayName`.
 5.  **Long-Term Identity Key (`identityPublicKey`):**
-    *   2-byte big-endian unsigned integer length of hex-decoded public key bytes (always 32 bytes).
-    *   Raw bytes of `identityPublicKey`.
+    *   2-byte big-endian length of raw bytes (always 32).
+    *   Raw bytes of the Ed25519 public key.
 6.  **Ephemeral Key (`ephemeralPublicKey`):**
-    *   2-byte big-endian unsigned integer length of hex-decoded ephemeral public key bytes (always 32 bytes).
-    *   Raw bytes of `ephemeralPublicKey`.
-
-The final signature is calculated by taking the SHA-256 hash of these concatenated bytes and signing it using the long-term Ed25519 private key.
+    *   2-byte big-endian length of raw bytes (always 32).
+    *   Raw bytes of the X25519 ephemeral public key.
 
 ---
 
-### B. Encrypted Message Packet (`ENCRYPTED_TEXT`)
-Wraps chat message payloads.
+### C. Encrypted Wire Packet (`EncryptedEnvelope`)
+Encapsulates all secure traffic (text messages, delivery acknowledgments, etc.) once the session is secure.
 
-```json
-{
-  "type": "ENCRYPTED_TEXT",
-  "v": 1,
-  "messageId": "unique-message-uuid",
-  "nonce": "hex-encoded-12-byte-nonce",
-  "ciphertext": "hex-encoded-ciphertext",
-  "mac": "hex-encoded-16-byte-poly1305-tag"
+```protobuf
+message EncryptedEnvelope {
+  string message_id = 1;      // Unique ID for this specific packet
+  string session_id = 2;      // Derived active session ID
+  uint64 sequence = 3;        // Monotonic sequence number
+  bytes nonce = 4;            // 12-byte AEAD nonce
+  bytes ciphertext = 5;       // Encrypted VantraPlaintext bytes
+  bytes mac = 6;              // 16-byte Poly1305 tag
 }
 ```
 
-*   **Associated Data for AEAD:** The UTF-8 bytes of the `messageId` are passed as Associated Data (AD) to prevent metadata swapping or tampering.
-*   **Counter-Based Nonce Construction:**
-    *   *First 8 bytes (64 bits):* The first 8 bytes of the session key derivation parameter `salt`.
-    *   *Last 4 bytes (32 bits):* The big-endian representation of the session's monotonic message `sendSequence` counter.
-*   **Decrypted Cleartext JSON Structure:**
-    ```json
-    {
-      "senderId": "sender-peer-uuid",
-      "receiverId": "receiver-peer-uuid",
-      "text": "Hello, secret world!",
-      "timestamp": 1717000000000,
-      "seq": 1,
-      "sessionId": "hex-encoded-session-id"
-    }
-    ```
+*   **AEAD Associated Data (AAD):** The UTF-8 bytes of the envelope `message_id` are bound to the ciphertext as associated data.
+*   **Nonce Generation:**
+    *   *First 8 bytes (64 bits):* Concat of session salt.
+    *   *Last 4 bytes (32 bits):* Monotonic sequence number in big-endian uint32 format.
 
 ---
 
-## 2. Handshake, Version, & Decryption Failures
+### D. Decrypted Plaintext Payload (`VantraPlaintext`)
+Contains the actual payload properties. This is encrypted inside `EncryptedEnvelope.ciphertext`.
 
-1.  **Handshake Validation:** If signature verification fails, the connection is aborted immediately by calling `Transport.disconnect()`.
-2.  **Version Negotiation:** Secure peers must reject unsupported or insecure protocol versions. If a peer receives a payload with `v < 1` or an unsupported type, the connection is closed. There is no automatic fallback to the Phase 3 plaintext protocol.
-3.  **Decryption Failures:** If the Poly1305 MAC check fails, the message is discarded. The payload is never saved to the SQLite database and is never displayed on the ChatPage UI.
-4.  **Sequence / Session Verification Failures:** If the decrypted `seq` is less than or equal to `lastReceiveSequence`, or if `sessionId` does not match the active session, the packet is discarded immediately.
+```protobuf
+message VantraPlaintext {
+  string message_id = 1;      // Unique message UUID
+  string session_id = 2;      // Session ID
+  uint64 sequence = 3;        // Monotonic sequence number
+  int64 timestamp_ms = 4;     // Epoch timestamp in milliseconds
+  string sender_id = 5;
+  string receiver_id = 6;
+
+  oneof body {
+    TextBody text = 7;
+    AckBody ack = 8;
+  }
+}
+
+message TextBody {
+  string content = 1;
+}
+
+message AckBody {
+  string original_message_id = 1;
+  DeliveryStatus status = 2;
+}
+
+enum DeliveryStatus {
+  DELIVERY_UNSPECIFIED = 0;
+  DELIVERY_DELIVERED = 1;
+}
+```
+
+---
+
+## 2. Sequence, Replay & Session Validation
+
+*   **Monotonic Counter Validation:** Incoming packets must have a `sequence` number strictly greater than the last successfully processed sequence number.
+*   **Retransmission Invariant:** Retransmissions of a pending message (e.g. if the original ACK was lost) must use the **same logical messageId** but must be encrypted using a **new sequence number and nonce** under the current active session. This allows the packet to pass replay protection, and then trigger duplicate-message handling.
+
+---
+
+## 3. Encrypted ACK Invariant
+
+*   Delivery ACKs are encrypted using the same session security parameters.
+*   **Distinct Packet IDs:** Every ACK packet has its own unique outer `message_id` (representing the ACK packet itself) so that AAD binding and replay sequence tracking function normally. The ID of the original text message being acknowledged is placed inside `AckBody.original_message_id`.
+
+---
+
+## 4. Lost-ACK & Duplicate-Message ACK Recovery
+
+*   If an incoming decrypted message has a `message_id` that is already present in the local database (indicating the remote peer retransmitted because it did not receive our ACK):
+    1. The payload is discarded to prevent duplicate entries in SQLite and duplicate message bubbles in the UI.
+    2. The encrypted ACK is immediately re-sent to the peer to clear their outgoing retry queue.

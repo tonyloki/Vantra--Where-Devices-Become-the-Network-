@@ -13,7 +13,6 @@ import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/protocol/protocol_message.dart';
 import 'package:vantra/core/protocol/protocol_version.dart';
 import 'package:vantra/core/protocol/protobuf_codec.dart';
-import 'package:vantra/core/errors/vantra_exceptions.dart';
 import 'package:drift/native.dart';
 import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/messaging/messaging_repository.dart';
@@ -259,7 +258,7 @@ void main() {
       expect(sentEnc.protocolVersion, kCurrentProtocolVersion);
       expect(sentEnc.ciphertext.isNotEmpty, isTrue);
 
-      // Disconnect and try to send again — should fail
+      // Disconnect and try to send again — should queue locally as pending
       fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
         endpointId: 'QHZD',
         status: ConnectionStatus.disconnected,
@@ -267,7 +266,11 @@ void main() {
       ));
       await Future.delayed(const Duration(milliseconds: 50));
 
-      expect(() => notifier.sendTextMessage(remotePeerId, 'Failure test'), throwsA(isA<VantraException>()));
+      await notifier.sendTextMessage(remotePeerId, 'Failure test');
+      final pendingMsgs = await repo.getPendingOrFailedMessages(remotePeerId);
+      expect(pendingMsgs.length, 1);
+      expect(pendingMsgs[0].text, 'Failure test');
+      expect(pendingMsgs[0].status, MessageStatus.pending);
     });
   });
 }

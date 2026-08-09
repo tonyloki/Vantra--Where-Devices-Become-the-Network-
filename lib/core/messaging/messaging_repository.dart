@@ -205,6 +205,30 @@ class MessagingRepository {
     return _db.peerDao.searchPeers(query);
   }
 
+  Future<VantraMessage?> getMessageById(String messageId) async {
+    final dbMsg = await _db.messageDao.getMessageById(messageId);
+    if (dbMsg == null) return null;
+    return _mapToDomain(dbMsg);
+  }
+
+  Future<List<VantraMessage>> getPendingOrFailedMessages(String peerId) async {
+    final list = await _db.messageDao.getPendingOrFailedMessages(peerId);
+    return list.map((dbMsg) => _mapToDomain(dbMsg)).toList();
+  }
+
+  Future<List<VantraMessage>> getAllPendingOrFailedMessages() async {
+    final list = await _db.messageDao.getAllPendingOrFailedMessages();
+    return list.map((dbMsg) => _mapToDomain(dbMsg)).toList();
+  }
+
+  Future<void> recoverSentMessages() {
+    return _db.messageDao.recoverSentMessages();
+  }
+
+  Future<void> incrementRetryCount(String messageId, {int maxAttempts = 5}) {
+    return _db.messageDao.incrementRetryCount(messageId, maxAttempts: maxAttempts);
+  }
+
   VantraMessage _mapToDomain(Message dbMsg) {
     return VantraMessage(
       messageId: dbMsg.messageId,
@@ -213,6 +237,7 @@ class MessagingRepository {
       text: dbMsg.messageText,
       timestamp: dbMsg.timestamp,
       status: dbMsg.status,
+      retryCount: dbMsg.retryCount,
     );
   }
 }

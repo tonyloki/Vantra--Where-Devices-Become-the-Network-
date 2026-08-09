@@ -14,9 +14,9 @@ import 'package:vantra/core/protocol/protocol_version.dart';
 import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'package:vantra/core/security/security_session.dart';
-import 'package:vantra/core/errors/vantra_exceptions.dart';
 import 'package:vantra/core/utils/logger.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:drift/drift.dart' show Value;
 import 'message.dart';
 import 'messaging_repository.dart';
 import 'messaging_service.dart';
@@ -99,6 +99,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Map<String, SecuritySession> _securitySessions = {};
   final Map<String, SimpleKeyPair> _pendingEphemeralKeys = {};
 
+  // Phase 7 Queue, ACK-Timeout, and Backoff structures
+  final Set<String> _activePeerFlushes = {};
+  final Map<String, Timer> _ackTimers = {};
+  final Map<String, Timer> _backoffTimers = {};
+
   @override
   MessagingState build() {
     _service = ref.watch(messagingServiceProvider);
@@ -120,6 +125,21 @@ class MessagingNotifier extends Notifier<MessagingState> {
       _secureIdentitySub?.cancel();
       _securitySessions.clear();
       _pendingEphemeralKeys.clear();
+      _activePeerFlushes.clear();
+      for (final t in _ackTimers.values) {
+        t.cancel();
+      }
+      _ackTimers.clear();
+      for (final t in _backoffTimers.values) {
+        t.cancel();
+      }
+      _backoffTimers.clear();
+    });
+
+    // Persistent Recovery on App Boot
+    Future.microtask(() async {
+      final repository = ref.read(messagingRepositoryProvider);
+      await repository.recoverSentMessages();
     });
 
     return MessagingState.initial();
@@ -179,6 +199,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
       // 4. Update peer lastSeen timestamp in SQLite
       await repository.updatePeerLastSeen(peerId, plaintext.timestampMs);
 
+      // Lost-ACK + Duplicate-Message ACK Recovery
+      final existingMsg = await repository.getMessageById(plaintext.messageId);
+      final activeSession = state.sessions[peerId];
+      if (existingMsg != null) {
+        VantraLogger.log('[VANTRA][SECURITY] DUPLICATE DETECTED: messageId=${plaintext.messageId}. Discarding duplicate payload, but immediately re-acknowledging.');
+        if (activeSession != null) {
+          await _sendAck(event.endpointId, session, plaintext.messageId);
+        }
+        return;
+      }
+
       // 5. Handle Text Message vs Delivery ACK
       if (plaintext is DomainTextMessage) {
         final isCurrentlyViewing = state.activeConversationPeerId == peerId;
@@ -199,51 +230,61 @@ class MessagingNotifier extends Notifier<MessagingState> {
         VantraLogger.log('[VANTRA][SECURITY] REPOSITORY: messageId=${incomingMsg.messageId} saved, conversationStream notified');
 
         // Transmit Encrypted Delivery ACK
-        final ackPacketId = const Uuid().v4();
-        final ackSeq = session.nextSendSequence();
-
-        VantraLogger.log('[VANTRA][SECURITY] GENERATING ACK: ackPacketId=$ackPacketId, originalMessageId=${plaintext.messageId}, seq=$ackSeq');
-
-        final ackDomainMessage = DomainAckMessage(
-          messageId: ackPacketId,
-          sessionId: session.sessionId,
-          sequence: ackSeq,
-          timestampMs: DateTime.now().millisecondsSinceEpoch,
-          senderId: plaintext.receiverId,
-          receiverId: plaintext.senderId,
-          originalMessageId: plaintext.messageId,
-          status: DomainDeliveryStatus.delivered,
-        );
-
-        final ackPlaintextBytes = _service.codec.encodePlaintext(ackDomainMessage);
-
-        final encAck = await _cryptoService.encryptBytes(
-          secretKey: session.sendKey,
-          sessionSalt: session.sessionSalt,
-          sequence: ackSeq,
-          messageId: ackPacketId,
-          plaintextBytes: ackPlaintextBytes,
-        );
-
-        await _service.sendEncryptedMessage(
-          endpointId: event.endpointId,
-          messageId: ackPacketId,
-          sessionId: session.sessionId,
-          sequence: ackSeq,
-          nonce: Uint8List.fromList(encAck.nonce),
-          ciphertext: Uint8List.fromList(encAck.ciphertext),
-          mac: Uint8List.fromList(encAck.mac),
-          protocolVersion: kCurrentProtocolVersion,
-        );
-
-        VantraLogger.log('[VANTRA][SECURITY] ACK SENT: ackPacketId=$ackPacketId for originalMessageId=${plaintext.messageId} to ${event.endpointId}');
+        if (activeSession != null) {
+          await _sendAck(event.endpointId, session, plaintext.messageId);
+        }
       } else if (plaintext is DomainAckMessage) {
         VantraLogger.log('[VANTRA][SECURITY] ACK RECEIVED: originalMessageId=${plaintext.originalMessageId}, updating local status to DELIVERED');
+        _ackTimers[plaintext.originalMessageId]?.cancel();
+        _ackTimers.remove(plaintext.originalMessageId);
         await repository.updateMessageStatus(plaintext.originalMessageId, MessageStatus.delivered);
+        // Flush queue to process next FIFO message
+        _flushQueue(peerId);
       }
     } catch (e, stack) {
       VantraLogger.log('[VANTRA][SECURITY] DECRYPT / INTEGRITY CHECK FAILED for message ${event.messageId}: $e', e, stack);
     }
+  }
+
+  Future<void> _sendAck(String endpointId, SecuritySession session, String originalMessageId) async {
+    final ackPacketId = const Uuid().v4();
+    final ackSeq = session.nextSendSequence();
+
+    VantraLogger.log('[VANTRA][SECURITY] GENERATING ACK: ackPacketId=$ackPacketId, originalMessageId=$originalMessageId, seq=$ackSeq');
+
+    final ackDomainMessage = DomainAckMessage(
+      messageId: ackPacketId,
+      sessionId: session.sessionId,
+      sequence: ackSeq,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      senderId: session.peerId, // local recipient is the sender of the ACK
+      receiverId: session.peerId,
+      originalMessageId: originalMessageId,
+      status: DomainDeliveryStatus.delivered,
+    );
+
+    final ackPlaintextBytes = _service.codec.encodePlaintext(ackDomainMessage);
+
+    final encAck = await _cryptoService.encryptBytes(
+      secretKey: session.sendKey,
+      sessionSalt: session.sessionSalt,
+      sequence: ackSeq,
+      messageId: ackPacketId,
+      plaintextBytes: ackPlaintextBytes,
+    );
+
+    await _service.sendEncryptedMessage(
+      endpointId: endpointId,
+      messageId: ackPacketId,
+      sessionId: session.sessionId,
+      sequence: ackSeq,
+      nonce: Uint8List.fromList(encAck.nonce),
+      ciphertext: Uint8List.fromList(encAck.ciphertext),
+      mac: Uint8List.fromList(encAck.mac),
+      protocolVersion: kCurrentProtocolVersion,
+    );
+
+    VantraLogger.log('[VANTRA][SECURITY] ACK SENT: ackPacketId=$ackPacketId for originalMessageId=$originalMessageId to $endpointId');
   }
 
   Future<void> _handleSecureIdentityReceived(SessionSecureIdentity identity) async {
@@ -361,6 +402,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     VantraLogger.log('[VANTRA][SECURITY] STATE: SECURE with peer ${identity.peerId} (Fingerprint: $remoteFingerprint, SessionId: ${derivedKeys.sessionId})');
+
+    // Reconnection: Flush queue upon secure session establishment
+    _flushQueue(identity.peerId);
   }
 
   void _handleConnectionUpdate(ConnectionUpdate update) {
@@ -387,6 +431,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
       if (peerId != null) {
         VantraLogger.log('[VANTRA][SECURITY] Destroying secure session keys for disconnected peer $peerId');
         _securitySessions.remove(peerId);
+        _backoffTimers[peerId]?.cancel();
+        _backoffTimers.remove(peerId);
         final session = state.sessions[peerId];
         if (session != null) {
           state = state.copyWith(
@@ -453,21 +499,139 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
   }
 
-  Future<void> sendTextMessage(String peerId, String text) async {
-    final session = state.sessions[peerId];
-    final secSession = _securitySessions[peerId];
+  // Phase 7: Persistent Queue Flusher
+  Future<void> _flushQueue(String peerId) async {
+    if (_activePeerFlushes.contains(peerId)) return;
+    _activePeerFlushes.add(peerId);
 
-    if (session == null || session.status != SessionStatus.connected || secSession == null) {
-      VantraLogger.log('[VANTRA][SECURITY] SEND FAILED: Secure session is not established for peer $peerId');
-      throw const VantraException('Cannot send message: Secure session is not established');
+    try {
+      final repository = ref.read(messagingRepositoryProvider);
+      while (true) {
+        final session = state.sessions[peerId];
+        final secSession = _securitySessions[peerId];
+
+        // Break if session is not secure or disconnected
+        if (session == null || session.status != SessionStatus.connected || secSession == null) {
+          break;
+        }
+
+        // Fetch pending messages in FIFO order
+        final pending = await repository.getPendingOrFailedMessages(peerId);
+        if (pending.isEmpty) break;
+
+        final msg = pending.first;
+        final success = await _sendSingleMessage(secSession, session, msg);
+        if (!success) {
+          // Break flusher to await scheduled retry backoff timer
+          break;
+        }
+      }
+    } finally {
+      _activePeerFlushes.remove(peerId);
     }
+  }
 
+  Future<bool> _sendSingleMessage(
+    SecuritySession secSession,
+    PeerSession session,
+    VantraMessage msg,
+  ) async {
+    final repository = ref.read(messagingRepositoryProvider);
+    final localIdentity = ref.read(localIdentityStateProvider);
+
+    final seq = secSession.nextSendSequence();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+
+    try {
+      // Encode original messageId under fresh session and sequence counters
+      final domainPlaintext = DomainTextMessage(
+        messageId: msg.messageId,
+        sessionId: secSession.sessionId,
+        sequence: seq,
+        timestampMs: timestamp,
+        senderId: localIdentity.peerId,
+        receiverId: msg.receiverId,
+        content: msg.text,
+      );
+
+      final plaintextBytes = _service.codec.encodePlaintext(domainPlaintext);
+
+      final encrypted = await _cryptoService.encryptBytes(
+        secretKey: secSession.sendKey,
+        sessionSalt: secSession.sessionSalt,
+        sequence: seq,
+        messageId: msg.messageId,
+        plaintextBytes: plaintextBytes,
+      );
+
+      VantraLogger.log('[VANTRA][SECURITY] Transmitting ENCRYPTED_TEXT protobuf packet for ${msg.messageId} to ${session.displayName}');
+
+      await _service.sendEncryptedMessage(
+        endpointId: session.endpointId,
+        messageId: msg.messageId,
+        sessionId: secSession.sessionId,
+        sequence: seq,
+        nonce: Uint8List.fromList(encrypted.nonce),
+        ciphertext: Uint8List.fromList(encrypted.ciphertext),
+        mac: Uint8List.fromList(encrypted.mac),
+        protocolVersion: kCurrentProtocolVersion,
+      );
+
+      VantraLogger.log('[VANTRA][SECURITY] Transport.send(): endpointId=${session.endpointId}, messageId=${msg.messageId}, result=SUCCESS');
+
+      await repository.updateMessageStatus(msg.messageId, MessageStatus.sent);
+
+      // Start persistent ACK timer
+      _scheduleAckTimeout(msg.messageId, msg.receiverId);
+      return true;
+    } catch (e, stack) {
+      VantraLogger.log('[VANTRA][SECURITY] Queue transmit failed for messageId=${msg.messageId}: $e', e, stack);
+      await repository.incrementRetryCount(msg.messageId, maxAttempts: 5);
+
+      final updated = await repository.getMessageById(msg.messageId);
+      if (updated != null && updated.status != MessageStatus.failed) {
+        _scheduleBackoffRetry(msg.receiverId, updated.retryCount);
+      }
+      return false;
+    }
+  }
+
+  void _scheduleAckTimeout(String messageId, String peerId) {
+    _ackTimers[messageId]?.cancel();
+    _ackTimers[messageId] = Timer(const Duration(seconds: 10), () async {
+      final repository = ref.read(messagingRepositoryProvider);
+      final msg = await repository.getMessageById(messageId);
+      if (msg != null && msg.status == MessageStatus.sent) {
+        VantraLogger.log('[VANTRA][SECURITY] ACK Timeout for messageId=$messageId. Reverting to pending for retry.');
+        await repository.updateMessageStatus(messageId, MessageStatus.pending);
+        await repository.incrementRetryCount(messageId, maxAttempts: 5);
+
+        final updated = await repository.getMessageById(messageId);
+        if (updated != null && updated.status != MessageStatus.failed) {
+          _scheduleBackoffRetry(peerId, updated.retryCount);
+        }
+      }
+    });
+  }
+
+  void _scheduleBackoffRetry(String peerId, int retryCount) {
+    _backoffTimers[peerId]?.cancel();
+    final seconds = (1 << retryCount) * 2; // 2s, 4s, 8s, 16s, 32s
+    final jitter = (seconds * 0.1 * (2 * (DateTime.now().millisecond / 1000.0) - 1)).toInt();
+    final delay = Duration(seconds: seconds) + Duration(milliseconds: jitter * 1000);
+
+    VantraLogger.log('[VANTRA][SECURITY] Scheduling retry backoff for peer $peerId in ${delay.inSeconds}s (attempt $retryCount)');
+    _backoffTimers[peerId] = Timer(delay, () {
+      _flushQueue(peerId);
+    });
+  }
+
+  // Phase 7: Composing messages when offline is supported without exceptions
+  Future<void> sendTextMessage(String peerId, String text) async {
     final localIdentity = ref.read(localIdentityStateProvider);
     final repository = ref.read(messagingRepositoryProvider);
 
-    // 1. Create message model with pending status
     final messageId = const Uuid().v4();
-    final seq = secSession.nextSendSequence();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
 
     final msg = VantraMessage(
@@ -479,55 +643,24 @@ class MessagingNotifier extends Notifier<MessagingState> {
       status: MessageStatus.pending,
     );
 
-    // 2. Persist locally in SQLite
+    // Save locally
     await repository.saveOutgoingMessage(msg);
 
-    try {
-      // 3. Encode domain plaintext to Protobuf binary
-      final domainPlaintext = DomainTextMessage(
-        messageId: messageId,
-        sessionId: secSession.sessionId,
-        sequence: seq,
-        timestampMs: timestamp,
-        senderId: localIdentity.peerId,
-        receiverId: peerId,
-        content: text,
-      );
+    // Trigger queue flush
+    await _flushQueue(peerId);
+  }
 
-      final plaintextBytes = _service.codec.encodePlaintext(domainPlaintext);
+  Future<void> retryMessage(String messageId, String peerId) async {
+    VantraLogger.log('[VANTRA][SECURITY] Manual retry triggered for messageId=$messageId');
+    final db = ref.read(appDatabaseProvider);
+    
+    await (db.update(db.messages)..where((t) => t.messageId.equals(messageId)))
+        .write(MessagesCompanion(
+      status: Value(MessageStatus.pending),
+      retryCount: Value(0),
+    ));
 
-      // 4. Encrypt with ChaCha20-Poly1305 and AAD = UTF-8(messageId)
-      final encrypted = await _cryptoService.encryptBytes(
-        secretKey: secSession.sendKey,
-        sessionSalt: secSession.sessionSalt,
-        sequence: seq,
-        messageId: messageId,
-        plaintextBytes: plaintextBytes,
-      );
-
-      VantraLogger.log('[VANTRA][SECURITY] OUTBOUND: type=ENCRYPTED_TEXT, messageId=$messageId, sequence=$seq, nonceLength=${encrypted.nonce.length}, ciphertextLength=${encrypted.ciphertext.length}, AAD/messageId=$messageId, encryption=SUCCESS');
-
-      // 5. Transmit Encrypted Protobuf Envelope
-      await _service.sendEncryptedMessage(
-        endpointId: session.endpointId,
-        messageId: messageId,
-        sessionId: secSession.sessionId,
-        sequence: seq,
-        nonce: Uint8List.fromList(encrypted.nonce),
-        ciphertext: Uint8List.fromList(encrypted.ciphertext),
-        mac: Uint8List.fromList(encrypted.mac),
-        protocolVersion: kCurrentProtocolVersion,
-      );
-
-      VantraLogger.log('[VANTRA][SECURITY] Transport.send(): endpointId=${session.endpointId}, messageId=$messageId, result=SUCCESS');
-
-      // 6. Update status to sent on transport success
-      await repository.updateMessageStatus(messageId, MessageStatus.sent);
-    } catch (e, stack) {
-      VantraLogger.log('[VANTRA][SECURITY] SEND FAILED: messageId=$messageId, error=$e', e, stack);
-      await repository.updateMessageStatus(messageId, MessageStatus.failed);
-      rethrow;
-    }
+    await _flushQueue(peerId);
   }
 
   Future<void> setPeerTrustState(String peerId, PeerTrustState newState) async {
@@ -558,6 +691,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
         await transport.disconnect(session.endpointId);
       } catch (_) {}
       _securitySessions.remove(peerId);
+      _backoffTimers[peerId]?.cancel();
+      _backoffTimers.remove(peerId);
       state = state.copyWith(
         sessions: {
           ...state.sessions,

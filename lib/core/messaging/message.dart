@@ -7,6 +7,7 @@ class VantraMessage {
   final String text;
   final int timestamp;
   final MessageStatus status;
+  final int retryCount;
 
   const VantraMessage({
     required this.messageId,
@@ -15,6 +16,7 @@ class VantraMessage {
     required this.text,
     required this.timestamp,
     this.status = MessageStatus.sent,
+    this.retryCount = 0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -34,6 +36,7 @@ class VantraMessage {
       text: json['text'] as String,
       timestamp: json['timestamp'] as int,
       status: MessageStatus.received,
+      retryCount: 0,
     );
   }
 
@@ -44,6 +47,7 @@ class VantraMessage {
     String? text,
     int? timestamp,
     MessageStatus? status,
+    int? retryCount,
   }) {
     return VantraMessage(
       messageId: messageId ?? this.messageId,
@@ -52,6 +56,7 @@ class VantraMessage {
       text: text ?? this.text,
       timestamp: timestamp ?? this.timestamp,
       status: status ?? this.status,
+      retryCount: retryCount ?? this.retryCount,
     );
   }
 }

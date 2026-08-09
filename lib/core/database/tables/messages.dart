@@ -29,4 +29,6 @@ class Messages extends Table {
   TextColumn get status => text().map(const MessageStatusConverter())();
   BoolColumn get isRead => boolean().withDefault(const Constant(false))();
   IntColumn get createdAt => integer()();
+  IntColumn get retryCount => integer().withDefault(const Constant(0))();
+  IntColumn get lastAttempt => integer().nullable()();
 }

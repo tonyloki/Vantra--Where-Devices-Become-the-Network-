@@ -1,9 +1,9 @@
 # VANTRA — Security Architecture
 
-## Current Phase Status
+## Phase Status
 
-*   **Current Phase:** Phase 4
-*   **Status:** Security model designed; waiting for implementation approval.
+*   **Current Phase:** Phase 7
+*   **Status:** Cryptographic Identity, Trust Management, Peer Blocking, Replay Protection, and Encrypted ACKs completed.
 
 ---
 
@@ -29,7 +29,7 @@ VANTRA splits device identity into three distinct concepts:
 
 ---
 
-## 2. Security State Machine
+## 2. Security State Machine & Blocking Security Invariant
 
 For every active Nearby Connections link, the application executes the following state transitions:
 
@@ -39,18 +39,28 @@ For every active Nearby Connections link, the application executes the following
            ▼
    SECURITY_HANDSHAKE (Identity exchanged, signatures verified)
            │
-           ├──────────────────────────┐
-           ▼ (Success)                ▼ (Failure)
-   IDENTITY_VERIFIED           HANDSHAKE_FAILED
-           │                          │
-           ▼                          ▼
-      KEY_DERIVED                 DISCONNECT (Abrupt teardown)
+           ├──────────────────────────┬────────────────────────────┐
+           ▼ (Success & Allowed)      ▼ (Distrusted / Blocked)     ▼ (Signature/Ver Failure)
+   IDENTITY_VERIFIED          CONNECTION REJECTED           HANDSHAKE_FAILED
+           │                          │                            │
+           ▼                          ▼                            ▼
+      KEY_DERIVED                 DISCONNECT (Abrupt teardown)   DISCONNECT
            │
            ▼
-    SECURE (Ready for ENCRYPTED_TEXT ciphers)
+    SECURE (Ready for Protobuf ENCRYPTED_TEXT ciphers)
 ```
 
-*   **No Plaintext Fallback:** If the handshake fails, the state transitions directly to `HANDSHAKE_FAILED` and triggers a transport `disconnect()`. The system will reject and discard any plaintext message received from that endpoint.
+### Blocking Security Invariant
+When an `IDENTITY_SECURE` handshake is received:
+1.  The long-term Ed25519 signature is verified.
+2.  VANTRA resolves the peerId from the local database.
+3.  If the resolved peer's `trustState` is `distrusted` (Blocked):
+    *   The connection is rejected immediately.
+    *   The state transitions to `CONNECTED` -> `SECURITY_HANDSHAKE` -> `DISCONNECT`.
+    *   We do not transition to `SECURE` or store session keys.
+    *   We call `Transport.disconnect(endpointId)`.
+    *   No application-level payloads are accepted or decrypted.
+    *   Existing conversation history is preserved in SQLite.
 
 ---
 
@@ -74,8 +84,7 @@ All communications over the Nearby Connections transport are encrypted:
 *   **Associated Data Binding:** The plaintext `messageId` of the packet is bound to the ciphertext as Associated Data. Any modification of `messageId` in transit will cause Poly1305 tag verification to fail, causing decryption to throw an exception.
 *   **Counter-Based Nonce Construction:** To guarantee absolute nonce uniqueness under the derived session key, VANTRA constructs the 12-byte (96-bit) AEAD nonce deterministically:
     *   *First 8 bytes (64 bits):* The first 8 bytes of the session key derivation parameter `salt`.
-    *   *Last 4 bytes (32 bits):* The big-endian representation of the session's monotonic message `sendSequence` counter.
-    *   This guarantees that the nonce is unique for every message sent within the current session.
+    *   *Last 4 bytes (32 bits):* The big-endian representation of the session's monotonic message `sequence` counter.
 
 ---
 
@@ -83,22 +92,14 @@ All communications over the Nearby Connections transport are encrypted:
 
 Replay protection is enforced cryptographically per-session using sequence verification:
 *   **Monotonic Sequence Counters:** Each secure session maintains a `sendSequence` and a `receiveSequence` counter starting at `1`.
-*   **Sequence Integration:** The sequence number is included inside the decrypted JSON payload (authenticated and encrypted) so it cannot be altered by an attacker:
-    ```json
-    {
-      "senderId": "sender-uuid",
-      "receiverId": "receiver-uuid",
-      "text": "Hello!",
-      "timestamp": 1717000000000,
-      "seq": 1,
-      "sessionId": "hex-session-id"
-    }
-    ```
+*   **Sequence Integration:** The sequence number is included inside the decrypted `VantraPlaintext` protobuf payload (authenticated and encrypted) so it cannot be altered by an attacker.
 *   **Verification Rules:**
     *   The decrypted `sessionId` must match the current active session.
-    *   The decrypted `seq` must be strictly greater than the last successfully processed `receiveSequence`.
-    *   If `seq <= receiveSequence` or the `sessionId` is invalid, the packet is discarded immediately as stale or replayed.
-*   **No Timestamp Reliance:** Timestamps are used for display purposes only and are not trusted for replay protection.
+    *   The decrypted `sequence` must be strictly greater than the last successfully processed `receiveSequence`.
+    *   If `sequence <= receiveSequence` or the `sessionId` is invalid, the packet is discarded immediately as stale or replayed.
+*   **ACK Exemption:** To support retransmissions when the original ACK was lost in transit:
+    *   Retransmitted messages carry the **same messageId** but a **new sequence number and nonce** under the current session.
+    *   This bypasses replay protection checks, allowing the duplicate message check to locate the duplicate message ID in SQLite, discard the duplicate payload to avoid duplicates, and immediately re-transmit the encrypted ACK to clear the sender's queue.
 
 ---
 
@@ -107,4 +108,4 @@ Replay protection is enforced cryptographically per-session using sequence verif
 *   **Long-Term Keys:** Stored in Android Keystore via `flutter_secure_storage`.
 *   **Session Keys:** Kept strictly in memory. They are destroyed immediately when a peer disconnects or when the application process terminates.
 *   **Defensive Recovery:** If secure storage is corrupted or unreadable, VANTRA generates a fresh Ed25519 identity keypair automatically to prevent app crashes.
-*   **SQLite Plaintext-at-Rest:** Database security is out of scope for Phase 4. Messages are persisted in plaintext SQLite databases in the application sandbox. Plaintext-at-rest protection (e.g. SQLCipher) is explicitly deferred to later phases.
+*   **SQLite Plaintext-at-Rest:** Database security is out of scope for Phase 7. Messages are persisted in plaintext SQLite databases in the application sandbox. Plaintext-at-rest protection (e.g. SQLCipher) is explicitly deferred to later phases.
