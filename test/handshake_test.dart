@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +10,9 @@ import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/protocol/protocol_message.dart';
+import 'package:vantra/core/protocol/protocol_version.dart';
+import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'test_fakes.dart';
 
@@ -21,6 +23,7 @@ void main() {
   late ProviderContainer container;
   late AppDatabase testDb;
   late CryptoService cryptoService;
+  const codec = ProtobufCodec();
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -48,8 +51,8 @@ void main() {
     container.dispose();
   });
 
-  group('Secure Handshake Protocol Tests', () {
-    test('Connection trigger sends IDENTITY_SECURE packet', () async {
+  group('Secure Handshake Protocol Tests (Protobuf Wire)', () {
+    test('Connection trigger sends IDENTITY_SECURE protobuf packet', () async {
       container.read(messagingStateProvider);
 
       fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
@@ -60,10 +63,13 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       expect(fakeTransport.sentPayloads.length, 1);
-      final json = jsonDecode(utf8.decode(fakeTransport.sentPayloads[0])) as Map<String, dynamic>;
-      expect(json['type'], 'IDENTITY_SECURE');
-      expect(json['v'], 1);
-      expect(json['signature'], isNotNull);
+      final envelope = codec.decodeWireEnvelope(fakeTransport.sentPayloads[0]);
+      expect(envelope, isA<DomainHandshakePayload>());
+      final handshake = envelope as DomainHandshakePayload;
+      expect(handshake.protocolVersion, kCurrentProtocolVersion);
+      expect(handshake.signature.length, 64);
+      expect(handshake.identityPublicKey.length, 32);
+      expect(handshake.ephemeralPublicKey.length, 32);
     });
 
     test('Valid remote handshake establishes secure session', () async {
@@ -86,28 +92,23 @@ void main() {
 
       final sigBytes = await cryptoService.signHandshake(
         identityKeyPair: remoteIdentityKeyPair,
-        protocolVersion: 1,
+        protocolVersion: kCurrentProtocolVersion,
         peerId: remotePeerId,
         displayName: 'RemoteSecurePeer',
         identityPublicKeyBytes: remoteIdPub.bytes,
         ephemeralPublicKeyBytes: remoteEphPub.bytes,
       );
 
-      final hexSig = sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      final hexIdPub = remoteIdPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      final hexEphPub = remoteEphPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final handshakePayload = DomainHandshakePayload(
+        protocolVersion: kCurrentProtocolVersion,
+        peerId: remotePeerId,
+        displayName: 'RemoteSecurePeer',
+        identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+        ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+        signature: Uint8List.fromList(sigBytes),
+      );
 
-      final handshakePayload = {
-        'type': 'IDENTITY_SECURE',
-        'v': 1,
-        'peerId': remotePeerId,
-        'displayName': 'RemoteSecurePeer',
-        'identityPublicKey': hexIdPub,
-        'ephemeralPublicKey': hexEphPub,
-        'signature': hexSig,
-      };
-
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(handshakePayload))));
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
       await Future.delayed(const Duration(milliseconds: 50));
 
       final state = container.read(messagingStateProvider);
@@ -139,29 +140,24 @@ void main() {
       // Sign with valid data
       final sigBytes = await cryptoService.signHandshake(
         identityKeyPair: remoteIdentityKeyPair,
-        protocolVersion: 1,
+        protocolVersion: kCurrentProtocolVersion,
         peerId: remotePeerId,
         displayName: 'LegitName',
         identityPublicKeyBytes: remoteIdPub.bytes,
         ephemeralPublicKeyBytes: remoteEphPub.bytes,
       );
 
-      final hexSig = sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      final hexIdPub = remoteIdPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      final hexEphPub = remoteEphPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
       // Transmit with tampered displayName so signature check fails
-      final tamperedHandshake = {
-        'type': 'IDENTITY_SECURE',
-        'v': 1,
-        'peerId': remotePeerId,
-        'displayName': 'TamperedName',
-        'identityPublicKey': hexIdPub,
-        'ephemeralPublicKey': hexEphPub,
-        'signature': hexSig,
-      };
+      final tamperedHandshake = DomainHandshakePayload(
+        protocolVersion: kCurrentProtocolVersion,
+        peerId: remotePeerId,
+        displayName: 'TamperedName',
+        identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+        ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+        signature: Uint8List.fromList(sigBytes),
+      );
 
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(tamperedHandshake))));
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(tamperedHandshake));
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Disconnect must have been called

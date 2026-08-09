@@ -1,22 +1,25 @@
 import 'dart:async';
-import 'dart:convert';
-import 'package:cryptography/cryptography.dart';
+import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
-import 'package:vantra/core/networking/transport.dart';
-import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
+import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/models/peer_trust_state.dart';
-import 'package:vantra/core/models/message_status.dart';
-import 'package:vantra/core/utils/logger.dart';
-import 'package:vantra/core/errors/vantra_exceptions.dart';
-import 'package:vantra/core/database/app_database.dart';
-import 'package:vantra/core/messaging/messaging_repository.dart';
+import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/networking/transport.dart';
+import 'package:vantra/core/protocol/protocol_message.dart';
+import 'package:vantra/core/protocol/protocol_version.dart';
+import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'package:vantra/core/security/security_session.dart';
-import 'messaging_service.dart';
+import 'package:vantra/core/errors/vantra_exceptions.dart';
+import 'package:vantra/core/utils/logger.dart';
+import 'package:cryptography/cryptography.dart';
 import 'message.dart';
+import 'messaging_repository.dart';
+import 'messaging_service.dart';
 
 class MessagingState {
   final Map<String, PeerSession> sessions;
@@ -30,15 +33,13 @@ class MessagingState {
     required this.endpointToPeerId,
     this.activeEndpointId,
     this.activeEndpointName,
-    required this.connectionStatus,
+    this.connectionStatus = ConnectionStatus.disconnected,
   });
 
-  MessagingState.initial()
-      : sessions = const {},
-        endpointToPeerId = const {},
-        activeEndpointId = null,
-        activeEndpointName = null,
-        connectionStatus = ConnectionStatus.idle;
+  factory MessagingState.initial() => const MessagingState(
+        sessions: {},
+        endpointToPeerId: {},
+      );
 
   MessagingState copyWith({
     Map<String, PeerSession>? sessions,
@@ -78,7 +79,7 @@ final conversationStreamProvider = StreamProvider.family<List<VantraMessage>, St
 
 final messagingServiceProvider = Provider<MessagingService>((ref) {
   final transport = ref.watch(transportProvider);
-  final service = MessagingService(transport);
+  final service = MessagingService(transport, codec: const ProtobufCodec());
   ref.onDispose(() {
     service.dispose();
   });
@@ -93,30 +94,32 @@ class MessagingNotifier extends Notifier<MessagingState> {
   late final MessagingService _service;
   late final CryptoService _cryptoService;
 
+  StreamSubscription? _connectionSub;
+  StreamSubscription? _encryptedMessageSub;
+  StreamSubscription? _secureIdentitySub;
+
   final Map<String, SecuritySession> _securitySessions = {};
   final Map<String, SimpleKeyPair> _pendingEphemeralKeys = {};
-
-  StreamSubscription? _msgSub;
-  StreamSubscription? _idSub;
-  StreamSubscription? _connSub;
 
   @override
   MessagingState build() {
     _service = ref.watch(messagingServiceProvider);
     _cryptoService = ref.watch(cryptoServiceProvider);
 
-    _msgSub?.cancel();
-    _idSub?.cancel();
-    _connSub?.cancel();
+    final transport = ref.watch(transportProvider);
 
-    _msgSub = _service.encryptedMessageStream.listen(_handleIncomingEncryptedMessage);
-    _idSub = _service.secureIdentityStream.listen(_handleSecureIdentityReceived);
-    _connSub = ref.read(transportProvider).connectionUpdateStream.listen(_handleConnectionUpdate);
+    _connectionSub?.cancel();
+    _encryptedMessageSub?.cancel();
+    _secureIdentitySub?.cancel();
+
+    _connectionSub = transport.connectionUpdateStream.listen(_handleConnectionUpdate);
+    _encryptedMessageSub = _service.encryptedMessageStream.listen(_handleIncomingEncryptedMessage);
+    _secureIdentitySub = _service.secureIdentityStream.listen(_handleSecureIdentityReceived);
 
     ref.onDispose(() {
-      _msgSub?.cancel();
-      _idSub?.cancel();
-      _connSub?.cancel();
+      _connectionSub?.cancel();
+      _encryptedMessageSub?.cancel();
+      _secureIdentitySub?.cancel();
       _securitySessions.clear();
       _pendingEphemeralKeys.clear();
     });
@@ -137,58 +140,118 @@ class MessagingNotifier extends Notifier<MessagingState> {
       return;
     }
 
-    VantraLogger.log('[VANTRA][SECURITY] INBOUND: endpointId=${event.endpointId}, messageId=${event.messageId}, type=ENCRYPTED_TEXT, v=${event.protocolVersion}');
+    VantraLogger.log('[VANTRA][SECURITY] INBOUND: endpointId=${event.endpointId}, messageId=${event.messageId}, type=ENCRYPTED_ENVELOPE, v=${event.protocolVersion}');
 
     try {
-      final nonceBytes = _hexDecode(event.nonceHex);
-      final ciphertextBytes = _hexDecode(event.ciphertextHex);
-      final macBytes = _hexDecode(event.macHex);
+      VantraLogger.log('[VANTRA][SECURITY] DECRYPT: messageId=${event.messageId}, AAD/messageId=${event.messageId}, nonceLength=${event.nonce.length}, ciphertextLength=${event.ciphertext.length}, keyDirection=RECEIVE');
 
-      VantraLogger.log('[VANTRA][SECURITY] DECRYPT: messageId=${event.messageId}, AAD/messageId=${event.messageId}, nonceLength=${nonceBytes.length}, ciphertextLength=${ciphertextBytes.length}, keyDirection=RECEIVE');
-
-      // Decrypt and verify Poly1305 authentication tag & Associated Data
-      final decryptedJsonString = await _cryptoService.decryptPayload(
+      // 1. Decrypt and verify Poly1305 authentication tag & Associated Data
+      final decryptedBytes = await _cryptoService.decryptBytes(
         secretKey: session.receiveKey,
-        nonce: nonceBytes,
-        ciphertext: ciphertextBytes,
-        mac: macBytes,
+        nonce: event.nonce,
+        ciphertext: event.ciphertext,
+        mac: event.mac,
         messageId: event.messageId,
       );
 
-      final cleartextJson = jsonDecode(decryptedJsonString) as Map<String, dynamic>;
-      final seq = cleartextJson['seq'] as int? ?? 0;
-      final incomingSessionId = cleartextJson['sessionId'] as String? ?? '';
+      // 2. Decode authenticated plaintext protobuf
+      final plaintext = _service.codec.decodePlaintext(decryptedBytes);
 
-      final textContent = cleartextJson['text'] as String? ?? '';
-      final senderId = cleartextJson['senderId'] as String? ?? '';
-      final receiverId = cleartextJson['receiverId'] as String? ?? '';
-      final timestamp = cleartextJson['timestamp'] as int? ?? 0;
+      VantraLogger.log('[VANTRA][SECURITY] DECRYPT SUCCESS: messageId=${plaintext.messageId}, senderId=${plaintext.senderId}, receiverId=${plaintext.receiverId}, timestamp=${plaintext.timestampMs}');
 
-      VantraLogger.log('[VANTRA][SECURITY] DECRYPT SUCCESS: messageId=${event.messageId}, senderId=$senderId, receiverId=$receiverId, timestamp=$timestamp, textLength=${textContent.length}');
-
-      // Replay & Monotonic sequence check
-      if (!session.isValidInboundSequence(seq, incomingSessionId)) {
-        VantraLogger.log('[VANTRA][SECURITY] REPLAY / INVALID SEQUENCE: messageId=${event.messageId}, seq=$seq <= receiveSequence=${session.receiveSequence} or sessionId mismatch. Discarded.');
+      // 3. Monotonic sequence & session ID replay check
+      if (!session.isValidInboundSequence(plaintext.sequence, plaintext.sessionId)) {
+        VantraLogger.log('[VANTRA][SECURITY] REPLAY / INVALID SEQUENCE: messageId=${plaintext.messageId}, seq=${plaintext.sequence} <= receiveSequence=${session.receiveSequence} or sessionId mismatch. Discarded.');
         return;
       }
 
-      session.updateReceiveSequence(seq);
+      session.updateReceiveSequence(plaintext.sequence);
 
-      final msg = VantraMessage(
-        messageId: event.messageId,
-        senderId: senderId,
-        receiverId: receiverId,
-        text: textContent,
-        timestamp: timestamp,
-        status: MessageStatus.received,
-      );
+      // 4. Handle plaintext body variant
+      switch (plaintext) {
+        case DomainTextMessage textMsg:
+          final msg = VantraMessage(
+            messageId: textMsg.messageId,
+            senderId: textMsg.senderId,
+            receiverId: textMsg.receiverId,
+            text: textMsg.content,
+            timestamp: textMsg.timestampMs,
+            status: MessageStatus.received,
+          );
 
-      VantraLogger.log('[VANTRA][SECURITY] MESSAGE RECONSTRUCTED = YES (messageId=${msg.messageId}, senderId=${msg.senderId}, receiverId=${msg.receiverId})');
-      await ref.read(messagingRepositoryProvider).saveIncomingMessage(msg);
-      VantraLogger.log('[VANTRA][SECURITY] REPOSITORY: messageId=${msg.messageId} saved, conversationStream notified');
+          VantraLogger.log('[VANTRA][SECURITY] MESSAGE RECONSTRUCTED = YES (messageId=${msg.messageId}, senderId=${msg.senderId}, receiverId=${msg.receiverId})');
+          await ref.read(messagingRepositoryProvider).saveIncomingMessage(msg);
+          VantraLogger.log('[VANTRA][SECURITY] REPOSITORY: messageId=${msg.messageId} saved, conversationStream notified');
+
+          // Send authenticated encrypted delivery ACK back to sender
+          await _sendEncryptedDeliveryAck(
+            endpointId: event.endpointId,
+            recipientPeerId: textMsg.senderId,
+            originalMessageId: textMsg.messageId,
+            session: session,
+          );
+
+        case DomainAckMessage ackMsg:
+          if (ackMsg.status == DomainDeliveryStatus.delivered) {
+            VantraLogger.log('[VANTRA][SECURITY] ACK RECEIVED: originalMessageId=${ackMsg.originalMessageId}, updating local status to DELIVERED');
+            await ref.read(messagingRepositoryProvider).updateMessageStatus(
+                  ackMsg.originalMessageId,
+                  MessageStatus.delivered,
+                );
+          }
+      }
     } catch (e, stack) {
-      VantraLogger.log('[VANTRA][SECURITY] DECRYPT FAIL: messageId=${event.messageId}, error=$e', e, stack);
+      VantraLogger.log('[VANTRA][SECURITY] DECRYPT/PROCESSING FAIL: messageId=${event.messageId}, error=$e', e, stack);
     }
+  }
+
+  Future<void> _sendEncryptedDeliveryAck({
+    required String endpointId,
+    required String recipientPeerId,
+    required String originalMessageId,
+    required SecuritySession session,
+  }) async {
+    final localId = ref.read(localIdentityStateProvider);
+    // Invariant: unique ACK packet ID distinct from original message ID
+    final ackPacketId = const Uuid().v4();
+    final ackSeq = session.nextSendSequence();
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    VantraLogger.log('[VANTRA][SECURITY] GENERATING ACK: ackPacketId=$ackPacketId, originalMessageId=$originalMessageId, seq=$ackSeq');
+
+    final ackPlaintext = DomainAckMessage(
+      messageId: ackPacketId,
+      sessionId: session.sessionId,
+      sequence: ackSeq,
+      timestampMs: now,
+      senderId: localId.peerId,
+      receiverId: recipientPeerId,
+      originalMessageId: originalMessageId,
+      status: DomainDeliveryStatus.delivered,
+    );
+
+    final plaintextBytes = _service.codec.encodePlaintext(ackPlaintext);
+
+    final encryptedAck = await _cryptoService.encryptBytes(
+      secretKey: session.sendKey,
+      sessionSalt: session.sessionSalt,
+      sequence: ackSeq,
+      messageId: ackPacketId,
+      plaintextBytes: plaintextBytes,
+    );
+
+    await _service.sendEncryptedMessage(
+      endpointId: endpointId,
+      messageId: ackPacketId,
+      sessionId: session.sessionId,
+      sequence: ackSeq,
+      nonce: Uint8List.fromList(encryptedAck.nonce),
+      ciphertext: Uint8List.fromList(encryptedAck.ciphertext),
+      mac: Uint8List.fromList(encryptedAck.mac),
+      protocolVersion: kCurrentProtocolVersion,
+    );
+
+    VantraLogger.log('[VANTRA][SECURITY] ACK SENT: ackPacketId=$ackPacketId for originalMessageId=$originalMessageId to $endpointId');
   }
 
   Future<void> _handleSecureIdentityReceived(SessionSecureIdentity identity) async {
@@ -204,9 +267,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
       return;
     }
 
-    final idKeyBytes = _hexDecode(identity.identityPublicKeyHex);
-    final ephKeyBytes = _hexDecode(identity.ephemeralPublicKeyHex);
-    final sigBytes = _hexDecode(identity.signatureHex);
+    final idKeyBytes = identity.identityPublicKey;
+    final ephKeyBytes = identity.ephemeralPublicKey;
+    final sigBytes = identity.signature;
 
     final remoteFingerprint = await _cryptoService.computeFingerprint(idKeyBytes);
     VantraLogger.log('[VANTRA][SECURITY] REMOTE ID FINGERPRINT: $remoteFingerprint, ephemeralPubLen=${ephKeyBytes.length}, sigLen=${sigBytes.length}');
@@ -360,10 +423,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final ephPub = await ephemeralKeyPair.extractPublicKey();
     final idPubBytes = _hexDecode(localId.identityPublicKey);
 
-    // 2. Sign canonical handshake transcript
+    // 2. Sign canonical handshake transcript (using CanonicalEncoder)
     final signatureBytes = await _cryptoService.signHandshake(
       identityKeyPair: localId.keyPair!,
-      protocolVersion: 1,
+      protocolVersion: kCurrentProtocolVersion,
       peerId: localId.peerId,
       displayName: localId.displayName,
       identityPublicKeyBytes: idPubBytes,
@@ -372,15 +435,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     VantraLogger.log('[VANTRA][SECURITY] OUTBOUND HANDSHAKE: localPeerId=${localId.peerId}, localFingerprint=${localId.fingerprint}, ephPubLen=${ephPub.bytes.length}, sigLen=${signatureBytes.length}');
 
-    // 3. Transmit IDENTITY_SECURE packet
+    // 3. Transmit IDENTITY_SECURE protobuf packet
     await _service.sendSecureIdentity(
       endpointId: endpointId,
       peerId: localId.peerId,
       displayName: localId.displayName,
-      identityPublicKeyHex: localId.identityPublicKey,
-      ephemeralPublicKeyHex: _hexEncode(ephPub.bytes),
-      signatureHex: _hexEncode(signatureBytes),
-      protocolVersion: 1,
+      identityPublicKey: Uint8List.fromList(idPubBytes),
+      ephemeralPublicKey: Uint8List.fromList(ephPub.bytes),
+      signature: Uint8List.fromList(signatureBytes),
+      protocolVersion: kCurrentProtocolVersion,
     );
   }
 
@@ -414,69 +477,73 @@ class MessagingNotifier extends Notifier<MessagingState> {
     await repository.saveOutgoingMessage(msg);
 
     try {
-      // 3. Encrypt payload
-      final cleartextJson = jsonEncode({
-        'senderId': localIdentity.peerId,
-        'receiverId': peerId,
-        'text': text,
-        'timestamp': timestamp,
-        'seq': seq,
-        'sessionId': secSession.sessionId,
-      });
+      // 3. Encode domain plaintext to Protobuf binary
+      final domainPlaintext = DomainTextMessage(
+        messageId: messageId,
+        sessionId: secSession.sessionId,
+        sequence: seq,
+        timestampMs: timestamp,
+        senderId: localIdentity.peerId,
+        receiverId: peerId,
+        content: text,
+      );
 
-      final encrypted = await _cryptoService.encryptPayload(
+      final plaintextBytes = _service.codec.encodePlaintext(domainPlaintext);
+
+      // 4. Encrypt with ChaCha20-Poly1305 and AAD = UTF-8(messageId)
+      final encrypted = await _cryptoService.encryptBytes(
         secretKey: secSession.sendKey,
         sessionSalt: secSession.sessionSalt,
         sequence: seq,
         messageId: messageId,
-        plaintextJson: cleartextJson,
+        plaintextBytes: plaintextBytes,
       );
 
       VantraLogger.log('[VANTRA][SECURITY] OUTBOUND: type=ENCRYPTED_TEXT, messageId=$messageId, sequence=$seq, nonceLength=${encrypted.nonce.length}, ciphertextLength=${encrypted.ciphertext.length}, AAD/messageId=$messageId, encryption=SUCCESS');
 
-      // 4. Transmit ENCRYPTED_TEXT wrapper
+      // 5. Transmit Encrypted Protobuf Envelope
       await _service.sendEncryptedMessage(
         endpointId: session.endpointId,
         messageId: messageId,
-        nonceHex: _hexEncode(encrypted.nonce),
-        ciphertextHex: _hexEncode(encrypted.ciphertext),
-        macHex: _hexEncode(encrypted.mac),
-        protocolVersion: 1,
+        sessionId: secSession.sessionId,
+        sequence: seq,
+        nonce: Uint8List.fromList(encrypted.nonce),
+        ciphertext: Uint8List.fromList(encrypted.ciphertext),
+        mac: Uint8List.fromList(encrypted.mac),
+        protocolVersion: kCurrentProtocolVersion,
       );
 
       VantraLogger.log('[VANTRA][SECURITY] Transport.send(): endpointId=${session.endpointId}, messageId=$messageId, result=SUCCESS');
 
-      // 5. Update status to sent on success
+      // 6. Update status to sent on transport success
       await repository.updateMessageStatus(messageId, MessageStatus.sent);
     } catch (e, stack) {
-      VantraLogger.log('[VANTRA][SECURITY] SEND ENCRYPTION/TRANSPORT FAIL: messageId=$messageId, error=$e', e, stack);
+      VantraLogger.log('[VANTRA][SECURITY] SEND FAILED: messageId=$messageId, error=$e', e, stack);
       await repository.updateMessageStatus(messageId, MessageStatus.failed);
       rethrow;
     }
   }
 
-  Future<void> setPeerTrustState(String peerId, PeerTrustState trustState) async {
-    await ref.read(messagingRepositoryProvider).updatePeerTrustState(peerId, trustState);
+  Future<void> setPeerTrustState(String peerId, PeerTrustState newState) async {
+    final repo = ref.read(messagingRepositoryProvider);
+    await repo.updatePeerTrustState(peerId, newState);
+
     final session = state.sessions[peerId];
     if (session != null) {
       state = state.copyWith(
         sessions: {
           ...state.sessions,
-          peerId: session.copyWith(trustState: trustState),
+          peerId: session.copyWith(trustState: newState),
         },
       );
     }
   }
 
   List<int> _hexDecode(String hex) {
-    final bytes = <int>[];
+    final result = <int>[];
     for (var i = 0; i < hex.length; i += 2) {
-      bytes.add(int.parse(hex.substring(i, i + 2), radix: 16));
+      result.add(int.parse(hex.substring(i, i + 2), radix: 16));
     }
-    return bytes;
-  }
-
-  String _hexEncode(List<int> bytes) {
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return result;
   }
 }

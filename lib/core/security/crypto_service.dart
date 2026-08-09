@@ -224,20 +224,19 @@ class CryptoService {
     return nonceBytes;
   }
 
-  /// Encrypts message text using ChaCha20-Poly1305 with counter-based nonces and messageId associated data
-  Future<EncryptedPayloadResult> encryptPayload({
+  /// Encrypts binary payload using ChaCha20-Poly1305 with counter-based nonces and messageId associated data
+  Future<EncryptedPayloadResult> encryptBytes({
     required SecretKey secretKey,
     required List<int> sessionSalt,
     required int sequence,
     required String messageId,
-    required String plaintextJson,
+    required Uint8List plaintextBytes,
   }) async {
     final nonce = constructNonce(sessionSalt: sessionSalt, sequence: sequence);
-    final clearText = utf8.encode(plaintextJson);
     final aad = utf8.encode(messageId);
 
     final secretBox = await _aead.encrypt(
-      clearText,
+      plaintextBytes,
       secretKey: secretKey,
       nonce: nonce,
       aad: aad,
@@ -250,8 +249,8 @@ class CryptoService {
     );
   }
 
-  /// Decrypts ciphertext and verifies Poly1305 authentication tag with messageId associated data
-  Future<String> decryptPayload({
+  /// Decrypts ciphertext bytes and verifies Poly1305 authentication tag with messageId associated data
+  Future<Uint8List> decryptBytes({
     required SecretKey secretKey,
     required List<int> nonce,
     required List<int> ciphertext,
@@ -265,13 +264,48 @@ class CryptoService {
       mac: Mac(mac),
     );
 
-    final decryptedBytes = await _aead.decrypt(
+    final decrypted = await _aead.decrypt(
       secretBox,
       secretKey: secretKey,
       aad: aad,
     );
 
-    return utf8.decode(decryptedBytes);
+    return Uint8List.fromList(decrypted);
+  }
+
+  /// Legacy helper for encrypting JSON strings
+  Future<EncryptedPayloadResult> encryptPayload({
+    required SecretKey secretKey,
+    required List<int> sessionSalt,
+    required int sequence,
+    required String messageId,
+    required String plaintextJson,
+  }) {
+    return encryptBytes(
+      secretKey: secretKey,
+      sessionSalt: sessionSalt,
+      sequence: sequence,
+      messageId: messageId,
+      plaintextBytes: Uint8List.fromList(utf8.encode(plaintextJson)),
+    );
+  }
+
+  /// Legacy helper for decrypting to UTF-8 strings
+  Future<String> decryptPayload({
+    required SecretKey secretKey,
+    required List<int> nonce,
+    required List<int> ciphertext,
+    required List<int> mac,
+    required String messageId,
+  }) async {
+    final bytes = await decryptBytes(
+      secretKey: secretKey,
+      nonce: nonce,
+      ciphertext: ciphertext,
+      mac: mac,
+      messageId: messageId,
+    );
+    return utf8.decode(bytes);
   }
 
   int _compareBytes(List<int> a, List<int> b) {

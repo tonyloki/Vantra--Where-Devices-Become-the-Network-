@@ -1,21 +1,72 @@
 syntax = "proto3";
 
+package vantra.protocol;
+
 option java_package = "me.vantra.proto";
 option java_outer_classname = "VantraProto";
 
-message VantraMessage {
+// Top-level wire message sent across Transport
+message VantraWireEnvelope {
   uint32 protocol_version = 1;
-  string message_id       = 2;
-  string conversation_id  = 3;
-  string sender_id        = 4;
-  string receiver_id      = 5;
-  int64  timestamp_ms     = 6;
-  MessageType type        = 7;
-  bytes  payload          = 8;
-  bytes  auth_tag         = 9;
+
+  oneof payload {
+    IdentitySecurePayload handshake = 2;
+    EncryptedEnvelope encrypted_message = 3;
+    ProtocolErrorPayload error = 4;
+  }
 }
 
-enum MessageType {
-  TEXT = 0;
-  ACK  = 1;
+// 1. Handshake Payload (Unencrypted wire format during initial connection)
+message IdentitySecurePayload {
+  string peer_id = 1;
+  string display_name = 2;
+  bytes identity_public_key = 3;  // 32 bytes Ed25519
+  bytes ephemeral_public_key = 4; // 32 bytes X25519
+  bytes signature = 5;            // 64 bytes Ed25519 signature
+}
+
+// 2. Encrypted Envelope (Wire container for encrypted payloads)
+message EncryptedEnvelope {
+  string message_id = 1;
+  string session_id = 2;
+  uint64 sequence = 3;
+  bytes nonce = 4;      // 12 bytes
+  bytes ciphertext = 5; // Encrypted bytes of VantraPlaintext
+  bytes mac = 6;        // 16 bytes Poly1305 tag
+}
+
+// 3. Plaintext Payload (Encrypted inside EncryptedEnvelope.ciphertext)
+message VantraPlaintext {
+  string message_id = 1;
+  string session_id = 2;
+  uint64 sequence = 3;
+  int64 timestamp_ms = 4;
+  string sender_id = 5;
+  string receiver_id = 6;
+
+  oneof body {
+    TextBody text = 7;
+    AckBody ack = 8;
+  }
+}
+
+message TextBody {
+  string content = 1;
+}
+
+message AckBody {
+  string original_message_id = 1;
+  DeliveryStatus status = 2;
+}
+
+enum DeliveryStatus {
+  DELIVERY_UNSPECIFIED = 0;
+  DELIVERY_DELIVERED = 1;
+}
+
+// 4. Pre-session Protocol Error (Outer wire payload for unauthenticated version/malformed errors)
+message ProtocolErrorPayload {
+  uint32 error_code = 1;
+  string error_message = 2;
+  string related_message_id = 3;
 }

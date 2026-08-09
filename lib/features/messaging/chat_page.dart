@@ -54,6 +54,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         return const Icon(Icons.error_outline, size: 10, color: Colors.redAccent);
       case MessageStatus.sent:
         return const Icon(Icons.check, size: 10, color: Colors.white70);
+      case MessageStatus.delivered:
+        return const Icon(Icons.done_all, size: 12, color: Colors.cyanAccent);
       case MessageStatus.received:
         return const Icon(Icons.check_circle_outline, size: 10, color: Colors.white70);
     }

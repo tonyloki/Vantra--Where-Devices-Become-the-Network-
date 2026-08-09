@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +10,9 @@ import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/protocol/protocol_message.dart';
+import 'package:vantra/core/protocol/protocol_version.dart';
+import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/errors/vantra_exceptions.dart';
 import 'package:drift/native.dart';
 import 'package:vantra/core/database/app_database.dart';
@@ -20,6 +22,7 @@ import 'test_fakes.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  const codec = ProtobufCodec();
 
   group('VantraMessage Serialization Tests', () {
     test('Successful serialization & deserialization', () {
@@ -95,7 +98,7 @@ void main() {
       container.dispose();
     });
 
-    Future<Map<String, dynamic>> createRemoteHandshake(String remotePeerId, String displayName) async {
+    Future<DomainHandshakePayload> createRemoteHandshake(String remotePeerId, String displayName) async {
       final idKeyPair = await cryptoService.generateIdentityKeyPair();
       final ephKeyPair = await cryptoService.generateEphemeralKeyPair();
 
@@ -104,22 +107,21 @@ void main() {
 
       final sigBytes = await cryptoService.signHandshake(
         identityKeyPair: idKeyPair,
-        protocolVersion: 1,
+        protocolVersion: kCurrentProtocolVersion,
         peerId: remotePeerId,
         displayName: displayName,
         identityPublicKeyBytes: idPub.bytes,
         ephemeralPublicKeyBytes: ephPub.bytes,
       );
 
-      return {
-        'type': 'IDENTITY_SECURE',
-        'v': 1,
-        'peerId': remotePeerId,
-        'displayName': displayName,
-        'identityPublicKey': idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-        'ephemeralPublicKey': ephPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-        'signature': sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      };
+      return DomainHandshakePayload(
+        protocolVersion: kCurrentProtocolVersion,
+        peerId: remotePeerId,
+        displayName: displayName,
+        identityPublicKey: Uint8List.fromList(idPub.bytes),
+        ephemeralPublicKey: Uint8List.fromList(ephPub.bytes),
+        signature: Uint8List.fromList(sigBytes),
+      );
     }
 
     test('Loads persistent peerId and displayName from SharedPreferences', () async {
@@ -146,10 +148,11 @@ void main() {
       expect(fakeTransport.sentTargets.length, 1);
       expect(fakeTransport.sentTargets[0], 'QHZD');
 
-      final sentPayload = jsonDecode(utf8.decode(fakeTransport.sentPayloads[0])) as Map<String, dynamic>;
-      expect(sentPayload['type'], 'IDENTITY_SECURE');
-      expect(sentPayload['v'], 1);
-      expect(sentPayload['signature'], isNotNull);
+      final envelope = codec.decodeWireEnvelope(fakeTransport.sentPayloads[0]);
+      expect(envelope, isA<DomainHandshakePayload>());
+      final handshake = envelope as DomainHandshakePayload;
+      expect(handshake.protocolVersion, kCurrentProtocolVersion);
+      expect(handshake.signature.isNotEmpty, isTrue);
     });
 
     test('Identity payload establishes peer session and supports reconnection mapping', () async {
@@ -165,7 +168,7 @@ void main() {
       final remotePeerId = const Uuid().v4();
       final remotePayload = await createRemoteHandshake(remotePeerId, 'VantraRemote');
       
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(remotePayload));
       await Future.delayed(const Duration(milliseconds: 50));
 
       final state = container.read(messagingStateProvider);
@@ -184,7 +187,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       final remotePayloadReconnect = await createRemoteHandshake(remotePeerId, 'VantraRemoteUpdated');
-      fakeTransport.triggerIncomingPayload('XVAA', Uint8List.fromList(utf8.encode(jsonEncode(remotePayloadReconnect))));
+      fakeTransport.triggerIncomingPayload('XVAA', codec.encodeWireEnvelope(remotePayloadReconnect));
       await Future.delayed(const Duration(milliseconds: 50));
 
       final stateAfterReconnect = container.read(messagingStateProvider);
@@ -205,7 +208,7 @@ void main() {
 
       final remotePeerId = const Uuid().v4();
       final remotePayload = await createRemoteHandshake(remotePeerId, 'VantraRemote');
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(remotePayload));
       await Future.delayed(const Duration(milliseconds: 50));
 
       expect(container.read(messagingStateProvider).sessions[remotePeerId]!.status, SessionStatus.connected);
@@ -234,7 +237,7 @@ void main() {
 
       final remotePeerId = const Uuid().v4();
       final remotePayload = await createRemoteHandshake(remotePeerId, 'VantraRemote');
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(remotePayload));
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Send text message successfully
@@ -246,14 +249,15 @@ void main() {
       expect(messages.length, 1);
       expect(messages[0].text, 'Test Message payload');
 
-      // Verify transport payload is encrypted
+      // Verify transport payload is encrypted Protobuf envelope
       expect(fakeTransport.sentTargets.length, 2);
       expect(fakeTransport.sentTargets[1], 'QHZD');
       
-      final sentTextPayload = jsonDecode(utf8.decode(fakeTransport.sentPayloads[1])) as Map<String, dynamic>;
-      expect(sentTextPayload['type'], 'ENCRYPTED_TEXT');
-      expect(sentTextPayload['v'], 1);
-      expect(sentTextPayload['ciphertext'], isNotNull);
+      final sentEnvelope = codec.decodeWireEnvelope(fakeTransport.sentPayloads[1]);
+      expect(sentEnvelope, isA<DomainEncryptedEnvelope>());
+      final sentEnc = sentEnvelope as DomainEncryptedEnvelope;
+      expect(sentEnc.protocolVersion, kCurrentProtocolVersion);
+      expect(sentEnc.ciphertext.isNotEmpty, isTrue);
 
       // Disconnect and try to send again — should fail
       fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(

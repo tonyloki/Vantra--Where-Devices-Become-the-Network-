@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +10,9 @@ import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/protocol/protocol_message.dart';
+import 'package:vantra/core/protocol/protocol_version.dart';
+import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'test_fakes.dart';
 
@@ -21,6 +23,7 @@ void main() {
   late ProviderContainer container;
   late AppDatabase testDb;
   late CryptoService cryptoService;
+  const codec = ProtobufCodec();
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -47,8 +50,8 @@ void main() {
     container.dispose();
   });
 
-  group('Encrypted Messaging Pipeline & Replay Tests', () {
-    test('End-to-end encrypted sending, receiving, and replay protection', () async {
+  group('Encrypted Protobuf Messaging Pipeline, Replay & ACK Tests', () {
+    test('End-to-end encrypted sending, receiving, replay protection, and encrypted ACK delivery', () async {
       final notifier = container.read(messagingStateProvider.notifier);
       container.read(messagingStateProvider);
 
@@ -59,7 +62,7 @@ void main() {
       ));
       await Future.delayed(const Duration(milliseconds: 50));
 
-      // 1. Establish handshake
+      // 1. Establish handshake using Protobuf wire
       final remoteIdentityKeyPair = await cryptoService.generateIdentityKeyPair();
       final remoteEphemeralKeyPair = await cryptoService.generateEphemeralKeyPair();
       final remoteIdPub = await remoteIdentityKeyPair.extractPublicKey();
@@ -68,41 +71,35 @@ void main() {
 
       final sigBytes = await cryptoService.signHandshake(
         identityKeyPair: remoteIdentityKeyPair,
-        protocolVersion: 1,
+        protocolVersion: kCurrentProtocolVersion,
         peerId: remotePeerId,
         displayName: 'RemoteSecurePeer',
         identityPublicKeyBytes: remoteIdPub.bytes,
         ephemeralPublicKeyBytes: remoteEphPub.bytes,
       );
 
-      final hexSig = sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      final hexIdPub = remoteIdPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      final hexEphPub = remoteEphPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final handshakePayload = DomainHandshakePayload(
+        protocolVersion: kCurrentProtocolVersion,
+        peerId: remotePeerId,
+        displayName: 'RemoteSecurePeer',
+        identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+        ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+        signature: Uint8List.fromList(sigBytes),
+      );
 
-      final handshakePayload = {
-        'type': 'IDENTITY_SECURE',
-        'v': 1,
-        'peerId': remotePeerId,
-        'displayName': 'RemoteSecurePeer',
-        'identityPublicKey': hexIdPub,
-        'ephemeralPublicKey': hexEphPub,
-        'signature': hexSig,
-      };
-
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(handshakePayload))));
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
       await Future.delayed(const Duration(milliseconds: 50));
 
       // 2. Send outgoing encrypted message
       await notifier.sendTextMessage(remotePeerId, 'Secret payload from local');
 
-      // Verify payload sent over transport is encrypted
+      // Verify payload sent over transport is protobuf encrypted envelope
       expect(fakeTransport.sentPayloads.length, 2);
-      final sentTextJson = jsonDecode(utf8.decode(fakeTransport.sentPayloads[1])) as Map<String, dynamic>;
-      expect(sentTextJson['type'], 'ENCRYPTED_TEXT');
-      expect(sentTextJson['v'], 1);
-      expect(sentTextJson['ciphertext'], isNotNull);
-      expect(sentTextJson['nonce'], isNotNull);
-      expect(sentTextJson['mac'], isNotNull);
+      final sentEnvelope = codec.decodeWireEnvelope(fakeTransport.sentPayloads[1]);
+      expect(sentEnvelope, isA<DomainEncryptedEnvelope>());
+      final sentEnc = sentEnvelope as DomainEncryptedEnvelope;
+      expect(sentEnc.protocolVersion, kCurrentProtocolVersion);
+      expect(sentEnc.ciphertext.isNotEmpty, isTrue);
 
       // Verify stored locally as sent
       final localIdentity = container.read(localIdentityStateProvider);
@@ -111,59 +108,111 @@ void main() {
       expect(conv.length, 1);
       expect(conv[0].text, 'Secret payload from local');
       expect(conv[0].status, MessageStatus.sent);
+      final localSentMsgId = conv[0].messageId;
 
-      // 3. Receive incoming encrypted message from remote peer
       // Extract local ephemeral public key from sent handshake
-      final localHandshakeJson = jsonDecode(utf8.decode(fakeTransport.sentPayloads[0])) as Map<String, dynamic>;
-      final localEphPubHex = localHandshakeJson['ephemeralPublicKey'] as String;
-      final localEphPubBytes = <int>[];
-      for (var i = 0; i < localEphPubHex.length; i += 2) {
-        localEphPubBytes.add(int.parse(localEphPubHex.substring(i, i + 2), radix: 16));
-      }
-
+      final localHandshake = codec.decodeWireEnvelope(fakeTransport.sentPayloads[0]) as DomainHandshakePayload;
       final remoteDerivedKeys = await cryptoService.deriveSessionKeys(
         localEphemeralKeyPair: remoteEphemeralKeyPair,
-        remoteEphemeralPublicKeyBytes: localEphPubBytes,
+        remoteEphemeralPublicKeyBytes: localHandshake.ephemeralPublicKey,
       );
 
+      // 3. Receive incoming encrypted message from remote peer
       final incomingMessageId = const Uuid().v4();
-      final remoteCleartext = jsonEncode({
-        'senderId': remotePeerId,
-        'receiverId': localIdentity.peerId,
-        'text': 'Reply secret from remote',
-        'timestamp': DateTime.now().millisecondsSinceEpoch,
-        'seq': 1,
-        'sessionId': remoteDerivedKeys.sessionId,
-      });
+      final remotePlaintext = DomainTextMessage(
+        messageId: incomingMessageId,
+        sessionId: remoteDerivedKeys.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: remotePeerId,
+        receiverId: localIdentity.peerId,
+        content: 'Reply secret from remote',
+      );
 
-      final encResult = await cryptoService.encryptPayload(
+      final encResult = await cryptoService.encryptBytes(
         secretKey: remoteDerivedKeys.sendKey,
         sessionSalt: remoteDerivedKeys.sessionSalt,
         sequence: 1,
         messageId: incomingMessageId,
-        plaintextJson: remoteCleartext,
+        plaintextBytes: codec.encodePlaintext(remotePlaintext),
       );
 
-      final encPayload = {
-        'type': 'ENCRYPTED_TEXT',
-        'v': 1,
-        'messageId': incomingMessageId,
-        'nonce': encResult.nonce.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-        'ciphertext': encResult.ciphertext.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-        'mac': encResult.mac.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      };
+      final encWireEnvelope = DomainEncryptedEnvelope(
+        protocolVersion: kCurrentProtocolVersion,
+        messageId: incomingMessageId,
+        sessionId: remoteDerivedKeys.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encResult.nonce),
+        ciphertext: Uint8List.fromList(encResult.ciphertext),
+        mac: Uint8List.fromList(encResult.mac),
+      );
 
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(encPayload))));
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(encWireEnvelope));
       await Future.delayed(const Duration(milliseconds: 50));
 
-      // Verify decrypted and saved to SQLite
+      // Verify decrypted and saved to SQLite as received
       conv = await repo.getConversation(localIdentity.peerId, remotePeerId);
       expect(conv.length, 2);
       expect(conv[1].text, 'Reply secret from remote');
       expect(conv[1].status, MessageStatus.received);
 
-      // 4. Replay attack test: transmit same packet again
-      fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(encPayload))));
+      // Verify local node transmitted an encrypted ACK back
+      expect(fakeTransport.sentPayloads.length, 3);
+      final sentAckEnvelope = codec.decodeWireEnvelope(fakeTransport.sentPayloads[2]) as DomainEncryptedEnvelope;
+      expect(sentAckEnvelope.messageId, isNot(equals(incomingMessageId))); // ACK unique ID invariant!
+
+      // Decrypt ACK using remote keys
+      final decryptedAckBytes = await cryptoService.decryptBytes(
+        secretKey: remoteDerivedKeys.receiveKey,
+        nonce: sentAckEnvelope.nonce,
+        ciphertext: sentAckEnvelope.ciphertext,
+        mac: sentAckEnvelope.mac,
+        messageId: sentAckEnvelope.messageId,
+      );
+      final decryptedAck = codec.decodePlaintext(decryptedAckBytes) as DomainAckMessage;
+      expect(decryptedAck.originalMessageId, incomingMessageId);
+      expect(decryptedAck.status, DomainDeliveryStatus.delivered);
+
+      // 4. Remote peer sends an encrypted ACK for local's initial sent message
+      final ackFromRemoteId = const Uuid().v4();
+      final remoteAckPlaintext = DomainAckMessage(
+        messageId: ackFromRemoteId,
+        sessionId: remoteDerivedKeys.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: remotePeerId,
+        receiverId: localIdentity.peerId,
+        originalMessageId: localSentMsgId,
+        status: DomainDeliveryStatus.delivered,
+      );
+
+      final encRemoteAck = await cryptoService.encryptBytes(
+        secretKey: remoteDerivedKeys.sendKey,
+        sessionSalt: remoteDerivedKeys.sessionSalt,
+        sequence: 2,
+        messageId: ackFromRemoteId,
+        plaintextBytes: codec.encodePlaintext(remoteAckPlaintext),
+      );
+
+      final remoteAckWireEnvelope = DomainEncryptedEnvelope(
+        protocolVersion: kCurrentProtocolVersion,
+        messageId: ackFromRemoteId,
+        sessionId: remoteDerivedKeys.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encRemoteAck.nonce),
+        ciphertext: Uint8List.fromList(encRemoteAck.ciphertext),
+        mac: Uint8List.fromList(encRemoteAck.mac),
+      );
+
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(remoteAckWireEnvelope));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Verify local sent message transitioned to DELIVERED status in SQLite!
+      conv = await repo.getConversation(localIdentity.peerId, remotePeerId);
+      expect(conv[0].status, MessageStatus.delivered);
+
+      // 5. Replay attack test: transmit same packet again
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(encWireEnvelope));
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Must remain 2 messages (replay rejected)
@@ -189,38 +238,29 @@ void main() {
 
       final sigBytes = await cryptoService.signHandshake(
         identityKeyPair: remoteIdentityKeyPair,
-        protocolVersion: 1,
+        protocolVersion: kCurrentProtocolVersion,
         peerId: remotePeerId,
         displayName: 'PeerX',
         identityPublicKeyBytes: remoteIdPub.bytes,
         ephemeralPublicKeyBytes: remoteEphPub.bytes,
       );
 
-      final handshakePayload = {
-        'type': 'IDENTITY_SECURE',
-        'v': 1,
-        'peerId': remotePeerId,
-        'displayName': 'PeerX',
-        'identityPublicKey': remoteIdPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-        'ephemeralPublicKey': remoteEphPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-        'signature': sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      };
+      final handshakePayload = DomainHandshakePayload(
+        protocolVersion: kCurrentProtocolVersion,
+        peerId: remotePeerId,
+        displayName: 'PeerX',
+        identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+        ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+        signature: Uint8List.fromList(sigBytes),
+      );
 
-      fakeTransport.triggerIncomingPayload('PEER_X', Uint8List.fromList(utf8.encode(jsonEncode(handshakePayload))));
+      fakeTransport.triggerIncomingPayload('PEER_X', codec.encodeWireEnvelope(handshakePayload));
       await Future.delayed(const Duration(milliseconds: 50));
 
-      // Extract local ephemeral public key from sent handshake
-      final localHandshakeJson = jsonDecode(utf8.decode(fakeTransport.sentPayloads[0])) as Map<String, dynamic>;
-      final localEphPubHex = localHandshakeJson['ephemeralPublicKey'] as String;
-      final localEphPubBytes = <int>[];
-      for (var i = 0; i < localEphPubHex.length; i += 2) {
-        localEphPubBytes.add(int.parse(localEphPubHex.substring(i, i + 2), radix: 16));
-      }
-
-      // Remote derives keys
+      final localHandshake = codec.decodeWireEnvelope(fakeTransport.sentPayloads[0]) as DomainHandshakePayload;
       final remoteDerivedKeys = await cryptoService.deriveSessionKeys(
         localEphemeralKeyPair: remoteEphemeralKeyPair,
-        remoteEphemeralPublicKeyBytes: localEphPubBytes,
+        remoteEphemeralPublicKeyBytes: localHandshake.ephemeralPublicKey,
       );
 
       final localIdentity = container.read(localIdentityStateProvider);
@@ -228,38 +268,40 @@ void main() {
 
       // Remote sends message to Local
       final incomingMessageId = const Uuid().v4();
-      final remoteCleartext = jsonEncode({
-        'senderId': remotePeerId,
-        'receiverId': localIdentity.peerId,
-        'text': 'Bidirectional test message',
-        'timestamp': DateTime.now().millisecondsSinceEpoch,
-        'seq': 1,
-        'sessionId': remoteDerivedKeys.sessionId,
-      });
+      final remotePlaintext = DomainTextMessage(
+        messageId: incomingMessageId,
+        sessionId: remoteDerivedKeys.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: remotePeerId,
+        receiverId: localIdentity.peerId,
+        content: 'Bidirectional Protobuf Test Message',
+      );
 
-      final encResult = await cryptoService.encryptPayload(
+      final encResult = await cryptoService.encryptBytes(
         secretKey: remoteDerivedKeys.sendKey,
         sessionSalt: remoteDerivedKeys.sessionSalt,
         sequence: 1,
         messageId: incomingMessageId,
-        plaintextJson: remoteCleartext,
+        plaintextBytes: codec.encodePlaintext(remotePlaintext),
       );
 
-      final encPayload = {
-        'type': 'ENCRYPTED_TEXT',
-        'v': 1,
-        'messageId': incomingMessageId,
-        'nonce': encResult.nonce.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-        'ciphertext': encResult.ciphertext.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-        'mac': encResult.mac.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      };
+      final encWireEnvelope = DomainEncryptedEnvelope(
+        protocolVersion: kCurrentProtocolVersion,
+        messageId: incomingMessageId,
+        sessionId: remoteDerivedKeys.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encResult.nonce),
+        ciphertext: Uint8List.fromList(encResult.ciphertext),
+        mac: Uint8List.fromList(encResult.mac),
+      );
 
-      fakeTransport.triggerIncomingPayload('PEER_X', Uint8List.fromList(utf8.encode(jsonEncode(encPayload))));
+      fakeTransport.triggerIncomingPayload('PEER_X', codec.encodeWireEnvelope(encWireEnvelope));
       await Future.delayed(const Duration(milliseconds: 50));
 
       final conv = await repo.getConversation(localIdentity.peerId, remotePeerId);
       expect(conv.length, 1);
-      expect(conv[0].text, 'Bidirectional test message');
+      expect(conv[0].text, 'Bidirectional Protobuf Test Message');
       expect(conv[0].status, MessageStatus.received);
     });
   });

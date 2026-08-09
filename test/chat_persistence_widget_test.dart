@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,12 +11,16 @@ import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
+import 'package:vantra/core/protocol/protocol_message.dart';
+import 'package:vantra/core/protocol/protocol_version.dart';
+import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'package:vantra/features/messaging/chat_page.dart';
 import 'test_fakes.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  const codec = ProtobufCodec();
 
   testWidgets('ChatPage renders historical SQLite messages and reactively displays new messages', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
@@ -93,24 +96,23 @@ void main() {
 
     final sigBytes = await cryptoService.signHandshake(
       identityKeyPair: remoteIdKeyPair,
-      protocolVersion: 1,
+      protocolVersion: kCurrentProtocolVersion,
       peerId: remotePeerId,
       displayName: 'VantraRemotePeer',
       identityPublicKeyBytes: remoteIdPub.bytes,
       ephemeralPublicKeyBytes: remoteEphPub.bytes,
     );
 
-    final remotePayload = {
-      'type': 'IDENTITY_SECURE',
-      'v': 1,
-      'peerId': remotePeerId,
-      'displayName': 'VantraRemotePeer',
-      'identityPublicKey': remoteIdPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      'ephemeralPublicKey': remoteEphPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      'signature': sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-    };
+    final remoteHandshake = DomainHandshakePayload(
+      protocolVersion: kCurrentProtocolVersion,
+      peerId: remotePeerId,
+      displayName: 'VantraRemotePeer',
+      identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+      ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+      signature: Uint8List.fromList(sigBytes),
+    );
 
-    fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
+    fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(remoteHandshake));
     await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
 

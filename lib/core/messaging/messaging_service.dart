@@ -1,7 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:vantra/core/networking/transport.dart';
+import 'package:vantra/core/protocol/protocol_codec.dart';
+import 'package:vantra/core/protocol/protocol_exception.dart';
+import 'package:vantra/core/protocol/protocol_message.dart';
+import 'package:vantra/core/protocol/protocol_version.dart';
+import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/utils/logger.dart';
 
 class SessionSecureIdentity {
@@ -9,41 +13,54 @@ class SessionSecureIdentity {
   final int protocolVersion;
   final String peerId;
   final String displayName;
-  final String identityPublicKeyHex;
-  final String ephemeralPublicKeyHex;
-  final String signatureHex;
+  final Uint8List identityPublicKey;
+  final Uint8List ephemeralPublicKey;
+  final Uint8List signature;
 
   const SessionSecureIdentity({
     required this.endpointId,
     required this.protocolVersion,
     required this.peerId,
     required this.displayName,
-    required this.identityPublicKeyHex,
-    required this.ephemeralPublicKeyHex,
-    required this.signatureHex,
+    required this.identityPublicKey,
+    required this.ephemeralPublicKey,
+    required this.signature,
   });
+
+  String get identityPublicKeyHex => identityPublicKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  String get ephemeralPublicKeyHex => ephemeralPublicKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  String get signatureHex => signature.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
 class EncryptedMessageEvent {
   final String endpointId;
   final int protocolVersion;
   final String messageId;
-  final String nonceHex;
-  final String ciphertextHex;
-  final String macHex;
+  final String sessionId;
+  final int sequence;
+  final Uint8List nonce;
+  final Uint8List ciphertext;
+  final Uint8List mac;
 
   const EncryptedMessageEvent({
     required this.endpointId,
     required this.protocolVersion,
     required this.messageId,
-    required this.nonceHex,
-    required this.ciphertextHex,
-    required this.macHex,
+    required this.sessionId,
+    required this.sequence,
+    required this.nonce,
+    required this.ciphertext,
+    required this.mac,
   });
+
+  String get nonceHex => nonce.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  String get ciphertextHex => ciphertext.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  String get macHex => mac.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
 class MessagingService {
   final Transport _transport;
+  final ProtocolCodec codec;
   late final StreamSubscription _payloadSubscription;
 
   final _encryptedMessageController = StreamController<EncryptedMessageEvent>.broadcast();
@@ -52,7 +69,7 @@ class MessagingService {
   Stream<EncryptedMessageEvent> get encryptedMessageStream => _encryptedMessageController.stream;
   Stream<SessionSecureIdentity> get secureIdentityStream => _secureIdentityController.stream;
 
-  MessagingService(this._transport) {
+  MessagingService(this._transport, {this.codec = const ProtobufCodec()}) {
     _payloadSubscription = _transport.payloadReceivedStream.listen(_onPayloadReceived);
   }
 
@@ -62,102 +79,92 @@ class MessagingService {
     _secureIdentityController.close();
   }
 
-  /// Sends a secure identity handshake packet
+  /// Sends a secure identity handshake protobuf packet
   Future<void> sendSecureIdentity({
     required String endpointId,
     required String peerId,
     required String displayName,
-    required String identityPublicKeyHex,
-    required String ephemeralPublicKeyHex,
-    required String signatureHex,
-    int protocolVersion = 1,
+    required Uint8List identityPublicKey,
+    required Uint8List ephemeralPublicKey,
+    required Uint8List signature,
+    int protocolVersion = kCurrentProtocolVersion,
   }) async {
-    VantraLogger.log('[VANTRA][SECURITY] Transmitting IDENTITY_SECURE packet to $endpointId');
-    final payload = {
-      'type': 'IDENTITY_SECURE',
-      'v': protocolVersion,
-      'peerId': peerId,
-      'displayName': displayName,
-      'identityPublicKey': identityPublicKeyHex,
-      'ephemeralPublicKey': ephemeralPublicKeyHex,
-      'signature': signatureHex,
-    };
-    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
+    VantraLogger.log('[VANTRA][SECURITY] Transmitting IDENTITY_SECURE protobuf packet to $endpointId');
+    final envelope = DomainHandshakePayload(
+      protocolVersion: protocolVersion,
+      peerId: peerId,
+      displayName: displayName,
+      identityPublicKey: identityPublicKey,
+      ephemeralPublicKey: ephemeralPublicKey,
+      signature: signature,
+    );
+    final bytes = codec.encodeWireEnvelope(envelope);
     await _transport.send(endpointId, bytes);
   }
 
-  /// Transmits an encrypted message packet
+  /// Transmits an encrypted message protobuf packet
   Future<void> sendEncryptedMessage({
     required String endpointId,
     required String messageId,
-    required String nonceHex,
-    required String ciphertextHex,
-    required String macHex,
-    int protocolVersion = 1,
+    required String sessionId,
+    required int sequence,
+    required Uint8List nonce,
+    required Uint8List ciphertext,
+    required Uint8List mac,
+    int protocolVersion = kCurrentProtocolVersion,
   }) async {
-    VantraLogger.log('[VANTRA][SECURITY] Transmitting ENCRYPTED_TEXT packet for $messageId to $endpointId');
-    final payload = {
-      'type': 'ENCRYPTED_TEXT',
-      'v': protocolVersion,
-      'messageId': messageId,
-      'nonce': nonceHex,
-      'ciphertext': ciphertextHex,
-      'mac': macHex,
-    };
-    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
+    VantraLogger.log('[VANTRA][SECURITY] Transmitting ENCRYPTED_TEXT protobuf packet for $messageId to $endpointId');
+    final envelope = DomainEncryptedEnvelope(
+      protocolVersion: protocolVersion,
+      messageId: messageId,
+      sessionId: sessionId,
+      sequence: sequence,
+      nonce: nonce,
+      ciphertext: ciphertext,
+      mac: mac,
+    );
+    final bytes = codec.encodeWireEnvelope(envelope);
     await _transport.send(endpointId, bytes);
   }
 
   void _onPayloadReceived(PayloadReceivedEvent event) {
-    VantraLogger.log('[VANTRA][MESSAGE] Payload received from ${event.endpointId}');
+    VantraLogger.log('[VANTRA][MESSAGE] Wire payload received from ${event.endpointId} (${event.bytes.length} bytes)');
     try {
-      final json = jsonDecode(utf8.decode(event.bytes)) as Map<String, dynamic>;
-      final type = json['type'] as String?;
-      final version = json['v'] as int? ?? 0;
+      final envelope = codec.decodeWireEnvelope(event.bytes);
 
-      // Strict protocol downgrade rejection: reject any message with v < 1
-      if (version < 1) {
-        VantraLogger.log('[VANTRA][SECURITY] Rejected insecure or legacy payload (version $version) from ${event.endpointId}');
-        return;
+      switch (envelope) {
+        case DomainHandshakePayload handshake:
+          VantraLogger.log('[VANTRA][SECURITY] IDENTITY_SECURE protobuf received for peer ${handshake.peerId}');
+          _secureIdentityController.add(SessionSecureIdentity(
+            endpointId: event.endpointId,
+            protocolVersion: handshake.protocolVersion,
+            peerId: handshake.peerId,
+            displayName: handshake.displayName,
+            identityPublicKey: handshake.identityPublicKey,
+            ephemeralPublicKey: handshake.ephemeralPublicKey,
+            signature: handshake.signature,
+          ));
+
+        case DomainEncryptedEnvelope enc:
+          VantraLogger.log('[VANTRA][SECURITY] ENCRYPTED_TEXT protobuf packet received for message ${enc.messageId}');
+          _encryptedMessageController.add(EncryptedMessageEvent(
+            endpointId: event.endpointId,
+            protocolVersion: enc.protocolVersion,
+            messageId: enc.messageId,
+            sessionId: enc.sessionId,
+            sequence: enc.sequence,
+            nonce: enc.nonce,
+            ciphertext: enc.ciphertext,
+            mac: enc.mac,
+          ));
+
+        case DomainProtocolError err:
+          VantraLogger.log('[VANTRA][SECURITY] Outer PROTOCOL_ERROR packet received (unauthenticated): code=${err.errorCode}, message=${err.errorMessage}');
       }
-
-      if (type == 'IDENTITY_SECURE') {
-        final peerId = json['peerId'] as String;
-        final displayName = json['displayName'] as String;
-        final idKey = json['identityPublicKey'] as String;
-        final ephKey = json['ephemeralPublicKey'] as String;
-        final sig = json['signature'] as String;
-
-        VantraLogger.log('[VANTRA][SECURITY] IDENTITY_SECURE received for peer $peerId');
-        _secureIdentityController.add(SessionSecureIdentity(
-          endpointId: event.endpointId,
-          protocolVersion: version,
-          peerId: peerId,
-          displayName: displayName,
-          identityPublicKeyHex: idKey,
-          ephemeralPublicKeyHex: ephKey,
-          signatureHex: sig,
-        ));
-      } else if (type == 'ENCRYPTED_TEXT') {
-        final messageId = json['messageId'] as String;
-        final nonce = json['nonce'] as String;
-        final ciphertext = json['ciphertext'] as String;
-        final mac = json['mac'] as String;
-
-        VantraLogger.log('[VANTRA][SECURITY] ENCRYPTED_TEXT packet received for message $messageId');
-        _encryptedMessageController.add(EncryptedMessageEvent(
-          endpointId: event.endpointId,
-          protocolVersion: version,
-          messageId: messageId,
-          nonceHex: nonce,
-          ciphertextHex: ciphertext,
-          macHex: mac,
-        ));
-      } else {
-        VantraLogger.log('[VANTRA][SECURITY] Rejected unknown payload type: $type');
-      }
+    } on ProtocolValidationException catch (e) {
+      VantraLogger.log('[VANTRA][SECURITY] Protocol validation rejected payload from ${event.endpointId}: ${e.message}');
     } catch (e, stack) {
-      VantraLogger.log('[VANTRA][MESSAGE] Malformed payload received, discarded', e, stack);
+      VantraLogger.log('[VANTRA][SECURITY] Malformed wire payload from ${event.endpointId}, discarded: $e', e, stack);
     }
   }
 }

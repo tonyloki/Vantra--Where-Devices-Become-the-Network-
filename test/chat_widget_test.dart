@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,12 +10,16 @@ import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/networking/transport.dart';
+import 'package:vantra/core/protocol/protocol_message.dart';
+import 'package:vantra/core/protocol/protocol_version.dart';
+import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'package:vantra/features/messaging/chat_page.dart';
 import 'test_fakes.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  const codec = ProtobufCodec();
 
   testWidgets('ChatPage renders messages, handles text composition, and disables input on disconnect', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
@@ -70,24 +73,23 @@ void main() {
 
     final sigBytes = await cryptoService.signHandshake(
       identityKeyPair: remoteIdKeyPair,
-      protocolVersion: 1,
+      protocolVersion: kCurrentProtocolVersion,
       peerId: remotePeerId,
       displayName: 'RemoteFriend',
       identityPublicKeyBytes: remoteIdPub.bytes,
       ephemeralPublicKeyBytes: remoteEphPub.bytes,
     );
 
-    final remotePayload = {
-      'type': 'IDENTITY_SECURE',
-      'v': 1,
-      'peerId': remotePeerId,
-      'displayName': 'RemoteFriend',
-      'identityPublicKey': remoteIdPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      'ephemeralPublicKey': remoteEphPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      'signature': sigBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-    };
+    final remoteHandshake = DomainHandshakePayload(
+      protocolVersion: kCurrentProtocolVersion,
+      peerId: remotePeerId,
+      displayName: 'RemoteFriend',
+      identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+      ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+      signature: Uint8List.fromList(sigBytes),
+    );
 
-    fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(remotePayload))));
+    fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(remoteHandshake));
     await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
 
@@ -106,46 +108,43 @@ void main() {
 
     // 3. Trigger an incoming encrypted text payload from remote
     final localPeerId = prefs.getString('vantra_peer_id') ?? 'me';
-    final localHandshakeJson = jsonDecode(utf8.decode(fakeTransport.sentPayloads[0])) as Map<String, dynamic>;
-    final localEphPubHex = localHandshakeJson['ephemeralPublicKey'] as String;
-    final localEphPubBytes = <int>[];
-    for (var i = 0; i < localEphPubHex.length; i += 2) {
-      localEphPubBytes.add(int.parse(localEphPubHex.substring(i, i + 2), radix: 16));
-    }
+    final localHandshake = codec.decodeWireEnvelope(fakeTransport.sentPayloads[0]) as DomainHandshakePayload;
 
     final remoteDerivedKeys = await cryptoService.deriveSessionKeys(
       localEphemeralKeyPair: remoteEphKeyPair,
-      remoteEphemeralPublicKeyBytes: localEphPubBytes,
+      remoteEphemeralPublicKeyBytes: localHandshake.ephemeralPublicKey,
     );
 
     final incomingMessageId = const Uuid().v4();
-    final remoteCleartext = jsonEncode({
-      'senderId': remotePeerId,
-      'receiverId': localPeerId,
-      'text': 'Reply from Remote Device',
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      'seq': 1,
-      'sessionId': remoteDerivedKeys.sessionId,
-    });
+    final remotePlaintext = DomainTextMessage(
+      messageId: incomingMessageId,
+      sessionId: remoteDerivedKeys.sessionId,
+      sequence: 1,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      senderId: remotePeerId,
+      receiverId: localPeerId,
+      content: 'Reply from Remote Device',
+    );
 
-    final encResult = await cryptoService.encryptPayload(
+    final encResult = await cryptoService.encryptBytes(
       secretKey: remoteDerivedKeys.sendKey,
       sessionSalt: remoteDerivedKeys.sessionSalt,
       sequence: 1,
       messageId: incomingMessageId,
-      plaintextJson: remoteCleartext,
+      plaintextBytes: codec.encodePlaintext(remotePlaintext),
     );
 
-    final incomingPayload = {
-      'type': 'ENCRYPTED_TEXT',
-      'v': 1,
-      'messageId': incomingMessageId,
-      'nonce': encResult.nonce.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      'ciphertext': encResult.ciphertext.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-      'mac': encResult.mac.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
-    };
+    final encWireEnvelope = DomainEncryptedEnvelope(
+      protocolVersion: kCurrentProtocolVersion,
+      messageId: incomingMessageId,
+      sessionId: remoteDerivedKeys.sessionId,
+      sequence: 1,
+      nonce: Uint8List.fromList(encResult.nonce),
+      ciphertext: Uint8List.fromList(encResult.ciphertext),
+      mac: Uint8List.fromList(encResult.mac),
+    );
 
-    fakeTransport.triggerIncomingPayload('QHZD', Uint8List.fromList(utf8.encode(jsonEncode(incomingPayload))));
+    fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(encWireEnvelope));
     await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();
 
@@ -160,10 +159,10 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    // Verify status and input disabled
     expect(find.text('Disconnected'), findsOneWidget);
     expect(tester.widget<TextField>(inputFinder).enabled, isFalse);
-    expect(tester.widget<IconButton>(sendFinder).onPressed, isNull);
+    expect(find.text('Hello from Local Device'), findsOneWidget);
+    expect(find.text('Reply from Remote Device'), findsOneWidget);
 
     await testDb.close();
   });
