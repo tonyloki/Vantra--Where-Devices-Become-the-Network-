@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:vantra/core/identity/local_identity_provider.dart';
 
 import 'features/onboarding/onboarding_page.dart';
 import 'features/home/home_page.dart';
@@ -9,10 +11,15 @@ import 'features/messaging/chat_page.dart';
 import 'features/profile/profile_page.dart';
 import 'features/poc/poc_page.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
   runApp(
-    const ProviderScope(
-      child: VantraApp(),
+    ProviderScope(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+      ],
+      child: const VantraApp(),
     ),
   );
 }

@@ -3,9 +3,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/utils/permissions.dart';
+import 'package:vantra/core/identity/local_identity_provider.dart';
+import 'package:vantra/core/messaging/messaging_provider.dart';
+import 'package:vantra/core/models/peer_session.dart';
 
 class PocPage extends ConsumerStatefulWidget {
   const PocPage({super.key});
@@ -40,10 +44,15 @@ class _PocPageState extends ConsumerState<PocPage> {
   @override
   void initState() {
     super.initState();
-    // Default name based on a random number to make local device name unique out of the box
-    final randId = (1000 + (DateTime.now().millisecondsSinceEpoch % 9000)).toString();
-    _localDeviceName = 'Vantra-$randId';
-    _nameController.text = _localDeviceName;
+    
+    // Read display name from local identity provider
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final localId = ref.read(localIdentityStateProvider);
+      setState(() {
+        _localDeviceName = localId.displayName;
+        _nameController.text = _localDeviceName;
+      });
+    });
 
     _checkAndRequestPermissions();
     _subscribeToTransport();
@@ -363,6 +372,7 @@ class _PocPageState extends ConsumerState<PocPage> {
                         setState(() {
                           _localDeviceName = val;
                         });
+                        ref.read(localIdentityStateProvider.notifier).updateDisplayName(val);
                       },
                     ),
                   ),
@@ -406,12 +416,34 @@ class _PocPageState extends ConsumerState<PocPage> {
 
               if (_activeEndpointId != null) ...[
                 const SizedBox(height: 8),
-                Center(
-                  child: ElevatedButton(
-                    onPressed: _disconnect,
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900),
-                    child: const Text('Disconnect'),
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed: _disconnect,
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900),
+                      child: const Text('Disconnect'),
+                    ),
+                    Consumer(
+                      builder: (context, ref, child) {
+                        final messagingState = ref.watch(messagingStateProvider);
+                        final activeSession = messagingState.sessions.values
+                            .where((s) => s.status == SessionStatus.connected)
+                            .firstOrNull;
+                        if (activeSession == null) {
+                          return const SizedBox.shrink();
+                        }
+                        return ElevatedButton(
+                          key: const Key('poc_open_chat_button'),
+                          onPressed: () {
+                            context.push('/chat/${activeSession.peerId}');
+                          },
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent),
+                          child: const Text('Open Chat'),
+                        );
+                      },
+                    ),
+                  ],
                 ),
               ],
               const Divider(height: 32),
