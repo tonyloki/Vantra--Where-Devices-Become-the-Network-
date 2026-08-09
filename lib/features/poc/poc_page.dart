@@ -30,9 +30,7 @@ class _PocPageState extends ConsumerState<PocPage> {
   final List<String> _logs = [];
   final List<String> _receivedMessages = [];
 
-  String? _activeEndpointId;
-  String? _activeEndpointName;
-  ConnectionStatus _connectionStatus = ConnectionStatus.idle;
+
 
   StreamSubscription? _peersSub;
   StreamSubscription? _connSub;
@@ -89,30 +87,10 @@ class _PocPageState extends ConsumerState<PocPage> {
     });
 
     _connSub = transport.connectionUpdateStream.listen((update) {
-      setState(() {
-        _connectionStatus = update.status;
-      });
-
       _log('Connection update: ${update.endpointId} status: ${update.status.name}');
 
       if (update.status == ConnectionStatus.connecting) {
         _showConnectionRequestDialog(update.endpointId, update.endpointName, update.authenticationToken, update.isIncoming);
-      } else if (update.status == ConnectionStatus.connected) {
-        setState(() {
-          _activeEndpointId = update.endpointId;
-          _activeEndpointName = update.endpointName;
-        });
-        _log('CONNECTED with: $statusInfo');
-      } else if (update.status == ConnectionStatus.disconnected ||
-          update.status == ConnectionStatus.rejected ||
-          update.status == ConnectionStatus.error) {
-        setState(() {
-          if (_activeEndpointId == update.endpointId) {
-            _activeEndpointId = null;
-            _activeEndpointName = null;
-          }
-        });
-        _log('Connection lost/terminated with ${update.endpointId}');
       }
     });
 
@@ -132,11 +110,11 @@ class _PocPageState extends ConsumerState<PocPage> {
     });
   }
 
-  String get statusInfo {
-    if (_activeEndpointId != null) {
-      return 'Connected to $_activeEndpointName ($_activeEndpointId)';
+  String _getStatusInfo(String? activeId, String? activeName, ConnectionStatus status) {
+    if (activeId != null) {
+      return 'Connected to $activeName ($activeId)';
     }
-    switch (_connectionStatus) {
+    switch (status) {
       case ConnectionStatus.connecting:
         return 'Connecting...';
       case ConnectionStatus.discovering:
@@ -279,16 +257,11 @@ class _PocPageState extends ConsumerState<PocPage> {
   }
 
   Future<void> _disconnect() async {
-    final target = _activeEndpointId;
+    final target = ref.read(messagingStateProvider).activeEndpointId;
     if (target != null) {
       try {
         _log('Disconnecting from $target');
         await ref.read(transportProvider).disconnect(target);
-        setState(() {
-          _activeEndpointId = null;
-          _activeEndpointName = null;
-          _connectionStatus = ConnectionStatus.idle;
-        });
       } catch (e) {
         _log('Disconnect failed: $e');
       }
@@ -296,7 +269,7 @@ class _PocPageState extends ConsumerState<PocPage> {
   }
 
   Future<void> _sendPayload() async {
-    final target = _activeEndpointId;
+    final target = ref.read(messagingStateProvider).activeEndpointId;
     final text = _messageController.text;
     if (target != null && text.isNotEmpty) {
       try {
@@ -311,6 +284,11 @@ class _PocPageState extends ConsumerState<PocPage> {
 
   @override
   Widget build(BuildContext context) {
+    final messagingState = ref.watch(messagingStateProvider);
+    final activeEndpointId = messagingState.activeEndpointId;
+    final activeEndpointName = messagingState.activeEndpointName;
+    final connectionStatus = messagingState.connectionStatus;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('VANTRA Communication POC'),
@@ -408,13 +386,13 @@ class _PocPageState extends ConsumerState<PocPage> {
                 children: [
                   const Text('Connection Status:', style: TextStyle(fontWeight: FontWeight.bold)),
                   Chip(
-                    label: Text(statusInfo),
-                    backgroundColor: _activeEndpointId != null ? Colors.green.shade800 : Colors.blueGrey.shade800,
+                    label: Text(_getStatusInfo(activeEndpointId, activeEndpointName, connectionStatus)),
+                    backgroundColor: activeEndpointId != null ? Colors.green.shade800 : Colors.blueGrey.shade800,
                   ),
                 ],
               ),
 
-              if (_activeEndpointId != null) ...[
+              if (activeEndpointId != null) ...[
                 const SizedBox(height: 8),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -491,7 +469,7 @@ class _PocPageState extends ConsumerState<PocPage> {
                   ),
                   const SizedBox(width: 8),
                   ElevatedButton(
-                    onPressed: _activeEndpointId != null ? _sendPayload : null,
+                    onPressed: activeEndpointId != null ? _sendPayload : null,
                     child: const Text('Send'),
                   ),
                 ],

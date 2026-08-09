@@ -13,27 +13,42 @@ class MessagingState {
   final Map<String, List<VantraMessage>> messageHistory;
   final Map<String, PeerSession> sessions;
   final Map<String, String> endpointToPeerId;
+  final String? activeEndpointId;
+  final String? activeEndpointName;
+  final ConnectionStatus connectionStatus;
 
   const MessagingState({
     required this.messageHistory,
     required this.sessions,
     required this.endpointToPeerId,
+    this.activeEndpointId,
+    this.activeEndpointName,
+    required this.connectionStatus,
   });
 
   MessagingState.initial()
       : messageHistory = const {},
         sessions = const {},
-        endpointToPeerId = const {};
+        endpointToPeerId = const {},
+        activeEndpointId = null,
+        activeEndpointName = null,
+        connectionStatus = ConnectionStatus.idle;
 
   MessagingState copyWith({
     Map<String, List<VantraMessage>>? messageHistory,
     Map<String, PeerSession>? sessions,
     Map<String, String>? endpointToPeerId,
+    String? activeEndpointId,
+    String? activeEndpointName,
+    ConnectionStatus? connectionStatus,
   }) {
     return MessagingState(
       messageHistory: messageHistory ?? this.messageHistory,
       sessions: sessions ?? this.sessions,
       endpointToPeerId: endpointToPeerId ?? this.endpointToPeerId,
+      activeEndpointId: activeEndpointId ?? this.activeEndpointId,
+      activeEndpointName: activeEndpointName ?? this.activeEndpointName,
+      connectionStatus: connectionStatus ?? this.connectionStatus,
     );
   }
 }
@@ -131,6 +146,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     if (update.status == ConnectionStatus.connected) {
       _service.sendIdentity(update.endpointId, localIdentity);
+      state = state.copyWith(
+        connectionStatus: ConnectionStatus.connected,
+        activeEndpointId: update.endpointId,
+        activeEndpointName: update.endpointName,
+      );
+    } else if (update.status == ConnectionStatus.connecting) {
+      state = state.copyWith(
+        connectionStatus: ConnectionStatus.connecting,
+        activeEndpointId: update.endpointId,
+        activeEndpointName: update.endpointName,
+      );
     } else if (update.status == ConnectionStatus.disconnected ||
         update.status == ConnectionStatus.rejected ||
         update.status == ConnectionStatus.error) {
@@ -148,6 +174,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
           );
         }
       }
+      state = state.copyWith(
+        connectionStatus: update.status,
+        activeEndpointId: null,
+        activeEndpointName: null,
+      );
+    } else {
+      state = state.copyWith(
+        connectionStatus: update.status,
+      );
     }
   }
 
