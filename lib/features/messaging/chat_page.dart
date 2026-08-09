@@ -5,6 +5,7 @@ import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/models/peer_trust_state.dart';
 import 'package:vantra/core/models/message_status.dart';
+import 'package:vantra/core/utils/logger.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
   final String peerId;
@@ -236,6 +237,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   ),
                 ),
                 data: (messages) {
+                  VantraLogger.log('[VANTRA][UI] CHAT UI RENDER: peerId=${widget.peerId}, messageCount=${messages.length}');
                   if (messages.isEmpty) {
                     return Center(
                       child: Column(

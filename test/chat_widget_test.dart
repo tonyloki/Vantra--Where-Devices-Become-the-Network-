@@ -116,7 +116,6 @@ void main() {
     final remoteDerivedKeys = await cryptoService.deriveSessionKeys(
       localEphemeralKeyPair: remoteEphKeyPair,
       remoteEphemeralPublicKeyBytes: localEphPubBytes,
-      isInitiator: false,
     );
 
     final incomingMessageId = const Uuid().v4();

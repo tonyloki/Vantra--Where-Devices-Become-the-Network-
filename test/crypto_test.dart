@@ -78,18 +78,16 @@ void main() {
       final alicePub = await aliceEphemeral.extractPublicKey();
       final bobPub = await bobEphemeral.extractPublicKey();
 
-      // Alice derives keys (initiator)
+      // Alice derives keys
       final aliceKeys = await cryptoService.deriveSessionKeys(
         localEphemeralKeyPair: aliceEphemeral,
         remoteEphemeralPublicKeyBytes: bobPub.bytes,
-        isInitiator: true,
       );
 
-      // Bob derives keys (receiver)
+      // Bob derives keys
       final bobKeys = await cryptoService.deriveSessionKeys(
         localEphemeralKeyPair: bobEphemeral,
         remoteEphemeralPublicKeyBytes: alicePub.bytes,
-        isInitiator: false,
       );
 
       expect(aliceKeys.sessionId, bobKeys.sessionId);

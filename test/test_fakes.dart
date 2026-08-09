@@ -72,10 +72,8 @@ class FakeTransport implements Transport {
   @override
   Future<void> stopDiscovery() async {}
 
-  @override
   Future<void> stopAllEndpoints() async {}
 
-  @override
   void dispose() {
     _peersController.close();
     _connectionController.close();

@@ -8,12 +8,24 @@ class DerivedSessionKeys {
   final List<int> sessionSalt;
   final SecretKey sendKey;
   final SecretKey receiveKey;
+  final String sharedSecretFingerprint;
+  final String keyAtoBFingerprint;
+  final String keyBtoAFingerprint;
+  final String localSendKeyFingerprint;
+  final String localReceiveKeyFingerprint;
+  final bool isDeviceA;
 
   const DerivedSessionKeys({
     required this.sessionId,
     required this.sessionSalt,
     required this.sendKey,
     required this.receiveKey,
+    required this.sharedSecretFingerprint,
+    required this.keyAtoBFingerprint,
+    required this.keyBtoAFingerprint,
+    required this.localSendKeyFingerprint,
+    required this.localReceiveKeyFingerprint,
+    required this.isDeviceA,
   });
 }
 
@@ -50,9 +62,9 @@ class CryptoService {
     return _x25519.newKeyPair();
   }
 
-  /// Calculates a SHA-256 fingerprint from public key bytes formatted as colon-separated hex (e.g. AA:BB:CC...)
-  Future<String> computeFingerprint(List<int> publicKeyBytes) async {
-    final hash = await _sha256.hash(publicKeyBytes);
+  /// Calculates a SHA-256 fingerprint from byte content formatted as colon-separated hex (e.g. AA:BB:CC...)
+  Future<String> computeFingerprint(List<int> bytes) async {
+    final hash = await _sha256.hash(bytes);
     return hash.bytes
         .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
         .join(':');
@@ -114,11 +126,12 @@ class CryptoService {
     }
   }
 
-  /// Derives directional symmetric keys using ECDH X25519 and HKDF-SHA256
+  /// Derives directional symmetric keys using ECDH X25519 and HKDF-SHA256.
+  /// Deterministically assigns Device A (lexicographically lower ephemeral public key)
+  /// and Device B (higher ephemeral public key) so both peers symmetrically agree on directional keys.
   Future<DerivedSessionKeys> deriveSessionKeys({
     required SimpleKeyPair localEphemeralKeyPair,
     required List<int> remoteEphemeralPublicKeyBytes,
-    required bool isInitiator,
   }) async {
     final remoteEphemeralPublicKey = SimplePublicKey(
       remoteEphemeralPublicKeyBytes,
@@ -135,16 +148,9 @@ class CryptoService {
     final localPubBytes = localEphemeralPublicKey.bytes;
 
     // 2. Compute symmetric salt by lexicographically sorting ephemeral public keys
-    final List<int> sortedFirst;
-    final List<int> sortedSecond;
-
-    if (_compareBytes(localPubBytes, remoteEphemeralPublicKeyBytes) <= 0) {
-      sortedFirst = localPubBytes;
-      sortedSecond = remoteEphemeralPublicKeyBytes;
-    } else {
-      sortedFirst = remoteEphemeralPublicKeyBytes;
-      sortedSecond = localPubBytes;
-    }
+    final bool isDeviceA = _compareBytes(localPubBytes, remoteEphemeralPublicKeyBytes) <= 0;
+    final List<int> sortedFirst = isDeviceA ? localPubBytes : remoteEphemeralPublicKeyBytes;
+    final List<int> sortedSecond = isDeviceA ? remoteEphemeralPublicKeyBytes : localPubBytes;
 
     final salt = [...sortedFirst, ...sortedSecond];
     final sessionHash = await _sha256.hash(salt);
@@ -170,11 +176,36 @@ class CryptoService {
       info: utf8.encode('VANTRA_KEY_B_TO_A'),
     );
 
+    final sendKey = isDeviceA ? keyAToB : keyBToA;
+    final receiveKey = isDeviceA ? keyBToA : keyAToB;
+
+    // Diagnostic safe SHA-256 fingerprints (never logging raw key material)
+    final sharedSecretData = await sharedSecret.extract();
+    final sharedSecretFp = await computeFingerprint(sharedSecretData.bytes);
+
+    final keyAData = await keyAToB.extract();
+    final keyAFp = await computeFingerprint(keyAData.bytes);
+
+    final keyBData = await keyBToA.extract();
+    final keyBFp = await computeFingerprint(keyBData.bytes);
+
+    final sendData = await sendKey.extract();
+    final sendFp = await computeFingerprint(sendData.bytes);
+
+    final receiveData = await receiveKey.extract();
+    final receiveFp = await computeFingerprint(receiveData.bytes);
+
     return DerivedSessionKeys(
       sessionId: sessionId,
       sessionSalt: salt,
-      sendKey: isInitiator ? keyAToB : keyBToA,
-      receiveKey: isInitiator ? keyBToA : keyAToB,
+      sendKey: sendKey,
+      receiveKey: receiveKey,
+      sharedSecretFingerprint: sharedSecretFp,
+      keyAtoBFingerprint: keyAFp,
+      keyBtoAFingerprint: keyBFp,
+      localSendKeyFingerprint: sendFp,
+      localReceiveKeyFingerprint: receiveFp,
+      isDeviceA: isDeviceA,
     );
   }
 

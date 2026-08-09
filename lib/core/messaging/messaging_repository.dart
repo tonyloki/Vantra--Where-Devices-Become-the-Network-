@@ -3,6 +3,7 @@ import 'package:drift/drift.dart';
 import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/models/peer_trust_state.dart';
+import 'package:vantra/core/utils/logger.dart';
 import 'message.dart';
 
 class MessagingRepository {
@@ -27,23 +28,31 @@ class MessagingRepository {
 
   /// Saves an incoming message locally. If messageId already exists, it is safely ignored.
   Future<void> saveIncomingMessage(VantraMessage msg) async {
-    // Repository-level duplicate protection
-    final existing = await _db.messageDao.getMessageById(msg.messageId);
-    if (existing != null) {
-      return;
-    }
+    VantraLogger.log('[VANTRA][PERSISTENCE] PERSISTENCE INSERT START: messageId=${msg.messageId}, senderId=${msg.senderId}, receiverId=${msg.receiverId}, status=received');
+    try {
+      // Repository-level duplicate protection
+      final existing = await _db.messageDao.getMessageById(msg.messageId);
+      if (existing != null) {
+        VantraLogger.log('[VANTRA][PERSISTENCE] DUPLICATE IGNORED: messageId=${msg.messageId}');
+        return;
+      }
 
-    final companion = MessagesCompanion.insert(
-      messageId: msg.messageId,
-      senderId: msg.senderId,
-      receiverId: msg.receiverId,
-      messageText: msg.text,
-      timestamp: msg.timestamp,
-      type: 'TEXT',
-      status: MessageStatus.received,
-      createdAt: DateTime.now().millisecondsSinceEpoch,
-    );
-    await _db.messageDao.insertMessage(companion);
+      final companion = MessagesCompanion.insert(
+        messageId: msg.messageId,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        messageText: msg.text,
+        timestamp: msg.timestamp,
+        type: 'TEXT',
+        status: MessageStatus.received,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      );
+      await _db.messageDao.insertMessage(companion);
+      VantraLogger.log('[VANTRA][PERSISTENCE] PERSISTENCE INSERT SUCCESS: messageId=${msg.messageId}');
+    } catch (e, stack) {
+      VantraLogger.log('[VANTRA][PERSISTENCE] PERSISTENCE INSERT FAILED: messageId=${msg.messageId}, error=$e', e, stack);
+      rethrow;
+    }
   }
 
   /// Updates message transmission status
@@ -54,6 +63,7 @@ class MessagingRepository {
   /// Subscribes to a conversation stream (ordered by local sequence id)
   Stream<List<VantraMessage>> watchConversation(String localPeerId, String remotePeerId) {
     return _db.messageDao.watchConversation(localPeerId, remotePeerId).map((list) {
+      VantraLogger.log('[VANTRA][PERSISTENCE] CONVERSATION STREAM EMIT: localPeerId=$localPeerId, remotePeerId=$remotePeerId, count=${list.length}');
       return list.map((dbMsg) => _mapToDomain(dbMsg)).toList();
     });
   }
