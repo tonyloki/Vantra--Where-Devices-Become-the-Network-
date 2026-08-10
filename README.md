@@ -6,8 +6,8 @@ VANTRA is a decentralized, offline-first peer-to-peer communication platform des
 
 ## Phase Status
 
-*   **Current Phase:** Phase 7
-*   **Status:** Offline Retry Queue, Duplicate-ACK Recovery, and Crash Resiliency completed.
+*   **Current Phase:** Phase 9
+*   **Status:** Production UI/UX Polish, app onboarding animations, custom launcher icons, and global peer discovery controls completed.
 
 ## Completed Core Phases
 
@@ -19,6 +19,8 @@ VANTRA is a decentralized, offline-first peer-to-peer communication platform des
 *   **Phase 5:** Protobuf Wire Serialization & Encrypted ACK Protocol
 *   **Phase 6:** Peer Discovery, Contacts Book, Trust Management & Peer Blocking
 *   **Phase 7:** Persistent Outgoing Queue, Duplicate-Message ACK Recovery, and Crash Resiliency
+*   **Phase 8:** Production Connection Lifecycle & App Entry Experience
+*   **Phase 9:** Production UI/UX Polish & Dedicated Android Launcher Icons
 
 ## Architecture Overview
 
