@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
@@ -49,6 +50,8 @@ final nearbyConnectionServiceProvider = NotifierProvider<NearbyConnectionNotifie
 });
 
 class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with WidgetsBindingObserver {
+  bool _isInitializing = false;
+
   @override
   NearbyConnectionState build() {
     WidgetsBinding.instance.addObserver(this);
@@ -59,6 +62,16 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
   }
 
   Future<void> initialize() async {
+    if (state.status == NearbyServiceStatus.ready) {
+      VantraLogger.log('[VANTRA][LIFECYCLE] NearbyConnectionService already ready, skipping initialize.');
+      return;
+    }
+    if (_isInitializing) {
+      VantraLogger.log('[VANTRA][LIFECYCLE] NearbyConnectionService is already initializing, skipping duplicate request.');
+      return;
+    }
+
+    _isInitializing = true;
     VantraLogger.log('[VANTRA][LIFECYCLE] Initializing global NearbyConnectionService');
     state = state.copyWith(status: NearbyServiceStatus.initializing, clearError: true);
 
@@ -85,11 +98,33 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
       final transport = ref.read(transportProvider);
       final peerDiscovery = ref.read(peerDiscoveryServiceProvider);
 
-      VantraLogger.log('[VANTRA][LIFECYCLE] Starting advertising for $displayName');
-      await transport.startAdvertising(displayName);
+      try {
+        VantraLogger.log('[VANTRA][LIFECYCLE] Starting advertising for $displayName');
+        await transport.startAdvertising(displayName);
+      } on PlatformException catch (e) {
+        final isAlreadyAdvertising = e.code == '8001' ||
+            e.message?.contains('STATUS_ALREADY_ADVERTISING') == true ||
+            e.toString().contains('8001') ||
+            e.toString().contains('STATUS_ALREADY_ADVERTISING');
+        if (!isAlreadyAdvertising) {
+          rethrow;
+        }
+        VantraLogger.log('[VANTRA][LIFECYCLE] Reconciled STATUS_ALREADY_ADVERTISING exception');
+      }
 
-      VantraLogger.log('[VANTRA][LIFECYCLE] Starting discovery for $displayName');
-      await peerDiscovery.startDiscovery(localName: displayName);
+      try {
+        VantraLogger.log('[VANTRA][LIFECYCLE] Starting discovery for $displayName');
+        await peerDiscovery.startDiscovery(localName: displayName);
+      } on PlatformException catch (e) {
+        final isAlreadyDiscovering = e.code == '8002' ||
+            e.message?.contains('STATUS_ALREADY_DISCOVERING') == true ||
+            e.toString().contains('8002') ||
+            e.toString().contains('STATUS_ALREADY_DISCOVERING');
+        if (!isAlreadyDiscovering) {
+          rethrow;
+        }
+        VantraLogger.log('[VANTRA][LIFECYCLE] Reconciled STATUS_ALREADY_DISCOVERING exception');
+      }
 
       state = state.copyWith(
         status: NearbyServiceStatus.ready,
@@ -104,6 +139,8 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
         status: NearbyServiceStatus.error,
         errorMessage: e.toString(),
       );
+    } finally {
+      _isInitializing = false;
     }
   }
 
@@ -147,8 +184,35 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
         final displayName = localIdentity.displayName.isNotEmpty
             ? localIdentity.displayName
             : 'VantraDevice';
-        await ref.read(transportProvider).startAdvertising(displayName);
-        await ref.read(peerDiscoveryServiceProvider).startDiscovery(localName: displayName);
+
+        if (!state.isAdvertising) {
+          try {
+            await ref.read(transportProvider).startAdvertising(displayName);
+          } on PlatformException catch (e) {
+            final isAlreadyAdvertising = e.code == '8001' ||
+                e.message?.contains('STATUS_ALREADY_ADVERTISING') == true ||
+                e.toString().contains('8001') ||
+                e.toString().contains('STATUS_ALREADY_ADVERTISING');
+            if (!isAlreadyAdvertising) {
+              rethrow;
+            }
+          }
+        }
+
+        if (!state.isDiscovering) {
+          try {
+            await ref.read(peerDiscoveryServiceProvider).startDiscovery(localName: displayName);
+          } on PlatformException catch (e) {
+            final isAlreadyDiscovering = e.code == '8002' ||
+                e.message?.contains('STATUS_ALREADY_DISCOVERING') == true ||
+                e.toString().contains('8002') ||
+                e.toString().contains('STATUS_ALREADY_DISCOVERING');
+            if (!isAlreadyDiscovering) {
+              rethrow;
+            }
+          }
+        }
+
         state = state.copyWith(
           isAdvertising: true,
           isDiscovering: true,
