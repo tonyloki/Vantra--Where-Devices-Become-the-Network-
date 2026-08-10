@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
+import 'package:vantra/core/messaging/message.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/models/peer_trust_state.dart';
@@ -21,6 +22,8 @@ class ChatPage extends ConsumerStatefulWidget {
 class _ChatPageState extends ConsumerState<ChatPage> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  bool? _wasBlocked;
+  bool? _wasConnectedSecure;
 
   @override
   void initState() {
@@ -82,11 +85,30 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final session = messagingState.sessions[widget.peerId];
     final messagesAsync = ref.watch(conversationStreamProvider(widget.peerId));
 
+    ref.listen<AsyncValue<List<VantraMessage>>>(
+      conversationStreamProvider(widget.peerId),
+      (previous, next) {
+        if (next.hasValue) {
+          VantraLogger.log('[VANTRA][UI] CONVERSATION STREAM UPDATE peerId=${widget.peerId} messageCount=${next.value!.length}');
+        }
+      },
+    );
+
     final peerProfile = peerProfileAsync.value;
     final displayName = peerProfile?.effectiveName ?? session?.displayName ?? 'Peer ${widget.peerId.length >= 6 ? widget.peerId.substring(0, 6) : widget.peerId}';
     final isConnected = session?.status == SessionStatus.connected;
     final isBlocked = peerProfile?.isBlocked ?? false;
     final isTrusted = peerProfile?.isTrusted ?? (session?.trustState == PeerTrustState.trusted);
+    final isSecure = session?.isSecure == true;
+    final isConnectedSecure = isConnected && isSecure;
+
+    if (isBlocked && _wasBlocked != true) {
+      VantraLogger.log('[VANTRA][CHAT] SEND BLOCKED reason=INPUT_DISABLED');
+    } else if (!isBlocked && !isConnectedSecure && (_wasConnectedSecure != false || _wasBlocked == true)) {
+      VantraLogger.log('[VANTRA][CHAT] SEND BLOCKED reason=NOT_SECURE');
+    }
+    _wasBlocked = isBlocked;
+    _wasConnectedSecure = isConnectedSecure;
 
     // Trigger auto-scroll on new message
     _scrollToBottom();
@@ -220,7 +242,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   ),
                 ),
                 data: (messages) {
-                  VantraLogger.log('[VANTRA][UI] CHAT UI RENDER: peerId=${widget.peerId}, messageCount=${messages.length}');
+                  VantraLogger.log('[VANTRA][UI] CHAT RENDER peerId=${widget.peerId} messageCount=${messages.length}');
                   if (messages.isEmpty) {
                     return Center(
                       child: Column(
@@ -389,10 +411,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       ),
                       child: IconButton(
                         key: const Key('chat_send_button'),
-                        icon: const Icon(Icons.send_rounded, color: Colors.white),
+                        icon: Icon(
+                          Icons.send_rounded,
+                          color: (isConnected && !isBlocked) ? Colors.white : Colors.white30,
+                        ),
                         onPressed: (isConnected && !isBlocked)
                             ? () {
                                 final text = _controller.text.trim();
+                                final statusName = session?.status.name ?? 'disconnected';
+                                VantraLogger.log('[VANTRA][CHAT] SEND PRESSED peerId=${widget.peerId} textLength=${text.length} connectionStatus=$statusName');
                                 if (text.isNotEmpty) {
                                   _controller.clear();
                                   ref.read(messagingStateProvider.notifier).sendTextMessage(widget.peerId, text);

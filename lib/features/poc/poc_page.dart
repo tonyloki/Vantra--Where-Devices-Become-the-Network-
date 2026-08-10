@@ -111,7 +111,7 @@ class _PocPageState extends ConsumerState<PocPage> {
   }
 
   String _getStatusInfo(String? activeId, String? activeName, ConnectionStatus status) {
-    if (activeId != null) {
+    if (status == ConnectionStatus.connected && activeId != null) {
       return 'Connected to $activeName ($activeId)';
     }
     switch (status) {

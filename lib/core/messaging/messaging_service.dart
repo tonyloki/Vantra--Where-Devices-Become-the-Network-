@@ -113,7 +113,6 @@ class MessagingService {
     required Uint8List mac,
     int protocolVersion = kCurrentProtocolVersion,
   }) async {
-    VantraLogger.log('[VANTRA][SECURITY] Transmitting ENCRYPTED_TEXT protobuf packet for $messageId to $endpointId');
     final envelope = DomainEncryptedEnvelope(
       protocolVersion: protocolVersion,
       messageId: messageId,
@@ -123,14 +122,37 @@ class MessagingService {
       ciphertext: ciphertext,
       mac: mac,
     );
+    VantraLogger.log('[VANTRA][PROTO] ENCRYPTED ENVELOPE BUILT messageId=$messageId sessionIdPresent=true sequence=$sequence');
+
     final bytes = codec.encodeWireEnvelope(envelope);
-    await _transport.send(endpointId, bytes);
+    VantraLogger.log('[VANTRA][PROTO] WIRE ENCODE SUCCESS messageId=$messageId wireByteLength=${bytes.length}');
+
+    VantraLogger.log('[VANTRA][TRANSPORT] SEND INVOKED endpointId=$endpointId messageId=$messageId byteLength=${bytes.length}');
+    try {
+      await _transport.send(endpointId, bytes);
+      VantraLogger.log('[VANTRA][TRANSPORT] SEND SUCCESS endpointId=$endpointId messageId=$messageId');
+    } catch (e) {
+      VantraLogger.log('[VANTRA][TRANSPORT] SEND FAILED endpointId=$endpointId messageId=$messageId errorType=${e.runtimeType}');
+      rethrow;
+    }
   }
 
   void _onPayloadReceived(PayloadReceivedEvent event) {
     VantraLogger.log('[VANTRA][MESSAGE] Wire payload received from ${event.endpointId} (${event.bytes.length} bytes)');
+    VantraLogger.log('[VANTRA][PROTO] WIRE DECODE START byteLength=${event.bytes.length}');
+    DomainWireEnvelope envelope;
     try {
-      final envelope = codec.decodeWireEnvelope(event.bytes);
+      envelope = codec.decodeWireEnvelope(event.bytes);
+      if (envelope is DomainEncryptedEnvelope) {
+        VantraLogger.log('[VANTRA][PROTO] WIRE DECODE SUCCESS payloadType=ENCRYPTED_MESSAGE messageId=${envelope.messageId} sequence=${envelope.sequence}');
+      } else {
+        VantraLogger.log('[VANTRA][PROTO] WIRE DECODE SUCCESS payloadType=${envelope.runtimeType} messageId=none sequence=0');
+      }
+    } catch (e) {
+      VantraLogger.log('[VANTRA][PROTO] WIRE DECODE FAILED errorType=${e.runtimeType}');
+      rethrow;
+    }
+    try {
 
       switch (envelope) {
         case DomainHandshakePayload handshake:

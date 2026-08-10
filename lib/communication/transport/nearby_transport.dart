@@ -191,6 +191,7 @@ class NearbyTransport implements Transport {
       onPayLoadRecieved: (id, payload) {
         VantraLogger.log('NearbyTransport: Payload received from $id');
         if (payload.type == PayloadType.BYTES && payload.bytes != null) {
+          VantraLogger.log('[VANTRA][RECEIVE] PAYLOAD RECEIVED endpointId=$id byteLength=${payload.bytes!.length}');
           _payloadReceivedController.add(PayloadReceivedEvent(
             endpointId: id,
             bytes: payload.bytes!,
@@ -223,7 +224,13 @@ class NearbyTransport implements Transport {
 
   @override
   Future<void> send(String endpointId, Uint8List data) async {
-    VantraLogger.log('NearbyTransport: send data to $endpointId');
-    await _nearby.sendBytesPayload(endpointId, data);
+    VantraLogger.log('[VANTRA][TRANSPORT] NEARBY SEND START endpointId=$endpointId byteLength=${data.length}');
+    try {
+      await _nearby.sendBytesPayload(endpointId, data);
+      VantraLogger.log('[VANTRA][TRANSPORT] NEARBY SEND SUCCESS endpointId=$endpointId');
+    } catch (e) {
+      VantraLogger.log('[VANTRA][TRANSPORT] NEARBY SEND FAILED endpointId=$endpointId errorType=${e.runtimeType}');
+      rethrow;
+    }
   }
 }

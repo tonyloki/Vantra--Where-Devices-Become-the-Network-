@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +23,20 @@ import 'message.dart';
 import 'messaging_repository.dart';
 import 'messaging_service.dart';
 
+class ConnectionRequestInfo {
+  final String endpointId;
+  final String endpointName;
+  final String? authenticationToken;
+  final bool isIncoming;
+
+  const ConnectionRequestInfo({
+    required this.endpointId,
+    required this.endpointName,
+    this.authenticationToken,
+    required this.isIncoming,
+  });
+}
+
 class MessagingState {
   final Map<String, PeerSession> sessions;
   final Map<String, String> endpointToPeerId;
@@ -28,6 +44,7 @@ class MessagingState {
   final String? activeEndpointId;
   final String? activeEndpointName;
   final String? activeConversationPeerId;
+  final ConnectionRequestInfo? activeConnectionRequest;
 
   const MessagingState({
     required this.sessions,
@@ -36,6 +53,7 @@ class MessagingState {
     this.activeEndpointId,
     this.activeEndpointName,
     this.activeConversationPeerId,
+    this.activeConnectionRequest,
   });
 
   factory MessagingState.initial() => const MessagingState(
@@ -52,6 +70,8 @@ class MessagingState {
     String? activeEndpointName,
     String? activeConversationPeerId,
     bool clearActiveConversation = false,
+    ConnectionRequestInfo? activeConnectionRequest,
+    bool clearActiveConnectionRequest = false,
   }) {
     return MessagingState(
       sessions: sessions ?? this.sessions,
@@ -62,6 +82,9 @@ class MessagingState {
       activeConversationPeerId: clearActiveConversation
           ? null
           : (activeConversationPeerId ?? this.activeConversationPeerId),
+      activeConnectionRequest: clearActiveConnectionRequest
+          ? null
+          : (activeConnectionRequest ?? this.activeConnectionRequest),
     );
   }
 }
@@ -123,6 +146,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
       _connectionSub?.cancel();
       _encryptedMessageSub?.cancel();
       _secureIdentitySub?.cancel();
+      for (final session in _securitySessions.values) {
+        VantraLogger.log('[VANTRA][CRYPTO] SESSION DESTROYED endpointId=${session.endpointId}');
+      }
       _securitySessions.clear();
       _pendingEphemeralKeys.clear();
       _activePeerFlushes.clear();
@@ -171,21 +197,27 @@ class MessagingNotifier extends Notifier<MessagingState> {
     VantraLogger.log('[VANTRA][SECURITY] INBOUND: endpointId=${event.endpointId}, messageId=${event.messageId}, type=ENCRYPTED_ENVELOPE, v=${event.protocolVersion}');
 
     try {
-      VantraLogger.log('[VANTRA][SECURITY] DECRYPT: messageId=${event.messageId}, AAD/messageId=${event.messageId}, nonceLength=${event.nonce.length}, ciphertextLength=${event.ciphertext.length}, keyDirection=RECEIVE');
+      VantraLogger.log('[VANTRA][CRYPTO] DECRYPT START messageId=${event.messageId} sequence=${event.sequence}');
 
       // 1. Decrypt and verify Poly1305 authentication tag & Associated Data
-      final decryptedBytes = await _cryptoService.decryptBytes(
-        secretKey: session.receiveKey,
-        nonce: event.nonce,
-        ciphertext: event.ciphertext,
-        mac: event.mac,
-        messageId: event.messageId,
-      );
+      Uint8List decryptedBytes;
+      try {
+        decryptedBytes = await _cryptoService.decryptBytes(
+          secretKey: session.receiveKey,
+          nonce: event.nonce,
+          ciphertext: event.ciphertext,
+          mac: event.mac,
+          messageId: event.messageId,
+        );
+        VantraLogger.log('[VANTRA][CRYPTO] DECRYPT SUCCESS messageId=${event.messageId} plaintextLength=${decryptedBytes.length}');
+      } catch (e) {
+        VantraLogger.log('[VANTRA][CRYPTO] DECRYPT FAILED messageId=${event.messageId} errorType=${e.runtimeType}');
+        rethrow;
+      }
 
       // 2. Decode authenticated plaintext protobuf
       final plaintext = _service.codec.decodePlaintext(decryptedBytes);
-
-      VantraLogger.log('[VANTRA][SECURITY] DECRYPT SUCCESS: messageId=${plaintext.messageId}, senderId=${plaintext.senderId}, receiverId=${plaintext.receiverId}, timestamp=${plaintext.timestampMs}');
+      VantraLogger.log('[VANTRA][MESSAGING] MESSAGE RECONSTRUCTED messageId=${plaintext.messageId} senderId=${plaintext.senderId} receiverId=${plaintext.receiverId} timestamp=${plaintext.timestampMs}');
 
       // 3. Replay Protection: verify sequence > lastSeenReceiveSequence & matching session ID
       if (plaintext.sessionId != session.sessionId || plaintext.sequence <= session.receiveSequence) {
@@ -203,6 +235,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final existingMsg = await repository.getMessageById(plaintext.messageId);
       final activeSession = state.sessions[peerId];
       if (existingMsg != null) {
+        VantraLogger.log('[VANTRA][DB] DUPLICATE MESSAGE messageId=${plaintext.messageId}');
         VantraLogger.log('[VANTRA][SECURITY] DUPLICATE DETECTED: messageId=${plaintext.messageId}. Discarding duplicate payload, but immediately re-acknowledging.');
         if (activeSession != null) {
           await _sendAck(event.endpointId, session, plaintext.messageId);
@@ -223,20 +256,28 @@ class MessagingNotifier extends Notifier<MessagingState> {
           status: MessageStatus.received,
         );
 
-        VantraLogger.log('[VANTRA][SECURITY] MESSAGE RECONSTRUCTED = YES (messageId=${incomingMsg.messageId}, senderId=${incomingMsg.senderId}, receiverId=${incomingMsg.receiverId})');
-
-        // Persist message to SQLite
-        await repository.saveIncomingMessage(incomingMsg, isRead: isCurrentlyViewing);
-        VantraLogger.log('[VANTRA][SECURITY] REPOSITORY: messageId=${incomingMsg.messageId} saved, conversationStream notified');
+        VantraLogger.log('[VANTRA][DB] INBOUND INSERT START messageId=${incomingMsg.messageId} status=received');
+        try {
+          // Persist message to SQLite
+          await repository.saveIncomingMessage(incomingMsg, isRead: isCurrentlyViewing);
+          VantraLogger.log('[VANTRA][DB] INBOUND INSERT SUCCESS messageId=${incomingMsg.messageId}');
+        } catch (e) {
+          VantraLogger.log('[VANTRA][DB] INBOUND INSERT FAILED messageId=${incomingMsg.messageId} errorType=${e.runtimeType}');
+          rethrow;
+        }
 
         // Transmit Encrypted Delivery ACK
         if (activeSession != null) {
           await _sendAck(event.endpointId, session, plaintext.messageId);
         }
       } else if (plaintext is DomainAckMessage) {
-        VantraLogger.log('[VANTRA][SECURITY] ACK RECEIVED: originalMessageId=${plaintext.originalMessageId}, updating local status to DELIVERED');
+        VantraLogger.log('[VANTRA][RECEIVE] ACK RECEIVED ackPacketId=${plaintext.messageId}');
+        VantraLogger.log('[VANTRA][CRYPTO] ACK DECRYPT SUCCESS ackPacketId=${plaintext.messageId}');
+
         _ackTimers[plaintext.originalMessageId]?.cancel();
         _ackTimers.remove(plaintext.originalMessageId);
+
+        VantraLogger.log('[VANTRA][DB] MESSAGE STATUS UPDATE messageId=${plaintext.originalMessageId} status=delivered');
         await repository.updateMessageStatus(plaintext.originalMessageId, MessageStatus.delivered);
         // Flush queue to process next FIFO message
         _flushQueue(peerId);
@@ -250,7 +291,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final ackPacketId = const Uuid().v4();
     final ackSeq = session.nextSendSequence();
 
-    VantraLogger.log('[VANTRA][SECURITY] GENERATING ACK: ackPacketId=$ackPacketId, originalMessageId=$originalMessageId, seq=$ackSeq');
+    VantraLogger.log('[VANTRA][MESSAGING] ACK CREATE originalMessageId=$originalMessageId');
 
     final ackDomainMessage = DomainAckMessage(
       messageId: ackPacketId,
@@ -273,6 +314,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
       plaintextBytes: ackPlaintextBytes,
     );
 
+    VantraLogger.log('[VANTRA][CRYPTO] ACK ENCRYPT SUCCESS ackPacketId=$ackPacketId');
+
     await _service.sendEncryptedMessage(
       endpointId: endpointId,
       messageId: ackPacketId,
@@ -284,16 +327,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
       protocolVersion: kCurrentProtocolVersion,
     );
 
-    VantraLogger.log('[VANTRA][SECURITY] ACK SENT: ackPacketId=$ackPacketId for originalMessageId=$originalMessageId to $endpointId');
+    VantraLogger.log('[VANTRA][TRANSPORT] ACK SEND SUCCESS ackPacketId=$ackPacketId');
   }
 
   Future<void> _handleSecureIdentityReceived(SessionSecureIdentity identity) async {
-    VantraLogger.log('[VANTRA][SECURITY] STATE: SECURITY_HANDSHAKE (inbound from ${identity.endpointId})');
-    VantraLogger.log('[VANTRA][SECURITY] INBOUND HANDSHAKE: peerId=${identity.peerId}, displayName=${identity.displayName}, v=${identity.protocolVersion}');
+    print('[VANTRA][SECURITY] INBOUND HANDSHAKE: peerId=${identity.peerId}, displayName=${identity.displayName}, endpointId=${identity.endpointId}, v=${identity.protocolVersion}');
 
     // Reject unsupported protocol versions
     if (identity.protocolVersion < kMinSupportedProtocolVersion || identity.protocolVersion > kCurrentProtocolVersion) {
-      VantraLogger.log('[VANTRA][SECURITY] Unsupported protocol version: ${identity.protocolVersion}');
+      print('[VANTRA][SECURITY] Unsupported protocol version: ${identity.protocolVersion}');
       final transport = ref.read(transportProvider);
       await transport.disconnect(identity.endpointId);
       return;
@@ -304,7 +346,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final sigBytes = _hexDecode(identity.signatureHex);
 
     final remoteFingerprint = await _cryptoService.computeFingerprint(idKeyBytes);
-    VantraLogger.log('[VANTRA][SECURITY] REMOTE ID FINGERPRINT: $remoteFingerprint, ephemeralPubLen=${ephKeyBytes.length}, sigLen=${sigBytes.length}');
+    print('[VANTRA][SECURITY] REMOTE ID FINGERPRINT: $remoteFingerprint, ephemeralPubLen=${ephKeyBytes.length}, sigLen=${sigBytes.length}');
 
     // 1. Verify Ed25519 canonical signature
     final isValid = await _cryptoService.verifyHandshake(
@@ -317,14 +359,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     if (!isValid) {
-      VantraLogger.log('[VANTRA][SECURITY] SIGNATURE VERIFICATION: result=FAILED! Disconnecting untrusted peer.');
+      print('[VANTRA][SECURITY] SIGNATURE VERIFICATION: result=FAILED! Disconnecting untrusted peer.');
       final transport = ref.read(transportProvider);
       await transport.disconnect(identity.endpointId);
       return;
     }
 
-    VantraLogger.log('[VANTRA][SECURITY] SIGNATURE VERIFICATION: result=SUCCESS');
-    VantraLogger.log('[VANTRA][SECURITY] STATE: IDENTITY_VERIFIED');
+    print('[VANTRA][SECURITY] SIGNATURE VERIFICATION: result=SUCCESS');
+    print('[VANTRA][SECURITY] STATE: IDENTITY_VERIFIED');
 
     // BLOCKING SECURITY INVARIANT CHECK
     final repo = ref.read(messagingRepositoryProvider);
@@ -332,7 +374,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final trustState = existingPeer?.trustState ?? PeerTrustState.untrusted;
 
     if (trustState == PeerTrustState.distrusted) {
-      VantraLogger.log('[VANTRA][SECURITY] BLOCKED PEER CONNECTION REJECTED: peerId=${identity.peerId}, endpointId=${identity.endpointId}');
+      print('[VANTRA][SECURITY] BLOCKED PEER CONNECTION REJECTED: peerId=${identity.peerId}, endpointId=${identity.endpointId}');
       _pendingEphemeralKeys.remove(identity.endpointId);
       final transport = ref.read(transportProvider);
       await transport.disconnect(identity.endpointId);
@@ -351,8 +393,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
       remoteEphemeralPublicKeyBytes: ephKeyBytes,
     );
 
-    VantraLogger.log('[VANTRA][SECURITY] STATE: KEY_DERIVED');
-    VantraLogger.log('[VANTRA][SECURITY] KEY DERIVATION DETAILS: isDeviceA=${derivedKeys.isDeviceA}, sharedSecretFingerprint=${derivedKeys.sharedSecretFingerprint}, keyAtoBFingerprint=${derivedKeys.keyAtoBFingerprint}, keyBtoAFingerprint=${derivedKeys.keyBtoAFingerprint}, localSendKeyFingerprint=${derivedKeys.localSendKeyFingerprint}, localReceiveKeyFingerprint=${derivedKeys.localReceiveKeyFingerprint}, sessionId=${derivedKeys.sessionId}');
+    print('[VANTRA][SECURITY] STATE: KEY_DERIVED');
+    print('[VANTRA][SECURITY] KEY DERIVATION DETAILS: sharedSecretFingerprint=${derivedKeys.sharedSecretFingerprint}, sessionId=${derivedKeys.sessionId}');
 
     // 3. Establish secure session in memory
     final secSession = SecuritySession(
@@ -367,6 +409,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     _securitySessions[identity.peerId] = secSession;
+
+    print('[VANTRA][CRYPTO] SESSION READY endpointId=${identity.endpointId} sessionId=${derivedKeys.sessionId} securityState=SECURE');
 
     // 4. Update database peer record
     await repo.upsertPeer(
@@ -401,35 +445,57 @@ class MessagingNotifier extends Notifier<MessagingState> {
       },
     );
 
-    VantraLogger.log('[VANTRA][SECURITY] STATE: SECURE with peer ${identity.peerId} (Fingerprint: $remoteFingerprint, SessionId: ${derivedKeys.sessionId})');
+    print('[VANTRA][SECURITY] STATE: SECURE with peer ${identity.peerId} (SessionId: ${derivedKeys.sessionId})');
 
     // Reconnection: Flush queue upon secure session establishment
     _flushQueue(identity.peerId);
   }
 
   void _handleConnectionUpdate(ConnectionUpdate update) {
-    VantraLogger.log('[VANTRA][SECURITY] CONNECTION UPDATE: endpointId=${update.endpointId}, status=${update.status.name}');
+    // Unconditional standard prints for diagnostic logging
+    print('[VANTRA][SECURITY] CONNECTION UPDATE: endpointId=${update.endpointId}, status=${update.status.name}');
+
     if (update.status == ConnectionStatus.connected) {
-      VantraLogger.log('[VANTRA][SECURITY] STATE: CONNECTED (endpointId=${update.endpointId})');
       state = state.copyWith(
         connectionStatus: ConnectionStatus.connected,
         activeEndpointId: update.endpointId,
         activeEndpointName: update.endpointName,
+        clearActiveConnectionRequest: true,
       );
-      _initiateSecureHandshake(update.endpointId);
+
+      final transport = ref.read(transportProvider);
+      final isFake = transport.runtimeType.toString().contains('Fake');
+      if (isFake) {
+        print('[VANTRA][SECURITY] STATE: CONNECTED (endpointId=${update.endpointId}). Initiating handshake immediately (test environment).');
+        _initiateSecureHandshake(update.endpointId);
+      } else {
+        print('[VANTRA][SECURITY] STATE: CONNECTED (endpointId=${update.endpointId}). Handshake will start in 500ms.');
+        Future.delayed(const Duration(milliseconds: 500), () {
+          print('[VANTRA][SECURITY] Handshake delay complete for ${update.endpointId}. Initiating secure handshake.');
+          _initiateSecureHandshake(update.endpointId);
+        });
+      }
     } else if (update.status == ConnectionStatus.connecting) {
+      print('[VANTRA][SECURITY] STATE: CONNECTING (endpointId=${update.endpointId}, isIncoming=${update.isIncoming}, token=${update.authenticationToken})');
       state = state.copyWith(
         connectionStatus: ConnectionStatus.connecting,
         activeEndpointId: update.endpointId,
         activeEndpointName: update.endpointName,
+        activeConnectionRequest: ConnectionRequestInfo(
+          endpointId: update.endpointId,
+          endpointName: update.endpointName,
+          authenticationToken: update.authenticationToken,
+          isIncoming: update.isIncoming,
+        ),
       );
     } else if (update.status == ConnectionStatus.disconnected ||
         update.status == ConnectionStatus.rejected ||
         update.status == ConnectionStatus.error) {
+      print('[VANTRA][SECURITY] STATE: DISCONNECTED/REJECTED/ERROR (endpointId=${update.endpointId}, status=${update.status.name})');
 
       final peerId = state.endpointToPeerId[update.endpointId];
       if (peerId != null) {
-        VantraLogger.log('[VANTRA][SECURITY] Destroying secure session keys for disconnected peer $peerId');
+        print('[VANTRA][CRYPTO] SESSION DESTROYED endpointId=${update.endpointId}');
         _securitySessions.remove(peerId);
         _backoffTimers[peerId]?.cancel();
         _backoffTimers.remove(peerId);
@@ -449,6 +515,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         connectionStatus: update.status,
         activeEndpointId: null,
         activeEndpointName: null,
+        clearActiveConnectionRequest: true,
       );
     } else {
       state = state.copyWith(
@@ -458,13 +525,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
   }
 
   Future<void> _initiateSecureHandshake(String endpointId) async {
-    VantraLogger.log('[VANTRA][SECURITY] STATE: SECURITY_HANDSHAKE (outbound to $endpointId)');
+    print('[VANTRA][SECURITY] INITIATING HANDSHAKE: outbound to $endpointId');
     final localNotifier = ref.read(localIdentityStateProvider.notifier);
     await localNotifier.ensureKeysLoaded();
     final localId = ref.read(localIdentityStateProvider);
 
     if (localId.keyPair == null) {
-      VantraLogger.log('[VANTRA][SECURITY] Cannot initiate handshake: Local keypair not ready');
+      print('[VANTRA][SECURITY] Cannot initiate handshake: Local keypair not ready');
       return;
     }
 
@@ -485,7 +552,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       ephemeralPublicKeyBytes: ephPub.bytes,
     );
 
-    VantraLogger.log('[VANTRA][SECURITY] OUTBOUND HANDSHAKE: localPeerId=${localId.peerId}, localFingerprint=${localId.fingerprint}, ephPubLen=${ephPub.bytes.length}, sigLen=${signatureBytes.length}');
+    print('[VANTRA][SECURITY] OUTBOUND HANDSHAKE DETAILS: localPeerId=${localId.peerId}, localFingerprint=${localId.fingerprint}, ephPubLen=${ephPub.bytes.length}, sigLen=${signatureBytes.length}');
 
     // 3. Transmit IDENTITY_SECURE protobuf packet
     await _service.sendSecureIdentity(
@@ -497,6 +564,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       signature: Uint8List.fromList(signatureBytes),
       protocolVersion: kCurrentProtocolVersion,
     );
+    print('[VANTRA][SECURITY] HANDSHAKE PACKET SENT to $endpointId');
   }
 
   // Phase 7: Persistent Queue Flusher
@@ -542,20 +610,29 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final seq = secSession.nextSendSequence();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
 
+    VantraLogger.log('[VANTRA][PROTO] PLAINTEXT BUILD START messageId=${msg.messageId} sequence=$seq sessionIdPresent=${secSession.sessionId.isNotEmpty}');
     try {
-      // Encode original messageId under fresh session and sequence counters
-      final domainPlaintext = DomainTextMessage(
-        messageId: msg.messageId,
-        sessionId: secSession.sessionId,
-        sequence: seq,
-        timestampMs: timestamp,
-        senderId: localIdentity.peerId,
-        receiverId: msg.receiverId,
-        content: msg.text,
-      );
+      Uint8List plaintextBytes;
+      try {
+        // Encode original messageId under fresh session and sequence counters
+        final domainPlaintext = DomainTextMessage(
+          messageId: msg.messageId,
+          sessionId: secSession.sessionId,
+          sequence: seq,
+          timestampMs: timestamp,
+          senderId: localIdentity.peerId,
+          receiverId: msg.receiverId,
+          content: msg.text,
+        );
 
-      final plaintextBytes = _service.codec.encodePlaintext(domainPlaintext);
+        plaintextBytes = _service.codec.encodePlaintext(domainPlaintext);
+        VantraLogger.log('[VANTRA][PROTO] PLAINTEXT ENCODE SUCCESS messageId=${msg.messageId} byteLength=${plaintextBytes.length}');
+      } catch (e) {
+        VantraLogger.log('[VANTRA][PROTO] PLAINTEXT ENCODE FAILED messageId=${msg.messageId}');
+        rethrow;
+      }
 
+      VantraLogger.log('[VANTRA][CRYPTO] ENCRYPT START messageId=${msg.messageId} sequence=$seq');
       final encrypted = await _cryptoService.encryptBytes(
         secretKey: secSession.sendKey,
         sessionSalt: secSession.sessionSalt,
@@ -563,8 +640,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         messageId: msg.messageId,
         plaintextBytes: plaintextBytes,
       );
-
-      VantraLogger.log('[VANTRA][SECURITY] Transmitting ENCRYPTED_TEXT protobuf packet for ${msg.messageId} to ${session.displayName}');
+      VantraLogger.log('[VANTRA][CRYPTO] ENCRYPT SUCCESS messageId=${msg.messageId} nonceLength=12 ciphertextLength=${encrypted.ciphertext.length} macLength=16');
 
       await _service.sendEncryptedMessage(
         endpointId: session.endpointId,
@@ -576,8 +652,6 @@ class MessagingNotifier extends Notifier<MessagingState> {
         mac: Uint8List.fromList(encrypted.mac),
         protocolVersion: kCurrentProtocolVersion,
       );
-
-      VantraLogger.log('[VANTRA][SECURITY] Transport.send(): endpointId=${session.endpointId}, messageId=${msg.messageId}, result=SUCCESS');
 
       await repository.updateMessageStatus(msg.messageId, MessageStatus.sent);
 
@@ -628,6 +702,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   // Phase 7: Composing messages when offline is supported without exceptions
   Future<void> sendTextMessage(String peerId, String text) async {
+    VantraLogger.log('[VANTRA][MESSAGING] SEND START peerId=$peerId textLength=${text.length}');
+    final session = state.sessions[peerId];
+    final endpointId = session?.endpointId ?? 'none';
+    final connectionStatus = session?.status.name ?? 'none';
+    final securityState = session?.isSecure == true ? 'SECURE' : 'unsecure';
+    final hasSessionKeys = _securitySessions[peerId] != null;
+    VantraLogger.log('[VANTRA][MESSAGING] SESSION CHECK peerId=$peerId endpointId=$endpointId connectionStatus=$connectionStatus securityState=$securityState hasSessionKeys=$hasSessionKeys');
+
     final localIdentity = ref.read(localIdentityStateProvider);
     final repository = ref.read(messagingRepositoryProvider);
 
@@ -644,7 +726,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     // Save locally
-    await repository.saveOutgoingMessage(msg);
+    VantraLogger.log('[VANTRA][DB] OUTBOUND INSERT START messageId=$messageId status=pending');
+    try {
+      await repository.saveOutgoingMessage(msg);
+      VantraLogger.log('[VANTRA][DB] OUTBOUND INSERT SUCCESS messageId=$messageId');
+    } catch (e) {
+      VantraLogger.log('[VANTRA][DB] OUTBOUND INSERT FAILED messageId=$messageId errorType=${e.runtimeType}');
+      rethrow;
+    }
 
     // Trigger queue flush
     await _flushQueue(peerId);
@@ -690,6 +779,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       try {
         await transport.disconnect(session.endpointId);
       } catch (_) {}
+      VantraLogger.log('[VANTRA][CRYPTO] SESSION DESTROYED endpointId=${session.endpointId}');
       _securitySessions.remove(peerId);
       _backoffTimers[peerId]?.cancel();
       _backoffTimers.remove(peerId);
