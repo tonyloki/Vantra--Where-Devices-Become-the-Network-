@@ -8,6 +8,7 @@ import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/networking/nearby_connection_service.dart';
+import 'package:vantra/core/themes/vantra_theme.dart';
 import 'package:vantra/core/utils/logger.dart';
 
 import 'features/onboarding/onboarding_page.dart';
@@ -87,10 +88,7 @@ class VantraApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'VANTRA',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple, brightness: Brightness.dark),
-        useMaterial3: true,
-      ),
+      theme: VantraTheme.darkTheme,
       routerConfig: _router,
       builder: (context, child) {
         return GlobalConnectionListener(child: child!);
@@ -114,59 +112,59 @@ class GlobalConnectionListener extends ConsumerWidget {
         if (request != null)
           Positioned.fill(
             child: Material(
-              color: Colors.black54,
+              color: Colors.black87,
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
+                filter: ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0),
                 child: Center(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24.0),
                     child: Card(
-                      elevation: 12,
+                      color: VantraTheme.surface.withValues(alpha: 0.9),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16.0),
-                        side: const BorderSide(color: Colors.deepPurpleAccent, width: 1.5),
+                        side: const BorderSide(color: VantraTheme.primary, width: 1.5),
                       ),
-                      color: const Color(0xFF1C1B1F).withValues(alpha: 0.9),
                       child: Padding(
                         padding: const EdgeInsets.all(24.0),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Icon(
-                              Icons.wifi_tethering,
+                              Icons.cell_tower_rounded,
                               size: 48,
-                              color: Colors.deepPurpleAccent,
+                              color: VantraTheme.primaryAccent,
                             ),
                             const SizedBox(height: 16),
                             Text(
                               request.isIncoming
-                                  ? 'Incoming Request'
+                                  ? 'Connection Request'
                                   : 'Outgoing Request',
                               style: const TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.white,
+                                color: VantraTheme.textPrimary,
                               ),
                             ),
                             const SizedBox(height: 12),
                             Text(
                               'Device: ${request.endpointName}',
-                              style: const TextStyle(fontSize: 16, color: Colors.white),
+                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: VantraTheme.textPrimary),
                               textAlign: TextAlign.center,
                             ),
-                            Text(
-                              'ID: ${request.endpointId}',
-                              style: const TextStyle(fontSize: 12, color: Colors.grey),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Establish secure offline pairing connection',
+                              style: TextStyle(fontSize: 12, color: VantraTheme.textSecondary),
                               textAlign: TextAlign.center,
                             ),
                             if (request.authenticationToken != null) ...[
-                              const SizedBox(height: 16),
+                              const SizedBox(height: 20),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                                 decoration: BoxDecoration(
-                                  color: Colors.deepPurple.shade900.withValues(alpha: 0.5),
+                                  color: VantraTheme.background,
                                   borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.deepPurpleAccent.withValues(alpha: 0.3)),
+                                  border: Border.all(color: Colors.white10),
                                 ),
                                 child: Text(
                                   'Pairing Code: ${request.authenticationToken}',
@@ -174,7 +172,7 @@ class GlobalConnectionListener extends ConsumerWidget {
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
                                     letterSpacing: 2,
-                                    color: Colors.amberAccent,
+                                    color: VantraTheme.amberWarning,
                                   ),
                                 ),
                               ),
@@ -183,34 +181,32 @@ class GlobalConnectionListener extends ConsumerWidget {
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                               children: [
-                                OutlinedButton(
-                                  onPressed: () {
-                                    ref.read(transportProvider).rejectConnection(request.endpointId);
-                                  },
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.redAccent,
-                                    side: const BorderSide(color: Colors.redAccent),
-                                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () {
+                                      ref.read(transportProvider).rejectConnection(request.endpointId);
+                                    },
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: VantraTheme.redBlocked,
+                                      side: const BorderSide(color: VantraTheme.redBlocked),
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
                                     ),
+                                    child: const Text('REJECT'),
                                   ),
-                                  child: const Text('REJECT'),
                                 ),
-                                const SizedBox(width: 16),
-                                ElevatedButton(
-                                  onPressed: () {
-                                    ref.read(transportProvider).acceptConnection(request.endpointId);
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.deepPurpleAccent,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () {
+                                      ref.read(transportProvider).acceptConnection(request.endpointId);
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: VantraTheme.greenVerified,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
                                     ),
+                                    child: const Text('ACCEPT'),
                                   ),
-                                  child: const Text('ACCEPT'),
                                 ),
                               ],
                             ),
@@ -347,11 +343,13 @@ class _SplashPageState extends ConsumerState<SplashPage> with SingleTickerProvid
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Image.asset(
-                    'lib/Assets/Logo.png',
-                    width: 140,
-                    height: 140,
-                    fit: BoxFit.contain,
+                  LogoPulseWidget(
+                    child: Image.asset(
+                      'lib/Assets/Logo.png',
+                      width: 140,
+                      height: 140,
+                      fit: BoxFit.contain,
+                    ),
                   ),
                   const SizedBox(height: 24),
                   const Text(
@@ -472,5 +470,78 @@ class _SplashPageState extends ConsumerState<SplashPage> with SingleTickerProvid
       case NearbyServiceStatus.ready:
         return const SizedBox.shrink();
     }
+  }
+}
+
+class LogoPulseWidget extends StatefulWidget {
+  final Widget child;
+  const LogoPulseWidget({super.key, required this.child});
+
+  @override
+  State<LogoPulseWidget> createState() => _LogoPulseWidgetState();
+}
+
+class _LogoPulseWidgetState extends State<LogoPulseWidget> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // Ring 1
+        AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            final progress = _controller.value;
+            return Container(
+              width: 140 + (progress * 80),
+              height: 140 + (progress * 80),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: VantraTheme.primary.withValues(alpha: (1.0 - progress) * 0.3),
+                  width: 1.5,
+                ),
+              ),
+            );
+          },
+        ),
+        // Ring 2
+        AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            final progress = (_controller.value + 0.5) % 1.0;
+            return Container(
+              width: 140 + (progress * 80),
+              height: 140 + (progress * 80),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: VantraTheme.primary.withValues(alpha: (1.0 - progress) * 0.15),
+                  width: 1.5,
+                ),
+              ),
+            );
+          },
+        ),
+        widget.child,
+      ],
+    );
   }
 }

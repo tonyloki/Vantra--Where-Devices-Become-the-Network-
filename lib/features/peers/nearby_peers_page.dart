@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/peers/peer_provider.dart';
-
+import 'package:vantra/core/themes/vantra_theme.dart';
 import 'package:vantra/core/networking/nearby_connection_service.dart';
 
 class NearbyPeersPage extends ConsumerStatefulWidget {
@@ -25,12 +25,12 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Nearby Devices', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Nearby Devices'),
         actions: [
           IconButton(
-            icon: Icon(isDiscovering ? Icons.stop_circle_outlined : Icons.play_circle_outline),
+            icon: Icon(isDiscovering ? Icons.stop_circle_outlined : Icons.play_circle_outline_rounded),
             tooltip: isDiscovering ? 'Stop Scanning' : 'Start Scanning',
-            color: isDiscovering ? Colors.amberAccent : Colors.greenAccent,
+            color: isDiscovering ? VantraTheme.amberWarning : VantraTheme.greenVerified,
             onPressed: () {
               if (isDiscovering) {
                 ref.read(nearbyConnectionServiceProvider.notifier).stopAll();
@@ -45,29 +45,33 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
         children: [
           if (connectionState.status != NearbyServiceStatus.ready)
             _buildGlobalStatusBanner(connectionState),
+          
           // Scanning status banner
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            color: isDiscovering ? Colors.deepPurple.shade900.withValues(alpha: 0.4) : const Color(0xFF1E1E1E),
+            decoration: const BoxDecoration(
+              color: VantraTheme.surface,
+              border: Border(bottom: BorderSide(color: Colors.white10, width: 0.5)),
+            ),
             child: Row(
               children: [
                 if (isDiscovering)
                   const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.deepPurpleAccent),
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: VantraTheme.primary),
                   )
                 else
-                  const Icon(Icons.radar_outlined, size: 20, color: Colors.grey),
+                  const Icon(Icons.radar_rounded, size: 18, color: VantraTheme.textMuted),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     isDiscovering
                         ? 'Scanning for offline peers nearby...'
-                        : 'Scanning paused. Tap start to find devices.',
+                        : 'Scanning paused. Tap start to discover.',
                     style: TextStyle(
                       fontSize: 13,
-                      color: isDiscovering ? Colors.white : Colors.grey,
+                      color: isDiscovering ? VantraTheme.textPrimary : VantraTheme.textSecondary,
                       fontWeight: isDiscovering ? FontWeight.w600 : FontWeight.normal,
                     ),
                   ),
@@ -80,7 +84,10 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                       ref.read(nearbyConnectionServiceProvider.notifier).initialize();
                     }
                   },
-                  child: Text(isDiscovering ? 'STOP' : 'SCAN'),
+                  child: Text(
+                    isDiscovering ? 'STOP' : 'SCAN',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                 ),
               ],
             ),
@@ -96,21 +103,24 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            isDiscovering ? Icons.wifi_tethering : Icons.wifi_tethering_off,
-                            size: 64,
-                            color: isDiscovering ? Colors.deepPurpleAccent : Colors.grey,
-                          ),
-                          const SizedBox(height: 16),
+                          if (isDiscovering)
+                            const ScanningPulseCircle()
+                          else
+                            Icon(
+                              Icons.wifi_tethering_off_rounded,
+                              size: 64,
+                              color: VantraTheme.textMuted.withValues(alpha: 0.5),
+                            ),
+                          const SizedBox(height: 24),
                           Text(
                             isDiscovering ? 'Searching for devices nearby' : 'No devices found',
                             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 12),
                           const Text(
                             'Ensure the other device is advertising or in range with Wi-Fi & Bluetooth enabled.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey, fontSize: 13),
+                            style: TextStyle(color: VantraTheme.textSecondary, fontSize: 13, height: 1.4),
                           ),
                         ],
                       ),
@@ -133,16 +143,18 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                       leading: CircleAvatar(
                         radius: 24,
-                        backgroundColor: isConnected ? Colors.green.shade800 : Colors.deepPurple.shade700,
+                        backgroundColor: isConnected
+                            ? VantraTheme.greenVerified.withValues(alpha: 0.15)
+                            : VantraTheme.primary.withValues(alpha: 0.15),
                         child: Icon(
-                          isConnected ? Icons.lock : Icons.devices,
-                          color: Colors.white,
+                          isConnected ? Icons.lock_outline_rounded : Icons.cell_tower_rounded,
+                          color: isConnected ? VantraTheme.greenVerified : VantraTheme.primaryAccent,
                           size: 22,
                         ),
                       ),
                       title: Text(
                         peer.effectiveName,
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.bold),
                       ),
                       subtitle: Text(
                         isConnected
@@ -153,34 +165,31 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                         style: TextStyle(
                           fontSize: 13,
                           color: isConnected
-                              ? Colors.greenAccent
+                              ? VantraTheme.greenVerified
                               : isConnecting
-                                  ? Colors.amberAccent
-                                  : Colors.grey,
+                                  ? VantraTheme.amberWarning
+                                  : VantraTheme.textSecondary,
                         ),
                       ),
                       trailing: isConnected
                           ? ElevatedButton.icon(
                               onPressed: () => context.push('/chat/$resolvedPeerId'),
-                              icon: const Icon(Icons.chat, size: 16),
+                              icon: const Icon(Icons.chat_bubble_outline_rounded, size: 15),
                               label: const Text('Chat'),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green.shade700,
-                                foregroundColor: Colors.white,
+                                backgroundColor: VantraTheme.greenVerified,
                                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                               ),
                             )
                           : isConnecting
                               ? const SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: VantraTheme.primary),
                                 )
                               : OutlinedButton(
                                   onPressed: () => discoveryService.connect(peer.endpointId),
                                   style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.deepPurpleAccent,
-                                    side: const BorderSide(color: Colors.deepPurpleAccent),
                                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                                   ),
                                   child: const Text('Connect'),
@@ -189,8 +198,13 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                   },
                 );
               },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (err, _) => Center(child: Text('Error: $err', style: const TextStyle(color: Colors.redAccent))),
+              loading: () => const Center(child: CircularProgressIndicator(color: VantraTheme.primary)),
+              error: (err, _) => Center(
+                child: Text(
+                  'Error: $err',
+                  style: const TextStyle(color: VantraTheme.redBlocked),
+                ),
+              ),
             ),
           ),
         ],
@@ -201,38 +215,38 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
   Widget _buildGlobalStatusBanner(NearbyConnectionState state) {
     String message = '';
     String buttonText = '';
-    Color color = Colors.amber;
+    Color color = VantraTheme.amberWarning;
     VoidCallback? onPressed;
 
     if (state.status == NearbyServiceStatus.permissionsRequired) {
       message = 'Nearby permissions are required to discover peers.';
       buttonText = 'GRANT';
-      color = Colors.redAccent;
+      color = VantraTheme.redBlocked;
       onPressed = () => ref.read(nearbyConnectionServiceProvider.notifier).initialize();
     } else if (state.status == NearbyServiceStatus.locationDisabled) {
       message = 'Location services (GPS) are disabled.';
       buttonText = 'ENABLE';
-      color = Colors.amber;
+      color = VantraTheme.amberWarning;
       onPressed = () => ref.read(nearbyConnectionServiceProvider.notifier).initialize();
     } else if (state.status == NearbyServiceStatus.error) {
       message = 'Error: ${state.errorMessage}';
       buttonText = 'RETRY';
-      color = Colors.redAccent;
+      color = VantraTheme.redBlocked;
       onPressed = () => ref.read(nearbyConnectionServiceProvider.notifier).initialize();
     } else if (state.status == NearbyServiceStatus.initializing) {
       message = 'Initializing Nearby services...';
-      color = Colors.deepPurple;
+      color = VantraTheme.primary;
     }
 
     if (message.isEmpty) return const SizedBox.shrink();
 
     return Container(
       width: double.infinity,
-      color: color.withValues(alpha: 0.15),
+      color: color.withValues(alpha: 0.1),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          Icon(Icons.warning_amber_rounded, color: color),
+          Icon(Icons.warning_amber_rounded, color: color, size: 20),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -245,13 +259,88 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
               onPressed: onPressed,
               style: ElevatedButton.styleFrom(
                 backgroundColor: color,
-                foregroundColor: color == Colors.amber ? Colors.black : Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                foregroundColor: color == VantraTheme.amberWarning ? Colors.black : Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               ),
-              child: Text(buttonText, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              child: Text(
+                buttonText,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
             ),
         ],
       ),
+    );
+  }
+}
+
+class ScanningPulseCircle extends StatefulWidget {
+  const ScanningPulseCircle({super.key});
+
+  @override
+  State<ScanningPulseCircle> createState() => _ScanningPulseCircleState();
+}
+
+class _ScanningPulseCircleState extends State<ScanningPulseCircle> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final progress = _controller.value;
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 80 + (progress * 120),
+              height: 80 + (progress * 120),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: VantraTheme.primary.withValues(alpha: (1.0 - progress) * 0.4),
+                  width: 2,
+                ),
+              ),
+            ),
+            Container(
+              width: 80 + (((progress + 0.5) % 1.0) * 120),
+              height: 80 + (((progress + 0.5) % 1.0) * 120),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: VantraTheme.primary.withValues(alpha: (1.0 - ((progress + 0.5) % 1.0)) * 0.2),
+                  width: 2,
+                ),
+              ),
+            ),
+            CircleAvatar(
+              radius: 40,
+              backgroundColor: VantraTheme.primary.withValues(alpha: 0.1),
+              child: const Icon(
+                Icons.wifi_tethering_rounded,
+                size: 36,
+                color: VantraTheme.primaryAccent,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

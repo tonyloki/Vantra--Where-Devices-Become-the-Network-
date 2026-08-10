@@ -25,7 +25,7 @@
     <application
         android:label="vantra"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@mipmap/launcher_icon"
         android:allowBackup="false">
         <activity
             android:name=".MainActivity"

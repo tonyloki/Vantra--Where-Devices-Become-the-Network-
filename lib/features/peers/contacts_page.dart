@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vantra/core/models/peer_profile.dart';
 import 'package:vantra/core/peers/peer_provider.dart';
+import 'package:vantra/core/themes/vantra_theme.dart';
 
 class ContactsPage extends ConsumerStatefulWidget {
   const ContactsPage({super.key});
@@ -21,10 +22,10 @@ class _ContactsPageState extends ConsumerState<ContactsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Contacts & Peers', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Contacts'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.person_add_alt_1),
+            icon: const Icon(Icons.person_add_alt_1_rounded),
             tooltip: 'Discover Nearby',
             onPressed: () => context.push('/nearby'),
           ),
@@ -36,14 +37,16 @@ class _ContactsPageState extends ConsumerState<ContactsPage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: TextField(
+              style: const TextStyle(color: VantraTheme.textPrimary),
               decoration: InputDecoration(
                 hintText: 'Search contacts by name or nickname...',
-                prefixIcon: const Icon(Icons.search),
+                hintStyle: const TextStyle(color: VantraTheme.textMuted),
+                prefixIcon: const Icon(Icons.search_rounded, color: VantraTheme.textMuted),
                 filled: true,
-                fillColor: const Color(0xFF1E1E1E),
+                fillColor: VantraTheme.surface,
                 contentPadding: const EdgeInsets.symmetric(vertical: 0),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(24),
                   borderSide: BorderSide.none,
                 ),
               ),
@@ -54,11 +57,11 @@ class _ContactsPageState extends ConsumerState<ContactsPage> {
           // Filter chips
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
                 ChoiceChip(
-                  label: const Text('All Peers'),
+                  label: const Text('All Contacts'),
                   selected: _selectedFilterIndex == 0,
                   onSelected: (_) => setState(() => _selectedFilterIndex = 0),
                 ),
@@ -66,20 +69,20 @@ class _ContactsPageState extends ConsumerState<ContactsPage> {
                 ChoiceChip(
                   label: const Text('Trusted'),
                   selected: _selectedFilterIndex == 1,
-                  avatar: const Icon(Icons.verified, size: 16, color: Colors.greenAccent),
-                  onSelected: (_) => setState(() => _selectedFilterIndex = 1),
+                  avatar: const Icon(Icons.verified_rounded, size: 16, color: VantraTheme.greenVerified),
+                  onSelected: (_) => setState(() => _selectedFilterIndex == 1),
                 ),
                 const SizedBox(width: 8),
                 ChoiceChip(
                   label: const Text('Blocked'),
                   selected: _selectedFilterIndex == 2,
-                  avatar: const Icon(Icons.block, size: 16, color: Colors.redAccent),
-                  onSelected: (_) => setState(() => _selectedFilterIndex = 2),
+                  avatar: const Icon(Icons.block_flipped, size: 16, color: VantraTheme.redBlocked),
+                  onSelected: (_) => setState(() => _selectedFilterIndex == 2),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
 
           // Peer list
           Expanded(
@@ -99,42 +102,96 @@ class _ContactsPageState extends ConsumerState<ContactsPage> {
                   return true;
                 }).toList();
 
+                // Sort alphabetically by effective name
+                filtered.sort((a, b) => a.effectiveName.toLowerCase().compareTo(b.effectiveName.toLowerCase()));
+
                 if (filtered.isEmpty) {
                   return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.contacts_outlined, size: 64, color: Colors.grey.shade600),
-                        const SizedBox(height: 16),
-                        Text(
-                          _searchQuery.isNotEmpty
-                              ? 'No matching peers found'
-                              : _selectedFilterIndex == 1
-                                  ? 'No trusted peers yet'
-                                  : _selectedFilterIndex == 2
-                                      ? 'No blocked peers'
-                                      : 'No contacts yet',
-                          style: const TextStyle(fontSize: 16, color: Colors.grey),
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.contacts_outlined,
+                                size: 56,
+                                color: VantraTheme.primary.withValues(alpha: 0.5),
+                              ),
+                              const SizedBox(height: 24),
+                              Text(
+                                _searchQuery.isNotEmpty
+                                    ? 'No matching peers found'
+                                    : _selectedFilterIndex == 1
+                                        ? 'No trusted peers yet'
+                                        : _selectedFilterIndex == 2
+                                            ? 'No blocked peers'
+                                            : 'No contacts yet',
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: VantraTheme.textPrimary),
+                              ),
+                              if (_searchQuery.isEmpty && _selectedFilterIndex == 0) ...[
+                                const SizedBox(height: 12),
+                                const Text(
+                                  'Find nearby devices and connect to add them to your offline contacts list.',
+                                  style: TextStyle(fontSize: 13, color: VantraTheme.textSecondary, height: 1.4),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 24),
+                                ElevatedButton.icon(
+                                  onPressed: () => context.push('/nearby'),
+                                  icon: const Icon(Icons.radar_rounded),
+                                  label: const Text('Discover Nearby'),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                      ],
+                      ),
                     ),
                   );
                 }
 
-                return ListView.separated(
+                // Render contact items with alphabetical headers
+                return ListView.builder(
+                  padding: const EdgeInsets.only(bottom: 16),
                   itemCount: filtered.length,
-                  separatorBuilder: (context, index) => const Divider(height: 1, indent: 72, color: Colors.white10),
                   itemBuilder: (context, index) {
                     final peer = filtered[index];
-                    return _ContactListTile(
-                      peer: peer,
-                      onTap: () => context.push('/peer/${peer.peerId}'),
+                    final currentLetter = peer.effectiveName.isNotEmpty
+                        ? peer.effectiveName[0].toUpperCase()
+                        : '?';
+                    final showHeader = index == 0 ||
+                        (filtered[index - 1].effectiveName.isNotEmpty &&
+                            filtered[index - 1].effectiveName[0].toUpperCase() != currentLetter);
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (showHeader)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 16, top: 16, bottom: 8),
+                            child: Text(
+                              currentLetter,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: VantraTheme.primaryAccent,
+                              ),
+                            ),
+                          ),
+                        _ContactListTile(
+                          peer: peer,
+                          onTap: () => context.push('/peer/${peer.peerId}'),
+                        ),
+                      ],
                     );
                   },
                 );
               },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (err, _) => Center(child: Text('Error: $err', style: const TextStyle(color: Colors.redAccent))),
+              loading: () => const Center(child: CircularProgressIndicator(color: VantraTheme.primary)),
+              error: (err, _) => Center(child: Text('Error: $err', style: const TextStyle(color: VantraTheme.redBlocked))),
             ),
           ),
         ],
@@ -162,13 +219,21 @@ class _ContactListTile extends StatelessWidget {
           CircleAvatar(
             radius: 24,
             backgroundColor: peer.isTrusted
-                ? Colors.green.shade800
+                ? VantraTheme.greenVerified.withValues(alpha: 0.15)
                 : peer.isBlocked
-                    ? Colors.red.shade900
-                    : Colors.deepPurple.shade700,
+                    ? VantraTheme.redBlocked.withValues(alpha: 0.15)
+                    : VantraTheme.primary.withValues(alpha: 0.15),
             child: Text(
               peer.effectiveName.isNotEmpty ? peer.effectiveName[0].toUpperCase() : '?',
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                color: peer.isTrusted
+                    ? VantraTheme.greenVerified
+                    : peer.isBlocked
+                        ? VantraTheme.redBlocked
+                        : VantraTheme.primaryAccent,
+              ),
             ),
           ),
           if (peer.isOnline)
@@ -179,9 +244,9 @@ class _ContactListTile extends StatelessWidget {
                 width: 12,
                 height: 12,
                 decoration: BoxDecoration(
-                  color: Colors.greenAccent,
+                  color: VantraTheme.greenVerified,
                   shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF121212), width: 2),
+                  border: Border.all(color: VantraTheme.background, width: 2),
                 ),
               ),
             ),
@@ -194,8 +259,8 @@ class _ContactListTile extends StatelessWidget {
               peer.effectiveName,
               style: TextStyle(
                 fontWeight: FontWeight.bold,
-                fontSize: 16,
-                color: peer.isBlocked ? Colors.grey : Colors.white,
+                fontSize: 15.5,
+                color: peer.isBlocked ? VantraTheme.textMuted : VantraTheme.textPrimary,
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -204,7 +269,8 @@ class _ContactListTile extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               '(${peer.displayName})',
-              style: const TextStyle(fontSize: 13, color: Colors.grey),
+              style: const TextStyle(fontSize: 12.5, color: VantraTheme.textSecondary),
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ],
@@ -212,18 +278,18 @@ class _ContactListTile extends StatelessWidget {
       subtitle: Row(
         children: [
           if (peer.isTrusted)
-            const Text('Trusted', style: TextStyle(color: Colors.greenAccent, fontSize: 13))
+            const Text('Trusted Identity', style: TextStyle(color: VantraTheme.greenVerified, fontSize: 13))
           else if (peer.isBlocked)
-            const Text('Blocked', style: TextStyle(color: Colors.redAccent, fontSize: 13))
+            const Text('Blocked', style: TextStyle(color: VantraTheme.redBlocked, fontSize: 13))
           else
-            const Text('Untrusted Identity', style: TextStyle(color: Colors.amberAccent, fontSize: 13)),
+            const Text('Untrusted Identity', style: TextStyle(color: VantraTheme.amberWarning, fontSize: 13)),
           if (peer.isOnline) ...[
             const SizedBox(width: 8),
-            const Text('• Online', style: TextStyle(color: Colors.greenAccent, fontSize: 13)),
+            const Text('• Online', style: TextStyle(color: VantraTheme.greenVerified, fontSize: 13)),
           ],
         ],
       ),
-      trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+      trailing: const Icon(Icons.chevron_right_rounded, color: VantraTheme.textMuted),
     );
   }
 }

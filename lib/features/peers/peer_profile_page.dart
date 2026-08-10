@@ -7,6 +7,7 @@ import 'package:vantra/core/models/peer_profile.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/models/peer_trust_state.dart';
 import 'package:vantra/core/peers/peer_provider.dart';
+import 'package:vantra/core/themes/vantra_theme.dart';
 
 class PeerProfilePage extends ConsumerWidget {
   final String peerId;
@@ -39,16 +40,16 @@ class PeerProfilePage extends ConsumerWidget {
           children: [
             const Text(
               'This nickname is stored only on your device and will never be shared with others.',
-              style: TextStyle(fontSize: 13, color: Colors.grey),
+              style: TextStyle(fontSize: 13, color: VantraTheme.textSecondary),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: controller,
               autofocus: true,
+              style: const TextStyle(color: VantraTheme.textPrimary),
               decoration: const InputDecoration(
                 labelText: 'Nickname',
                 hintText: 'e.g. Alice Work',
-                border: OutlineInputBorder(),
               ),
             ),
           ],
@@ -81,6 +82,7 @@ class PeerProfilePage extends ConsumerWidget {
         title: const Text('Block this peer?'),
         content: Text(
           'You will no longer receive messages or connections from ${peer.effectiveName}.\n\nExisting conversation history will be preserved.',
+          style: const TextStyle(color: VantraTheme.textSecondary, fontSize: 14),
         ),
         actions: [
           TextButton(
@@ -88,7 +90,7 @@ class PeerProfilePage extends ConsumerWidget {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(backgroundColor: VantraTheme.redBlocked, foregroundColor: Colors.white),
             onPressed: () async {
               await ref.read(messagingStateProvider.notifier).blockPeer(peer.peerId);
               if (ctx.mounted) Navigator.pop(ctx);
@@ -103,7 +105,7 @@ class PeerProfilePage extends ConsumerWidget {
   void _showFingerprintVerificationSheet(BuildContext context, WidgetRef ref, PeerProfile peer) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: VantraTheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -115,25 +117,25 @@ class PeerProfilePage extends ConsumerWidget {
           children: [
             Row(
               children: [
-                const Icon(Icons.security, color: Colors.deepPurpleAccent, size: 28),
+                const Icon(Icons.security_rounded, color: VantraTheme.primaryAccent, size: 28),
                 const SizedBox(width: 12),
                 Text(
                   'Verify Security Fingerprint',
-                  style: Theme.of(ctx).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  style: Theme.of(ctx).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold, color: VantraTheme.textPrimary),
                 ),
               ],
             ),
             const SizedBox(height: 16),
             Text(
               'Compare this fingerprint in person or through another trusted channel with ${peer.effectiveName}:',
-              style: const TextStyle(fontSize: 14, color: Colors.white70),
+              style: const TextStyle(fontSize: 14, color: VantraTheme.textSecondary),
             ),
             const SizedBox(height: 16),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: const Color(0xFF121212),
+                color: VantraTheme.background,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.white12),
               ),
@@ -143,14 +145,14 @@ class PeerProfilePage extends ConsumerWidget {
                   fontFamily: 'monospace',
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
-                  color: Colors.greenAccent,
+                  color: VantraTheme.cyanSecurity,
                 ),
               ),
             ),
             const SizedBox(height: 16),
             const Text(
               'Only mark this device as trusted after comparing the fingerprint through another trusted channel.',
-              style: TextStyle(fontSize: 12, color: Colors.amberAccent),
+              style: TextStyle(fontSize: 12, color: VantraTheme.amberWarning, fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 24),
             Row(
@@ -171,7 +173,7 @@ class PeerProfilePage extends ConsumerWidget {
                 Expanded(
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green.shade700,
+                      backgroundColor: VantraTheme.greenVerified,
                       foregroundColor: Colors.white,
                     ),
                     onPressed: () async {
@@ -181,8 +183,8 @@ class PeerProfilePage extends ConsumerWidget {
                           );
                       if (ctx.mounted) Navigator.pop(ctx);
                     },
-                    icon: const Icon(Icons.verified),
-                    label: const Text('Mark as Trusted'),
+                    icon: const Icon(Icons.verified_user_rounded),
+                    label: const Text('Mark Trusted'),
                   ),
                 ),
               ],
@@ -200,10 +202,10 @@ class PeerProfilePage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Peer Profile'),
+        title: const Text('Peer Details'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit_outlined),
+            icon: const Icon(Icons.edit_note_rounded),
             tooltip: 'Set Local Nickname',
             onPressed: () {
               final peer = peerProfileAsync.value;
@@ -223,7 +225,7 @@ class PeerProfilePage extends ConsumerWidget {
           final isConnecting = session?.status == SessionStatus.connecting || session?.status == SessionStatus.handshaking;
 
           return SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
@@ -231,13 +233,21 @@ class PeerProfilePage extends ConsumerWidget {
                 CircleAvatar(
                   radius: 48,
                   backgroundColor: peer.isTrusted
-                      ? Colors.green.shade800
+                      ? VantraTheme.greenVerified.withValues(alpha: 0.15)
                       : peer.isBlocked
-                          ? Colors.red.shade900
-                          : Colors.deepPurple.shade700,
+                          ? VantraTheme.redBlocked.withValues(alpha: 0.15)
+                          : VantraTheme.primary.withValues(alpha: 0.15),
                   child: Text(
                     peer.effectiveName.isNotEmpty ? peer.effectiveName[0].toUpperCase() : '?',
-                    style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white),
+                    style: TextStyle(
+                      fontSize: 36,
+                      fontWeight: FontWeight.bold,
+                      color: peer.isTrusted
+                          ? VantraTheme.greenVerified
+                          : peer.isBlocked
+                              ? VantraTheme.redBlocked
+                              : VantraTheme.primaryAccent,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -245,7 +255,7 @@ class PeerProfilePage extends ConsumerWidget {
                 // Effective Name
                 Text(
                   peer.effectiveName,
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: VantraTheme.textPrimary),
                 ),
 
                 // Authenticated Device Name (if nickname exists)
@@ -253,71 +263,74 @@ class PeerProfilePage extends ConsumerWidget {
                   const SizedBox(height: 4),
                   Text(
                     'Device Name: ${peer.displayName}',
-                    style: const TextStyle(fontSize: 14, color: Colors.grey),
+                    style: const TextStyle(fontSize: 13, color: VantraTheme.textSecondary),
                   ),
                 ],
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
 
-                // Trust Badge Card
+                // Trust Badge Card (Redesigned visual certificate card)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: peer.isTrusted
-                        ? Colors.green.shade900.withValues(alpha: 0.3)
+                        ? VantraTheme.greenVerified.withValues(alpha: 0.08)
                         : peer.isBlocked
-                            ? Colors.red.shade900.withValues(alpha: 0.3)
-                            : Colors.amber.shade900.withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(12),
+                            ? VantraTheme.redBlocked.withValues(alpha: 0.08)
+                            : VantraTheme.amberWarning.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: peer.isTrusted
-                          ? Colors.greenAccent
+                          ? VantraTheme.greenVerified
                           : peer.isBlocked
-                              ? Colors.redAccent
-                              : Colors.amberAccent,
-                      width: 1,
+                              ? VantraTheme.redBlocked
+                              : VantraTheme.amberWarning,
+                      width: 1.5,
                     ),
                   ),
                   child: Row(
                     children: [
                       Icon(
                         peer.isTrusted
-                            ? Icons.verified
+                            ? Icons.verified_user_rounded
                             : peer.isBlocked
-                                ? Icons.block
+                                ? Icons.block_flipped
                                 : Icons.warning_amber_rounded,
                         color: peer.isTrusted
-                            ? Colors.greenAccent
+                            ? VantraTheme.greenVerified
                             : peer.isBlocked
-                                ? Colors.redAccent
-                                : Colors.amberAccent,
+                                ? VantraTheme.redBlocked
+                                : VantraTheme.amberWarning,
+                        size: 24,
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
                               peer.isTrusted
-                                  ? 'Verified Trusted Contact'
+                                  ? 'Verified Identity'
                                   : peer.isBlocked
                                       ? 'Blocked Peer'
                                       : 'Untrusted Identity',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
+                                fontSize: 14.5,
                                 color: peer.isTrusted
-                                    ? Colors.greenAccent
+                                    ? VantraTheme.greenVerified
                                     : peer.isBlocked
-                                        ? Colors.redAccent
-                                        : Colors.amberAccent,
+                                        ? VantraTheme.redBlocked
+                                        : VantraTheme.amberWarning,
                               ),
                             ),
+                            const SizedBox(height: 4),
                             Text(
                               peer.isTrusted
-                                  ? 'Fingerprint verified in-person'
+                                  ? 'Cryptographic fingerprint verified'
                                   : peer.isBlocked
                                       ? 'Cannot send or receive messages'
-                                      : 'Compare fingerprint to verify',
-                              style: const TextStyle(fontSize: 12, color: Colors.white70),
+                                      : 'Compare fingerprint to prevent MITM attacks',
+                              style: const TextStyle(fontSize: 12.5, color: VantraTheme.textSecondary),
                             ),
                           ],
                         ),
@@ -334,11 +347,10 @@ class PeerProfilePage extends ConsumerWidget {
                       Expanded(
                         child: ElevatedButton.icon(
                           onPressed: () => context.push('/chat/${peer.peerId}'),
-                          icon: const Icon(Icons.chat),
+                          icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
                           label: const Text('Open Chat'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.deepPurple,
-                            foregroundColor: Colors.white,
+                            backgroundColor: VantraTheme.primary,
                             padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),
@@ -348,8 +360,8 @@ class PeerProfilePage extends ConsumerWidget {
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: () => _showFingerprintVerificationSheet(context, ref, peer),
-                        icon: const Icon(Icons.fingerprint),
-                        label: const Text('Verify'),
+                        icon: const Icon(Icons.fingerprint_rounded, size: 16),
+                        label: const Text('Verify Identity'),
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -359,18 +371,22 @@ class PeerProfilePage extends ConsumerWidget {
                 ),
                 const SizedBox(height: 24),
 
-                // Details Card
+                // Collapsible Cryptographic Details Section
                 Card(
-                  color: const Color(0xFF1E1E1E),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
+                  child: Theme(
+                    data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                    child: ExpansionTile(
+                      leading: const Icon(Icons.lock_person_rounded, color: VantraTheme.primaryAccent),
+                      title: const Text(
+                        'Security & Encryption details',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: VantraTheme.textPrimary),
+                      ),
+                      childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
                       children: [
                         ListTile(
                           contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.wifi, color: Colors.blueAccent),
-                          title: const Text('Connection Status'),
+                          leading: const Icon(Icons.wifi_rounded, color: Colors.blueAccent),
+                          title: const Text('Connection Status', style: TextStyle(fontSize: 13.5)),
                           subtitle: Text(
                             isConnected
                                 ? 'Securely Connected'
@@ -378,7 +394,8 @@ class PeerProfilePage extends ConsumerWidget {
                                     ? 'Connecting...'
                                     : 'Offline',
                             style: TextStyle(
-                              color: isConnected ? Colors.greenAccent : Colors.grey,
+                              fontSize: 12.5,
+                              color: isConnected ? VantraTheme.greenVerified : VantraTheme.textSecondary,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -386,21 +403,21 @@ class PeerProfilePage extends ConsumerWidget {
                         const Divider(color: Colors.white10),
                         ListTile(
                           contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.history, color: Colors.purpleAccent),
-                          title: const Text('Last Seen'),
-                          subtitle: Text(_formatLastSeen(peer.lastSeen)),
+                          leading: const Icon(Icons.history_toggle_off_rounded, color: Colors.purpleAccent),
+                          title: const Text('Last Seen', style: TextStyle(fontSize: 13.5)),
+                          subtitle: Text(_formatLastSeen(peer.lastSeen), style: const TextStyle(fontSize: 12.5)),
                         ),
                         const Divider(color: Colors.white10),
                         ListTile(
                           contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.fingerprint, color: Colors.tealAccent),
-                          title: const Text('Fingerprint (SHA-256)'),
+                          leading: const Icon(Icons.fingerprint_rounded, color: VantraTheme.cyanSecurity),
+                          title: const Text('Fingerprint (SHA-256)', style: TextStyle(fontSize: 13.5)),
                           subtitle: Text(
                             peer.fingerprint ?? 'Pending exchange',
-                            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                            style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: VantraTheme.textSecondary),
                           ),
                           trailing: IconButton(
-                            icon: const Icon(Icons.copy, size: 18),
+                            icon: const Icon(Icons.copy_all_rounded, size: 18),
                             onPressed: peer.fingerprint != null
                                 ? () {
                                     Clipboard.setData(ClipboardData(text: peer.fingerprint!));
@@ -423,19 +440,19 @@ class PeerProfilePage extends ConsumerWidget {
                   child: peer.isBlocked
                       ? OutlinedButton.icon(
                           onPressed: () => ref.read(messagingStateProvider.notifier).unblockPeer(peer.peerId),
-                          icon: const Icon(Icons.lock_open, color: Colors.greenAccent),
-                          label: const Text('Unblock Peer', style: TextStyle(color: Colors.greenAccent)),
+                          icon: const Icon(Icons.lock_open_rounded, color: VantraTheme.greenVerified),
+                          label: const Text('Unblock Peer', style: TextStyle(color: VantraTheme.greenVerified)),
                           style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: Colors.greenAccent),
+                            side: const BorderSide(color: VantraTheme.greenVerified),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
                         )
                       : OutlinedButton.icon(
                           onPressed: () => _showBlockConfirmation(context, ref, peer),
-                          icon: const Icon(Icons.block, color: Colors.redAccent),
-                          label: const Text('Block Peer', style: TextStyle(color: Colors.redAccent)),
+                          icon: const Icon(Icons.block_flipped, color: VantraTheme.redBlocked),
+                          label: const Text('Block Peer', style: TextStyle(color: VantraTheme.redBlocked)),
                           style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: Colors.redAccent),
+                            side: const BorderSide(color: VantraTheme.redBlocked),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
                         ),
@@ -444,8 +461,8 @@ class PeerProfilePage extends ConsumerWidget {
             ),
           );
         },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, _) => Center(child: Text('Error: $err', style: const TextStyle(color: Colors.redAccent))),
+        loading: () => const Center(child: CircularProgressIndicator(color: VantraTheme.primary)),
+        error: (err, _) => Center(child: Text('Error: $err', style: const TextStyle(color: VantraTheme.redBlocked))),
       ),
     );
   }

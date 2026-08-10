@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
+import 'package:vantra/core/themes/vantra_theme.dart';
 
 class ProfilePage extends ConsumerWidget {
   const ProfilePage({super.key});
@@ -20,16 +21,16 @@ class ProfilePage extends ConsumerWidget {
           children: [
             const Text(
               'This is your authenticated display name broadcasted to other nearby devices during identity handshake.',
-              style: TextStyle(fontSize: 13, color: Colors.grey),
+              style: TextStyle(fontSize: 13, color: VantraTheme.textSecondary),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: controller,
               autofocus: true,
+              style: const TextStyle(color: VantraTheme.textPrimary),
               decoration: const InputDecoration(
                 labelText: 'Display Name',
                 hintText: 'e.g. Tony-Pixel',
-                border: OutlineInputBorder(),
               ),
             ),
           ],
@@ -60,20 +61,20 @@ class ProfilePage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Device Profile & Identity', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Settings'),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             // Local Avatar
             CircleAvatar(
               radius: 48,
-              backgroundColor: Colors.deepPurple.shade700,
+              backgroundColor: VantraTheme.primary.withValues(alpha: 0.15),
               child: Text(
                 localIdentity.displayName.isNotEmpty ? localIdentity.displayName[0].toUpperCase() : 'V',
-                style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white),
+                style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: VantraTheme.primaryAccent),
               ),
             ),
             const SizedBox(height: 16),
@@ -82,44 +83,53 @@ class ProfilePage extends ConsumerWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                const SizedBox(width: 32), // Balance out the edit icon spacing
                 Text(
                   localIdentity.displayName,
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: VantraTheme.textPrimary),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  icon: const Icon(Icons.edit, size: 20),
+                  icon: const Icon(Icons.edit_note_rounded, size: 24, color: VantraTheme.primaryAccent),
                   tooltip: 'Edit Display Name',
                   onPressed: () => _showEditNameDialog(context, ref, localIdentity.displayName),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.green.shade900.withValues(alpha: 0.3),
+                color: VantraTheme.greenVerified.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.greenAccent),
+                border: Border.all(color: VantraTheme.greenVerified.withValues(alpha: 0.5)),
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.shield, size: 14, color: Colors.greenAccent),
+                  Icon(Icons.shield_rounded, size: 14, color: VantraTheme.greenVerified),
                   SizedBox(width: 6),
                   Text(
-                    'Ed25519 Keystore Secured',
-                    style: TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                    'Ed25519 Keystore Protected',
+                    style: TextStyle(fontSize: 12, color: VantraTheme.greenVerified, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 28),
 
-            // Cryptographic Details
+            // Settings Section: Cryptographic Identity Cards
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: EdgeInsets.only(left: 4, bottom: 8),
+                child: Text(
+                  'CRYPTOGRAPHIC CREDENTIALS',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: VantraTheme.textMuted, letterSpacing: 1),
+                ),
+              ),
+            ),
             Card(
-              color: const Color(0xFF1E1E1E),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
@@ -127,13 +137,13 @@ class ProfilePage extends ConsumerWidget {
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.badge_outlined, color: Colors.blueAccent),
-                      title: const Text('Persistent Peer ID'),
+                      title: const Text('Persistent Peer ID', style: TextStyle(fontSize: 14, color: VantraTheme.textPrimary)),
                       subtitle: SelectableText(
                         localIdentity.peerId,
-                        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                        style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5, color: VantraTheme.textSecondary),
                       ),
                       trailing: IconButton(
-                        icon: const Icon(Icons.copy, size: 18),
+                        icon: const Icon(Icons.copy_all_rounded, size: 18),
                         onPressed: () {
                           Clipboard.setData(ClipboardData(text: localIdentity.peerId));
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -145,14 +155,14 @@ class ProfilePage extends ConsumerWidget {
                     const Divider(color: Colors.white10),
                     ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.fingerprint, color: Colors.tealAccent),
-                      title: const Text('My Security Fingerprint (SHA-256)'),
+                      leading: const Icon(Icons.fingerprint_rounded, color: VantraTheme.cyanSecurity),
+                      title: const Text('Security Fingerprint', style: TextStyle(fontSize: 14, color: VantraTheme.textPrimary)),
                       subtitle: SelectableText(
                         localIdentity.fingerprint.isNotEmpty ? localIdentity.fingerprint : 'Generating...',
-                        style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.greenAccent),
+                        style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5, color: VantraTheme.cyanSecurity),
                       ),
                       trailing: IconButton(
-                        icon: const Icon(Icons.copy, size: 18),
+                        icon: const Icon(Icons.copy_all_rounded, size: 18),
                         onPressed: localIdentity.fingerprint.isNotEmpty
                             ? () {
                                 Clipboard.setData(ClipboardData(text: localIdentity.fingerprint));
@@ -167,18 +177,54 @@ class ProfilePage extends ConsumerWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 32),
 
-            // Developer / Diagnostic Link
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => context.push('/poc'),
-                icon: const Icon(Icons.developer_mode, color: Colors.deepPurpleAccent),
-                label: const Text('Launch Transport POC & Debug Logs', style: TextStyle(color: Colors.deepPurpleAccent)),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.deepPurpleAccent),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+            // Separator & Developer Section
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: EdgeInsets.only(left: 4, bottom: 8),
+                child: Text(
+                  'DEVELOPER PORTAL',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: VantraTheme.textMuted, letterSpacing: 1),
+                ),
+              ),
+            ),
+            Card(
+              color: VantraTheme.surfaceElevated.withValues(alpha: 0.2),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: VantraTheme.primary, width: 0.5),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Technical Diagnostics',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: VantraTheme.textPrimary),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Access the transport proof-of-concept, test network discovery manually, and read live connection logs.',
+                      style: TextStyle(fontSize: 12.5, color: VantraTheme.textSecondary, height: 1.4),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () => context.push('/poc'),
+                        icon: const Icon(Icons.developer_board_rounded, size: 18),
+                        label: const Text('Launch Debug POC & Logs'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: VantraTheme.primary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
