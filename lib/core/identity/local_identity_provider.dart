@@ -100,3 +100,10 @@ class LocalIdentityNotifier extends Notifier<LocalIdentity> {
     state = state.copyWith(displayName: name);
   }
 }
+
+final onboardingCompletedProvider = Provider<bool>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return prefs.getBool('vantra_onboarding_completed') ?? false;
+});
+
+

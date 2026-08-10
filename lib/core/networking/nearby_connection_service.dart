@@ -1,0 +1,172 @@
+import 'dart:async';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:vantra/core/identity/local_identity_provider.dart';
+import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/peers/peer_provider.dart';
+import 'package:vantra/core/utils/logger.dart';
+import 'package:vantra/core/utils/permissions.dart';
+
+enum NearbyServiceStatus {
+  initializing,
+  permissionsRequired,
+  locationDisabled,
+  ready,
+  error,
+}
+
+class NearbyConnectionState {
+  final NearbyServiceStatus status;
+  final bool isAdvertising;
+  final bool isDiscovering;
+  final String? errorMessage;
+
+  const NearbyConnectionState({
+    required this.status,
+    this.isAdvertising = false,
+    this.isDiscovering = false,
+    this.errorMessage,
+  });
+
+  NearbyConnectionState copyWith({
+    NearbyServiceStatus? status,
+    bool? isAdvertising,
+    bool? isDiscovering,
+    String? errorMessage,
+    bool clearError = false,
+  }) {
+    return NearbyConnectionState(
+      status: status ?? this.status,
+      isAdvertising: isAdvertising ?? this.isAdvertising,
+      isDiscovering: isDiscovering ?? this.isDiscovering,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+    );
+  }
+}
+
+final nearbyConnectionServiceProvider = NotifierProvider<NearbyConnectionNotifier, NearbyConnectionState>(() {
+  return NearbyConnectionNotifier();
+});
+
+class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with WidgetsBindingObserver {
+  @override
+  NearbyConnectionState build() {
+    WidgetsBinding.instance.addObserver(this);
+    ref.onDispose(() {
+      WidgetsBinding.instance.removeObserver(this);
+    });
+    return const NearbyConnectionState(status: NearbyServiceStatus.initializing);
+  }
+
+  Future<void> initialize() async {
+    VantraLogger.log('[VANTRA][LIFECYCLE] Initializing global NearbyConnectionService');
+    state = state.copyWith(status: NearbyServiceStatus.initializing, clearError: true);
+
+    try {
+      final permissionsGranted = await VantraPermissions.requestNearbyPermissions();
+      if (!permissionsGranted) {
+        VantraLogger.log('[VANTRA][LIFECYCLE] Permissions denied for Nearby Connections');
+        state = state.copyWith(status: NearbyServiceStatus.permissionsRequired);
+        return;
+      }
+
+      final gpsEnabled = await VantraPermissions.isLocationServiceEnabled();
+      if (!gpsEnabled) {
+        VantraLogger.log('[VANTRA][LIFECYCLE] Location Services (GPS) are disabled');
+        state = state.copyWith(status: NearbyServiceStatus.locationDisabled);
+        return;
+      }
+
+      final localIdentity = ref.read(localIdentityStateProvider);
+      final displayName = localIdentity.displayName.isNotEmpty
+          ? localIdentity.displayName
+          : 'VantraDevice';
+
+      final transport = ref.read(transportProvider);
+      final peerDiscovery = ref.read(peerDiscoveryServiceProvider);
+
+      VantraLogger.log('[VANTRA][LIFECYCLE] Starting advertising for $displayName');
+      await transport.startAdvertising(displayName);
+
+      VantraLogger.log('[VANTRA][LIFECYCLE] Starting discovery for $displayName');
+      await peerDiscovery.startDiscovery(localName: displayName);
+
+      state = state.copyWith(
+        status: NearbyServiceStatus.ready,
+        isAdvertising: true,
+        isDiscovering: true,
+        clearError: true,
+      );
+      VantraLogger.log('[VANTRA][LIFECYCLE] NearbyConnectionService fully ready');
+    } catch (e, stackTrace) {
+      VantraLogger.log('[VANTRA][LIFECYCLE] Error initializing NearbyConnectionService: $e', e, stackTrace);
+      state = state.copyWith(
+        status: NearbyServiceStatus.error,
+        errorMessage: e.toString(),
+      );
+    }
+  }
+
+  Future<void> stopAll() async {
+    VantraLogger.log('[VANTRA][LIFECYCLE] Stopping all Nearby operations');
+    try {
+      await ref.read(transportProvider).stopAdvertising();
+    } catch (_) {}
+    try {
+      await ref.read(peerDiscoveryServiceProvider).stopDiscovery();
+    } catch (_) {}
+
+    state = state.copyWith(
+      status: NearbyServiceStatus.initializing,
+      isAdvertising: false,
+      isDiscovering: false,
+    );
+  }
+
+  Future<void> _suspendNearbyOperations() async {
+    if (state.status == NearbyServiceStatus.ready) {
+      VantraLogger.log('[VANTRA][LIFECYCLE] App backgrounded: Suspending Nearby operations to save battery');
+      try {
+        await ref.read(transportProvider).stopAdvertising();
+      } catch (_) {}
+      try {
+        await ref.read(peerDiscoveryServiceProvider).stopDiscovery();
+      } catch (_) {}
+      state = state.copyWith(
+        isAdvertising: false,
+        isDiscovering: false,
+      );
+    }
+  }
+
+  Future<void> _resumeNearbyOperations() async {
+    if (state.status == NearbyServiceStatus.ready) {
+      VantraLogger.log('[VANTRA][LIFECYCLE] App foregrounded: Resuming Nearby operations');
+      try {
+        final localIdentity = ref.read(localIdentityStateProvider);
+        final displayName = localIdentity.displayName.isNotEmpty
+            ? localIdentity.displayName
+            : 'VantraDevice';
+        await ref.read(transportProvider).startAdvertising(displayName);
+        await ref.read(peerDiscoveryServiceProvider).startDiscovery(localName: displayName);
+        state = state.copyWith(
+          isAdvertising: true,
+          isDiscovering: true,
+        );
+      } catch (_) {}
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (this.state.status != NearbyServiceStatus.ready) {
+        initialize();
+      } else {
+        _resumeNearbyOperations();
+      }
+    } else if (state == AppLifecycleState.paused) {
+      _suspendNearbyOperations();
+    }
+  }
+}

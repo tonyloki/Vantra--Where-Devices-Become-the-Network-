@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/networking/nearby_connection_service.dart';
+import 'package:vantra/core/utils/logger.dart';
 
 import 'features/onboarding/onboarding_page.dart';
 import 'features/home/home_page.dart';
@@ -225,53 +228,249 @@ class GlobalConnectionListener extends ConsumerWidget {
   }
 }
 
-class SplashPage extends StatefulWidget {
+class SplashPage extends ConsumerStatefulWidget {
   const SplashPage({super.key});
 
   @override
-  State<SplashPage> createState() => _SplashPageState();
+  ConsumerState<SplashPage> createState() => _SplashPageState();
 }
 
-class _SplashPageState extends State<SplashPage> {
+class _SplashPageState extends ConsumerState<SplashPage> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _fadeAnimation;
+  late Animation<double> _scaleAnimation;
+  bool _animationCompleted = false;
+  bool _hasRouted = false;
+  Timer? _timeoutTimer;
+
   @override
   void initState() {
     super.initState();
-    _navigateToOnboarding();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    );
+
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.0, 0.8, curve: Curves.easeOutQuart),
+      ),
+    );
+
+    _scaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.0, 0.8, curve: Curves.easeOutQuart),
+      ),
+    );
+
+    _controller.forward().then((_) {
+      if (mounted) {
+        setState(() {
+          _animationCompleted = true;
+        });
+        _evalRouting();
+      }
+    });
+
+    // Start Nearby connections initialization in background
+    Future.microtask(() {
+      ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+    });
+
+    // Bounded timeout: if still initializing after 2.5 seconds, navigate anyway
+    _timeoutTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (mounted && !_hasRouted) {
+        final state = ref.read(nearbyConnectionServiceProvider);
+        if (state.status == NearbyServiceStatus.initializing) {
+          VantraLogger.log('[VANTRA][LIFECYCLE] Splash timeout reached. Routing to home/onboarding in background.');
+          _routeToNextPage();
+        }
+      }
+    });
   }
 
-  void _navigateToOnboarding() async {
-    await Future.delayed(const Duration(seconds: 2));
-    if (mounted) {
+  @override
+  void dispose() {
+    _controller.dispose();
+    _timeoutTimer?.cancel();
+    super.dispose();
+  }
+
+  void _evalRouting() {
+    if (!_animationCompleted || _hasRouted) return;
+
+    final connectionState = ref.read(nearbyConnectionServiceProvider);
+    if (connectionState.status == NearbyServiceStatus.ready) {
+      _routeToNextPage();
+    }
+  }
+
+  void _routeToNextPage() {
+    _hasRouted = true;
+    final onboardingCompleted = ref.read(onboardingCompletedProvider);
+    if (onboardingCompleted) {
+      context.go('/home');
+    } else {
       context.go('/onboarding');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              'VANTRA',
-              style: TextStyle(
-                fontSize: 36,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 4,
+    // Listen to nearby connection state updates
+    ref.listen<NearbyConnectionState>(nearbyConnectionServiceProvider, (previous, next) {
+      if (next.status == NearbyServiceStatus.ready && _animationCompleted) {
+        _evalRouting();
+      }
+    });
+
+    final connectionState = ref.watch(nearbyConnectionServiceProvider);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F0E13),
+      body: Stack(
+        children: [
+          Center(
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                return Opacity(
+                  opacity: _fadeAnimation.value,
+                  child: Transform.scale(
+                    scale: _scaleAnimation.value,
+                    child: child,
+                  ),
+                );
+              },
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Image.asset(
+                    'lib/Assets/Logo.png',
+                    width: 140,
+                    height: 140,
+                    fit: BoxFit.contain,
+                  ),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'VANTRA',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 6,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Where Devices Become the Network.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey.shade500,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                ],
               ),
             ),
-            SizedBox(height: 12),
-            Text(
-              'Where Devices Become the Network.',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey,
-              ),
+          ),
+          Positioned(
+            left: 24,
+            right: 24,
+            bottom: 60,
+            child: Center(
+              child: _buildStatusWidget(connectionState),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildStatusWidget(NearbyConnectionState state) {
+    switch (state.status) {
+      case NearbyServiceStatus.initializing:
+        return const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.deepPurpleAccent),
+          ),
+        );
+      case NearbyServiceStatus.permissionsRequired:
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Permissions required to connect with nearby devices.',
+              style: TextStyle(color: Colors.redAccent, fontSize: 13),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: () {
+                ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              ),
+              child: const Text('GRANT PERMISSIONS'),
+            ),
+          ],
+        );
+      case NearbyServiceStatus.locationDisabled:
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Please enable Location Services (GPS) to discover devices.',
+              style: TextStyle(color: Colors.amberAccent, fontSize: 13),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: () {
+                ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              ),
+              child: const Text('RETRY'),
+            ),
+          ],
+        );
+      case NearbyServiceStatus.error:
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Initialization error: ${state.errorMessage}',
+              style: const TextStyle(color: Colors.redAccent, fontSize: 13),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: () {
+                ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey.shade800,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              ),
+              child: const Text('RETRY'),
+            ),
+          ],
+        );
+      case NearbyServiceStatus.ready:
+        return const SizedBox.shrink();
+    }
   }
 }

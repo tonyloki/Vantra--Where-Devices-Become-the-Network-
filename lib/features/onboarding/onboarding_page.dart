@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:vantra/core/identity/local_identity_provider.dart';
 
-class OnboardingPage extends StatelessWidget {
+class OnboardingPage extends ConsumerWidget {
   const OnboardingPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       body: Center(
         child: Padding(
@@ -35,7 +37,13 @@ class OnboardingPage extends StatelessWidget {
               ),
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: () => context.go('/home'),
+                onPressed: () async {
+                  await ref.read(sharedPreferencesProvider).setBool('vantra_onboarding_completed', true);
+                  ref.invalidate(onboardingCompletedProvider);
+                  if (context.mounted) {
+                    context.go('/home');
+                  }
+                },
                 child: const Text('Continue'),
               ),
             ],

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
+import 'package:vantra/core/networking/nearby_connection_service.dart';
 import 'package:vantra/core/utils/permissions.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
@@ -174,58 +175,42 @@ class _PocPageState extends ConsumerState<PocPage> {
   }
 
   Future<void> _startAdvertising() async {
-    if (!_permissionsGranted) {
-      _log('Cannot advertise: permissions not granted');
-      return;
-    }
+    _log('Requesting global initialization (Advertising + Discovery)...');
     try {
-      await ref.read(transportProvider).startAdvertising(_localDeviceName);
-      setState(() {
-        _isAdvertising = true;
-      });
-      _log('Advertising started as "$_localDeviceName"');
+      await ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+      _log('Global initialization requested successfully');
     } catch (e) {
-      _log('Start advertising failed: $e');
+      _log('Global initialization failed: $e');
     }
   }
 
   Future<void> _stopAdvertising() async {
+    _log('Requesting global stop...');
     try {
-      await ref.read(transportProvider).stopAdvertising();
-      setState(() {
-        _isAdvertising = false;
-      });
-      _log('Advertising stopped');
+      await ref.read(nearbyConnectionServiceProvider.notifier).stopAll();
+      _log('Global stop requested successfully');
     } catch (e) {
-      _log('Stop advertising failed: $e');
+      _log('Global stop failed: $e');
     }
   }
 
   Future<void> _startDiscovery() async {
-    if (!_permissionsGranted) {
-      _log('Cannot discover: permissions not granted');
-      return;
-    }
+    _log('Requesting global initialization (Advertising + Discovery)...');
     try {
-      await ref.read(transportProvider).startDiscovery(_localDeviceName);
-      setState(() {
-        _isDiscovering = true;
-      });
-      _log('Discovery started as "$_localDeviceName"');
+      await ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+      _log('Global initialization requested successfully');
     } catch (e) {
-      _log('Start discovery failed: $e');
+      _log('Global initialization failed: $e');
     }
   }
 
   Future<void> _stopDiscovery() async {
+    _log('Requesting global stop...');
     try {
-      await ref.read(transportProvider).stopDiscovery();
-      setState(() {
-        _isDiscovering = false;
-      });
-      _log('Discovery stopped');
+      await ref.read(nearbyConnectionServiceProvider.notifier).stopAll();
+      _log('Global stop requested successfully');
     } catch (e) {
-      _log('Stop discovery failed: $e');
+      _log('Global stop failed: $e');
     }
   }
 
@@ -288,6 +273,10 @@ class _PocPageState extends ConsumerState<PocPage> {
     final activeEndpointId = messagingState.activeEndpointId;
     final activeEndpointName = messagingState.activeEndpointName;
     final connectionStatus = messagingState.connectionStatus;
+
+    final nearbyState = ref.watch(nearbyConnectionServiceProvider);
+    _isAdvertising = nearbyState.isAdvertising;
+    _isDiscovering = nearbyState.isDiscovering;
 
     return Scaffold(
       appBar: AppBar(

@@ -5,6 +5,8 @@ import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/peers/peer_provider.dart';
 
+import 'package:vantra/core/networking/nearby_connection_service.dart';
+
 class NearbyPeersPage extends ConsumerStatefulWidget {
   const NearbyPeersPage({super.key});
 
@@ -14,16 +16,8 @@ class NearbyPeersPage extends ConsumerStatefulWidget {
 
 class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
   @override
-  void initState() {
-    super.initState();
-    // Proactively start discovery when opening page
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(peerDiscoveryServiceProvider).startDiscovery();
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final connectionState = ref.watch(nearbyConnectionServiceProvider);
     final discoveryService = ref.watch(peerDiscoveryServiceProvider);
     final isDiscovering = ref.watch(isDiscoveringProvider).value ?? false;
     final nearbyPeersAsync = ref.watch(discoveredNearbyPeersProvider);
@@ -39,9 +33,9 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
             color: isDiscovering ? Colors.amberAccent : Colors.greenAccent,
             onPressed: () {
               if (isDiscovering) {
-                discoveryService.stopDiscovery();
+                ref.read(nearbyConnectionServiceProvider.notifier).stopAll();
               } else {
-                discoveryService.startDiscovery();
+                ref.read(nearbyConnectionServiceProvider.notifier).initialize();
               }
             },
           ),
@@ -49,6 +43,8 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
       ),
       body: Column(
         children: [
+          if (connectionState.status != NearbyServiceStatus.ready)
+            _buildGlobalStatusBanner(connectionState),
           // Scanning status banner
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -79,9 +75,9 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                 TextButton(
                   onPressed: () {
                     if (isDiscovering) {
-                      discoveryService.stopDiscovery();
+                      ref.read(nearbyConnectionServiceProvider.notifier).stopAll();
                     } else {
-                      discoveryService.startDiscovery();
+                      ref.read(nearbyConnectionServiceProvider.notifier).initialize();
                     }
                   },
                   child: Text(isDiscovering ? 'STOP' : 'SCAN'),
@@ -197,6 +193,63 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
               error: (err, _) => Center(child: Text('Error: $err', style: const TextStyle(color: Colors.redAccent))),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGlobalStatusBanner(NearbyConnectionState state) {
+    String message = '';
+    String buttonText = '';
+    Color color = Colors.amber;
+    VoidCallback? onPressed;
+
+    if (state.status == NearbyServiceStatus.permissionsRequired) {
+      message = 'Nearby permissions are required to discover peers.';
+      buttonText = 'GRANT';
+      color = Colors.redAccent;
+      onPressed = () => ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+    } else if (state.status == NearbyServiceStatus.locationDisabled) {
+      message = 'Location services (GPS) are disabled.';
+      buttonText = 'ENABLE';
+      color = Colors.amber;
+      onPressed = () => ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+    } else if (state.status == NearbyServiceStatus.error) {
+      message = 'Error: ${state.errorMessage}';
+      buttonText = 'RETRY';
+      color = Colors.redAccent;
+      onPressed = () => ref.read(nearbyConnectionServiceProvider.notifier).initialize();
+    } else if (state.status == NearbyServiceStatus.initializing) {
+      message = 'Initializing Nearby services...';
+      color = Colors.deepPurple;
+    }
+
+    if (message.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      color: color.withValues(alpha: 0.15),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, color: color),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.bold),
+            ),
+          ),
+          if (onPressed != null)
+            ElevatedButton(
+              onPressed: onPressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: color,
+                foregroundColor: color == Colors.amber ? Colors.black : Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              ),
+              child: Text(buttonText, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
         ],
       ),
     );
