@@ -19,6 +19,9 @@ class DomainHandshakePayload extends DomainWireEnvelope {
   final Uint8List identityPublicKey;
   final Uint8List ephemeralPublicKey;
   final Uint8List signature;
+  final int? minSupportedVersion;
+  final int? maxSupportedVersion;
+  final List<VantraCapability>? supportedCapabilities;
 
   const DomainHandshakePayload({
     required super.protocolVersion,
@@ -27,6 +30,9 @@ class DomainHandshakePayload extends DomainWireEnvelope {
     required this.identityPublicKey,
     required this.ephemeralPublicKey,
     required this.signature,
+    this.minSupportedVersion,
+    this.maxSupportedVersion,
+    this.supportedCapabilities,
   });
 }
 
@@ -112,5 +118,32 @@ class DomainAckMessage extends DomainPlaintext {
     required super.receiverId,
     required this.originalMessageId,
     required this.status,
+  });
+}
+
+enum VantraCapability {
+  text,
+  image,
+  audio,
+  video,
+  file,
+  group,
+}
+
+class DomainCapabilitiesExchange extends DomainPlaintext {
+  final int minSupportedVersion;
+  final int maxSupportedVersion;
+  final List<VantraCapability> supportedCapabilities;
+
+  const DomainCapabilitiesExchange({
+    required super.messageId,
+    required super.sessionId,
+    required super.sequence,
+    required super.timestampMs,
+    required super.senderId,
+    required super.receiverId,
+    required this.minSupportedVersion,
+    required this.maxSupportedVersion,
+    required this.supportedCapabilities,
   });
 }

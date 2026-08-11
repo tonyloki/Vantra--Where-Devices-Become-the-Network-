@@ -151,6 +151,9 @@ class IdentitySecurePayload extends $pb.GeneratedMessage {
     $core.List<$core.int>? identityPublicKey,
     $core.List<$core.int>? ephemeralPublicKey,
     $core.List<$core.int>? signature,
+    $core.int? minSupportedVersion,
+    $core.int? maxSupportedVersion,
+    $core.Iterable<Capability>? supportedCapabilities,
   }) {
     final result = create();
     if (peerId != null) result.peerId = peerId;
@@ -159,6 +162,12 @@ class IdentitySecurePayload extends $pb.GeneratedMessage {
     if (ephemeralPublicKey != null)
       result.ephemeralPublicKey = ephemeralPublicKey;
     if (signature != null) result.signature = signature;
+    if (minSupportedVersion != null)
+      result.minSupportedVersion = minSupportedVersion;
+    if (maxSupportedVersion != null)
+      result.maxSupportedVersion = maxSupportedVersion;
+    if (supportedCapabilities != null)
+      result.supportedCapabilities.addAll(supportedCapabilities);
     return result;
   }
 
@@ -184,6 +193,15 @@ class IdentitySecurePayload extends $pb.GeneratedMessage {
         4, _omitFieldNames ? '' : 'ephemeralPublicKey', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(
         5, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..aI(6, _omitFieldNames ? '' : 'minSupportedVersion',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(7, _omitFieldNames ? '' : 'maxSupportedVersion',
+        fieldType: $pb.PbFieldType.OU3)
+    ..pc<Capability>(
+        8, _omitFieldNames ? '' : 'supportedCapabilities', $pb.PbFieldType.KE,
+        valueOf: Capability.valueOf,
+        enumValues: Capability.values,
+        defaultEnumValue: Capability.CAPABILITY_UNSPECIFIED)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -250,6 +268,28 @@ class IdentitySecurePayload extends $pb.GeneratedMessage {
   $core.bool hasSignature() => $_has(4);
   @$pb.TagNumber(5)
   void clearSignature() => $_clearField(5);
+
+  /// New in V2:
+  @$pb.TagNumber(6)
+  $core.int get minSupportedVersion => $_getIZ(5);
+  @$pb.TagNumber(6)
+  set minSupportedVersion($core.int value) => $_setUnsignedInt32(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasMinSupportedVersion() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearMinSupportedVersion() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.int get maxSupportedVersion => $_getIZ(6);
+  @$pb.TagNumber(7)
+  set maxSupportedVersion($core.int value) => $_setUnsignedInt32(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasMaxSupportedVersion() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearMaxSupportedVersion() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $pb.PbList<Capability> get supportedCapabilities => $_getList(7);
 }
 
 /// 2. Encrypted Envelope (Wire container for encrypted payloads)
@@ -373,7 +413,7 @@ class EncryptedEnvelope extends $pb.GeneratedMessage {
   void clearMac() => $_clearField(6);
 }
 
-enum VantraPlaintext_Body { text, ack, notSet }
+enum VantraPlaintext_Body { text, ack, capabilitiesExchange, notSet }
 
 /// 3. Plaintext Payload (Encrypted inside EncryptedEnvelope.ciphertext)
 class VantraPlaintext extends $pb.GeneratedMessage {
@@ -386,6 +426,7 @@ class VantraPlaintext extends $pb.GeneratedMessage {
     $core.String? receiverId,
     TextBody? text,
     AckBody? ack,
+    CapabilitiesExchange? capabilitiesExchange,
   }) {
     final result = create();
     if (messageId != null) result.messageId = messageId;
@@ -396,6 +437,8 @@ class VantraPlaintext extends $pb.GeneratedMessage {
     if (receiverId != null) result.receiverId = receiverId;
     if (text != null) result.text = text;
     if (ack != null) result.ack = ack;
+    if (capabilitiesExchange != null)
+      result.capabilitiesExchange = capabilitiesExchange;
     return result;
   }
 
@@ -412,6 +455,7 @@ class VantraPlaintext extends $pb.GeneratedMessage {
       _VantraPlaintext_BodyByTag = {
     7: VantraPlaintext_Body.text,
     8: VantraPlaintext_Body.ack,
+    9: VantraPlaintext_Body.capabilitiesExchange,
     0: VantraPlaintext_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
@@ -419,7 +463,7 @@ class VantraPlaintext extends $pb.GeneratedMessage {
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'vantra.protocol'),
       createEmptyInstance: create)
-    ..oo(0, [7, 8])
+    ..oo(0, [7, 8, 9])
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
     ..aOS(2, _omitFieldNames ? '' : 'sessionId')
     ..a<$fixnum.Int64>(
@@ -431,6 +475,9 @@ class VantraPlaintext extends $pb.GeneratedMessage {
     ..aOM<TextBody>(7, _omitFieldNames ? '' : 'text',
         subBuilder: TextBody.create)
     ..aOM<AckBody>(8, _omitFieldNames ? '' : 'ack', subBuilder: AckBody.create)
+    ..aOM<CapabilitiesExchange>(
+        9, _omitFieldNames ? '' : 'capabilitiesExchange',
+        subBuilder: CapabilitiesExchange.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -454,10 +501,12 @@ class VantraPlaintext extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(7)
   @$pb.TagNumber(8)
+  @$pb.TagNumber(9)
   VantraPlaintext_Body whichBody() =>
       _VantraPlaintext_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(7)
   @$pb.TagNumber(8)
+  @$pb.TagNumber(9)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -535,6 +584,99 @@ class VantraPlaintext extends $pb.GeneratedMessage {
   void clearAck() => $_clearField(8);
   @$pb.TagNumber(8)
   AckBody ensureAck() => $_ensure(7);
+
+  @$pb.TagNumber(9)
+  CapabilitiesExchange get capabilitiesExchange => $_getN(8);
+  @$pb.TagNumber(9)
+  set capabilitiesExchange(CapabilitiesExchange value) => $_setField(9, value);
+  @$pb.TagNumber(9)
+  $core.bool hasCapabilitiesExchange() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearCapabilitiesExchange() => $_clearField(9);
+  @$pb.TagNumber(9)
+  CapabilitiesExchange ensureCapabilitiesExchange() => $_ensure(8);
+}
+
+class CapabilitiesExchange extends $pb.GeneratedMessage {
+  factory CapabilitiesExchange({
+    $core.int? minSupportedVersion,
+    $core.int? maxSupportedVersion,
+    $core.Iterable<Capability>? supportedCapabilities,
+  }) {
+    final result = create();
+    if (minSupportedVersion != null)
+      result.minSupportedVersion = minSupportedVersion;
+    if (maxSupportedVersion != null)
+      result.maxSupportedVersion = maxSupportedVersion;
+    if (supportedCapabilities != null)
+      result.supportedCapabilities.addAll(supportedCapabilities);
+    return result;
+  }
+
+  CapabilitiesExchange._();
+
+  factory CapabilitiesExchange.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory CapabilitiesExchange.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CapabilitiesExchange',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'vantra.protocol'),
+      createEmptyInstance: create)
+    ..aI(1, _omitFieldNames ? '' : 'minSupportedVersion',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(2, _omitFieldNames ? '' : 'maxSupportedVersion',
+        fieldType: $pb.PbFieldType.OU3)
+    ..pc<Capability>(
+        3, _omitFieldNames ? '' : 'supportedCapabilities', $pb.PbFieldType.KE,
+        valueOf: Capability.valueOf,
+        enumValues: Capability.values,
+        defaultEnumValue: Capability.CAPABILITY_UNSPECIFIED)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CapabilitiesExchange clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CapabilitiesExchange copyWith(void Function(CapabilitiesExchange) updates) =>
+      super.copyWith((message) => updates(message as CapabilitiesExchange))
+          as CapabilitiesExchange;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CapabilitiesExchange create() => CapabilitiesExchange._();
+  @$core.override
+  CapabilitiesExchange createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static CapabilitiesExchange getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CapabilitiesExchange>(create);
+  static CapabilitiesExchange? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.int get minSupportedVersion => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set minSupportedVersion($core.int value) => $_setUnsignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasMinSupportedVersion() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearMinSupportedVersion() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get maxSupportedVersion => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set maxSupportedVersion($core.int value) => $_setUnsignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasMaxSupportedVersion() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearMaxSupportedVersion() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $pb.PbList<Capability> get supportedCapabilities => $_getList(2);
 }
 
 class TextBody extends $pb.GeneratedMessage {

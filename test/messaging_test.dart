@@ -18,6 +18,7 @@ import 'package:drift/native.dart';
 import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/messaging/messaging_repository.dart';
 import 'package:vantra/core/security/crypto_service.dart';
+import 'package:cryptography/cryptography.dart';
 import 'test_fakes.dart';
 
 void main() {
@@ -98,8 +99,16 @@ void main() {
       container.dispose();
     });
 
-    Future<DomainHandshakePayload> createRemoteHandshake(String remotePeerId, String displayName) async {
-      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+    Future<DomainHandshakePayload> createRemoteHandshake(
+      String remotePeerId,
+      String displayName, {
+      int protocolVersion = 1,
+      int? minSupportedVersion,
+      int? maxSupportedVersion,
+      List<VantraCapability>? supportedCapabilities,
+      SimpleKeyPair? identityKeyPair,
+    }) async {
+      final idKeyPair = identityKeyPair ?? await cryptoService.generateIdentityKeyPair();
       final ephKeyPair = await cryptoService.generateEphemeralKeyPair();
 
       final idPub = await idKeyPair.extractPublicKey();
@@ -107,7 +116,7 @@ void main() {
 
       final sigBytes = await cryptoService.signHandshake(
         identityKeyPair: idKeyPair,
-        protocolVersion: kCurrentProtocolVersion,
+        protocolVersion: protocolVersion,
         peerId: remotePeerId,
         displayName: displayName,
         identityPublicKeyBytes: idPub.bytes,
@@ -115,12 +124,15 @@ void main() {
       );
 
       return DomainHandshakePayload(
-        protocolVersion: kCurrentProtocolVersion,
+        protocolVersion: protocolVersion,
         peerId: remotePeerId,
         displayName: displayName,
         identityPublicKey: Uint8List.fromList(idPub.bytes),
         ephemeralPublicKey: Uint8List.fromList(ephPub.bytes),
         signature: Uint8List.fromList(sigBytes),
+        minSupportedVersion: minSupportedVersion,
+        maxSupportedVersion: maxSupportedVersion,
+        supportedCapabilities: supportedCapabilities,
       );
     }
 
@@ -151,7 +163,8 @@ void main() {
       final envelope = codec.decodeWireEnvelope(fakeTransport.sentPayloads[0]);
       expect(envelope, isA<DomainHandshakePayload>());
       final handshake = envelope as DomainHandshakePayload;
-      expect(handshake.protocolVersion, kCurrentProtocolVersion);
+      expect(handshake.protocolVersion, 1);
+      expect(handshake.maxSupportedVersion, kCurrentProtocolVersion);
       expect(handshake.signature.isNotEmpty, isTrue);
     });
 
@@ -501,6 +514,244 @@ void main() {
       // Connection rejected immediately
       expect(fakeTransport.rejectedEndpoints, contains('EP_DISTRUSTED'));
       expect(container.read(messagingStateProvider).activeConnectionRequest, isNull);
+    });
+
+    test('Test G - V1 Device connects to V2 Device', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+
+      final v1PeerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(
+        v1PeerId,
+        'V1Friend',
+        publicKey: publicKeyHex,
+        fingerprint: fingerprint,
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 1,
+      );
+
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_V1',
+        status: ConnectionStatus.connecting,
+        endpointName: 'V1Friend:$v1PeerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Handshake is auto-accepted in background
+      expect(fakeTransport.acceptedEndpoints, contains('EP_V1'));
+
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_V1',
+        status: ConnectionStatus.connected,
+        endpointName: 'V1Friend:$v1PeerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Remote sends V1 handshake (no min/max fields)
+      final remotePayload = await createRemoteHandshake(
+        v1PeerId,
+        'V1Friend',
+        protocolVersion: 1,
+        identityKeyPair: idKeyPair,
+      );
+      fakeTransport.triggerIncomingPayload('EP_V1', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Session becomes directly CONNECTED (secure & ready) under V1 fallback
+      final state = container.read(messagingStateProvider);
+      expect(state.sessions[v1PeerId], isNotNull);
+      expect(state.sessions[v1PeerId]!.status, SessionStatus.connected);
+      expect(state.sessions[v1PeerId]!.negotiatedVersion, 1);
+      expect(state.sessions[v1PeerId]!.enabledCapabilities, contains(VantraCapability.text));
+    });
+
+    test('Test H - V2 Device connects to V2 Device', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final v2PeerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(
+        v2PeerId,
+        'V2Friend',
+        publicKey: publicKeyHex,
+        fingerprint: fingerprint,
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_V2',
+        status: ConnectionStatus.connecting,
+        endpointName: 'V2Friend:$v2PeerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_V2',
+        status: ConnectionStatus.connected,
+        endpointName: 'V2Friend:$v2PeerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // 1. Remote sends V2 handshake
+      final remotePayload = await createRemoteHandshake(
+        v2PeerId,
+        'V2Friend',
+        protocolVersion: 1, // wire version is 1 for compatibility
+        minSupportedVersion: 1,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text],
+        identityKeyPair: idKeyPair,
+      );
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Session is in handshaking (negotiating) state, NOT connected yet (gated!)
+      final state = container.read(messagingStateProvider);
+      expect(state.sessions[v2PeerId]!.status, SessionStatus.handshaking);
+      expect(state.sessions[v2PeerId]!.negotiatedVersion, 2);
+
+      // Expose derived SecuritySession to manually build encrypted peer packet
+      final notifier = container.read(messagingStateProvider.notifier);
+      final secSession = notifier.securitySessions[v2PeerId];
+      expect(secSession, isNotNull);
+
+      // 2. Build remote CapabilitiesExchange payload and encrypt it
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession!.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: v2PeerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 1,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text],
+      );
+
+      final plaintextBytes = codec.encodePlaintext(capExchange);
+      final encrypted = await cryptoService.encryptBytes(
+        secretKey: secSession.receiveKey,
+        sessionSalt: secSession.sessionSalt,
+        sequence: 1,
+        messageId: capExchange.messageId,
+        plaintextBytes: plaintextBytes,
+      );
+
+      final envelope = DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encrypted.nonce),
+        ciphertext: Uint8List.fromList(encrypted.ciphertext),
+        mac: Uint8List.fromList(encrypted.mac),
+      );
+
+      // 3. Trigger receipt of peer CapabilitiesExchange
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(envelope));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Session becomes CONNECTED (secure & ready) after negotiation completes
+      final stateFinal = container.read(messagingStateProvider);
+      expect(stateFinal.sessions[v2PeerId]!.status, SessionStatus.connected);
+      expect(stateFinal.sessions[v2PeerId]!.enabledCapabilities, contains(VantraCapability.text));
+    });
+
+    test('Test I - Downgrade protection / Spoofing detection rejects tampered exchange', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final v2PeerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(
+        v2PeerId,
+        'V2Friend',
+        publicKey: publicKeyHex,
+        fingerprint: fingerprint,
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_TAMPERED',
+        status: ConnectionStatus.connected,
+        endpointName: 'V2Friend:$v2PeerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // 1. Handshake claims [1..2] version range
+      final remotePayload = await createRemoteHandshake(
+        v2PeerId,
+        'V2Friend',
+        protocolVersion: 1,
+        minSupportedVersion: 1,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text],
+        identityKeyPair: idKeyPair,
+      );
+      fakeTransport.triggerIncomingPayload('EP_TAMPERED', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final notifier = container.read(messagingStateProvider.notifier);
+      final secSession = notifier.securitySessions[v2PeerId];
+
+      // 2. CapabilitiesExchange claims [1..1] version range (downgrade attempt/tampering)
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession!.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: v2PeerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 1,
+        maxSupportedVersion: 1, // Tampered range!
+        supportedCapabilities: const [VantraCapability.text],
+      );
+
+      final plaintextBytes = codec.encodePlaintext(capExchange);
+      final encrypted = await cryptoService.encryptBytes(
+        secretKey: secSession.receiveKey,
+        sessionSalt: secSession.sessionSalt,
+        sequence: 1,
+        messageId: capExchange.messageId,
+        plaintextBytes: plaintextBytes,
+      );
+
+      final envelope = DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encrypted.nonce),
+        ciphertext: Uint8List.fromList(encrypted.ciphertext),
+        mac: Uint8List.fromList(encrypted.mac),
+      );
+
+      // 3. Trigger receipt of tampered packet
+      fakeTransport.triggerIncomingPayload('EP_TAMPERED', codec.encodeWireEnvelope(envelope));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Mismatch detected: transport is disconnected
+      expect(fakeTransport.disconnectedTarget, 'EP_TAMPERED');
     });
   });
 }

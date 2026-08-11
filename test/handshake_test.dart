@@ -66,7 +66,8 @@ void main() {
       final envelope = codec.decodeWireEnvelope(fakeTransport.sentPayloads[0]);
       expect(envelope, isA<DomainHandshakePayload>());
       final handshake = envelope as DomainHandshakePayload;
-      expect(handshake.protocolVersion, kCurrentProtocolVersion);
+      expect(handshake.protocolVersion, 1);
+      expect(handshake.maxSupportedVersion, kCurrentProtocolVersion);
       expect(handshake.signature.length, 64);
       expect(handshake.identityPublicKey.length, 32);
       expect(handshake.ephemeralPublicKey.length, 32);

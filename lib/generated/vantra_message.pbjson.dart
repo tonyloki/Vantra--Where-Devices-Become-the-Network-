@@ -15,6 +15,27 @@ import 'dart:convert' as $convert;
 import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
 
+@$core.Deprecated('Use capabilityDescriptor instead')
+const Capability$json = {
+  '1': 'Capability',
+  '2': [
+    {'1': 'CAPABILITY_UNSPECIFIED', '2': 0},
+    {'1': 'CAPABILITY_TEXT', '2': 1},
+    {'1': 'CAPABILITY_IMAGE', '2': 2},
+    {'1': 'CAPABILITY_AUDIO', '2': 3},
+    {'1': 'CAPABILITY_VIDEO', '2': 4},
+    {'1': 'CAPABILITY_FILE', '2': 5},
+    {'1': 'CAPABILITY_GROUP', '2': 6},
+  ],
+};
+
+/// Descriptor for `Capability`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List capabilityDescriptor = $convert.base64Decode(
+    'CgpDYXBhYmlsaXR5EhoKFkNBUEFCSUxJVFlfVU5TUEVDSUZJRUQQABITCg9DQVBBQklMSVRZX1'
+    'RFWFQQARIUChBDQVBBQklMSVRZX0lNQUdFEAISFAoQQ0FQQUJJTElUWV9BVURJTxADEhQKEENB'
+    'UEFCSUxJVFlfVklERU8QBBITCg9DQVBBQklMSVRZX0ZJTEUQBRIUChBDQVBBQklMSVRZX0dST1'
+    'VQEAY=');
+
 @$core.Deprecated('Use deliveryStatusDescriptor instead')
 const DeliveryStatus$json = {
   '1': 'DeliveryStatus',
@@ -97,6 +118,28 @@ const IdentitySecurePayload$json = {
       '10': 'ephemeralPublicKey'
     },
     {'1': 'signature', '3': 5, '4': 1, '5': 12, '10': 'signature'},
+    {
+      '1': 'min_supported_version',
+      '3': 6,
+      '4': 1,
+      '5': 13,
+      '10': 'minSupportedVersion'
+    },
+    {
+      '1': 'max_supported_version',
+      '3': 7,
+      '4': 1,
+      '5': 13,
+      '10': 'maxSupportedVersion'
+    },
+    {
+      '1': 'supported_capabilities',
+      '3': 8,
+      '4': 3,
+      '5': 14,
+      '6': '.vantra.protocol.Capability',
+      '10': 'supportedCapabilities'
+    },
   ],
 };
 
@@ -105,7 +148,11 @@ final $typed_data.Uint8List identitySecurePayloadDescriptor = $convert.base64Dec
     'ChVJZGVudGl0eVNlY3VyZVBheWxvYWQSFwoHcGVlcl9pZBgBIAEoCVIGcGVlcklkEiEKDGRpc3'
     'BsYXlfbmFtZRgCIAEoCVILZGlzcGxheU5hbWUSLgoTaWRlbnRpdHlfcHVibGljX2tleRgDIAEo'
     'DFIRaWRlbnRpdHlQdWJsaWNLZXkSMAoUZXBoZW1lcmFsX3B1YmxpY19rZXkYBCABKAxSEmVwaG'
-    'VtZXJhbFB1YmxpY0tleRIcCglzaWduYXR1cmUYBSABKAxSCXNpZ25hdHVyZQ==');
+    'VtZXJhbFB1YmxpY0tleRIcCglzaWduYXR1cmUYBSABKAxSCXNpZ25hdHVyZRIyChVtaW5fc3Vw'
+    'cG9ydGVkX3ZlcnNpb24YBiABKA1SE21pblN1cHBvcnRlZFZlcnNpb24SMgoVbWF4X3N1cHBvcn'
+    'RlZF92ZXJzaW9uGAcgASgNUhNtYXhTdXBwb3J0ZWRWZXJzaW9uElIKFnN1cHBvcnRlZF9jYXBh'
+    'YmlsaXRpZXMYCCADKA4yGy52YW50cmEucHJvdG9jb2wuQ2FwYWJpbGl0eVIVc3VwcG9ydGVkQ2'
+    'FwYWJpbGl0aWVz');
 
 @$core.Deprecated('Use encryptedEnvelopeDescriptor instead')
 const EncryptedEnvelope$json = {
@@ -155,6 +202,15 @@ const VantraPlaintext$json = {
       '9': 0,
       '10': 'ack'
     },
+    {
+      '1': 'capabilities_exchange',
+      '3': 9,
+      '4': 1,
+      '5': 11,
+      '6': '.vantra.protocol.CapabilitiesExchange',
+      '9': 0,
+      '10': 'capabilitiesExchange'
+    },
   ],
   '8': [
     {'1': 'body'},
@@ -168,7 +224,45 @@ final $typed_data.Uint8List vantraPlaintextDescriptor = $convert.base64Decode(
     'dGltZXN0YW1wX21zGAQgASgDUgt0aW1lc3RhbXBNcxIbCglzZW5kZXJfaWQYBSABKAlSCHNlbm'
     'RlcklkEh8KC3JlY2VpdmVyX2lkGAYgASgJUgpyZWNlaXZlcklkEi8KBHRleHQYByABKAsyGS52'
     'YW50cmEucHJvdG9jb2wuVGV4dEJvZHlIAFIEdGV4dBIsCgNhY2sYCCABKAsyGC52YW50cmEucH'
-    'JvdG9jb2wuQWNrQm9keUgAUgNhY2tCBgoEYm9keQ==');
+    'JvdG9jb2wuQWNrQm9keUgAUgNhY2sSXAoVY2FwYWJpbGl0aWVzX2V4Y2hhbmdlGAkgASgLMiUu'
+    'dmFudHJhLnByb3RvY29sLkNhcGFiaWxpdGllc0V4Y2hhbmdlSABSFGNhcGFiaWxpdGllc0V4Y2'
+    'hhbmdlQgYKBGJvZHk=');
+
+@$core.Deprecated('Use capabilitiesExchangeDescriptor instead')
+const CapabilitiesExchange$json = {
+  '1': 'CapabilitiesExchange',
+  '2': [
+    {
+      '1': 'min_supported_version',
+      '3': 1,
+      '4': 1,
+      '5': 13,
+      '10': 'minSupportedVersion'
+    },
+    {
+      '1': 'max_supported_version',
+      '3': 2,
+      '4': 1,
+      '5': 13,
+      '10': 'maxSupportedVersion'
+    },
+    {
+      '1': 'supported_capabilities',
+      '3': 3,
+      '4': 3,
+      '5': 14,
+      '6': '.vantra.protocol.Capability',
+      '10': 'supportedCapabilities'
+    },
+  ],
+};
+
+/// Descriptor for `CapabilitiesExchange`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List capabilitiesExchangeDescriptor = $convert.base64Decode(
+    'ChRDYXBhYmlsaXRpZXNFeGNoYW5nZRIyChVtaW5fc3VwcG9ydGVkX3ZlcnNpb24YASABKA1SE2'
+    '1pblN1cHBvcnRlZFZlcnNpb24SMgoVbWF4X3N1cHBvcnRlZF92ZXJzaW9uGAIgASgNUhNtYXhT'
+    'dXBwb3J0ZWRWZXJzaW9uElIKFnN1cHBvcnRlZF9jYXBhYmlsaXRpZXMYAyADKA4yGy52YW50cm'
+    'EucHJvdG9jb2wuQ2FwYWJpbGl0eVIVc3VwcG9ydGVkQ2FwYWJpbGl0aWVz');
 
 @$core.Deprecated('Use textBodyDescriptor instead')
 const TextBody$json = {

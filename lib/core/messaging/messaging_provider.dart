@@ -1,7 +1,7 @@
 // ignore_for_file: avoid_print
 
 import 'dart:async';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import 'package:vantra/core/database/app_database.dart';
@@ -320,6 +320,58 @@ class MessagingNotifier extends Notifier<MessagingState> {
         await repository.updateMessageStatus(plaintext.originalMessageId, MessageStatus.delivered);
         // Flush queue to process next FIFO message
         _flushQueue(peerId);
+      } else if (plaintext is DomainCapabilitiesExchange) {
+        print('[VANTRA][SECURITY] Received CapabilitiesExchange from ${event.endpointId}');
+        final activeSession = state.sessions[peerId];
+        if (activeSession == null) return;
+
+        if (activeSession.status == SessionStatus.connected) {
+          // Already negotiated. Just reply with ACK to clear remote queue.
+          await _sendAck(event.endpointId, session, plaintext.messageId);
+          return;
+        }
+
+        // Downgrade protection and spoof check
+        if (plaintext.minSupportedVersion != activeSession.remoteMinVersion ||
+            plaintext.maxSupportedVersion != activeSession.remoteMaxVersion) {
+          print('[VANTRA][SECURITY] Version range mismatch! Handshake advertised [${activeSession.remoteMinVersion}..${activeSession.remoteMaxVersion}], exchange claimed [${plaintext.minSupportedVersion}..${plaintext.maxSupportedVersion}]. Terminating connection.');
+          final transport = ref.read(transportProvider);
+          await transport.disconnect(event.endpointId);
+          return;
+        }
+
+        final remoteCaps = activeSession.remoteCapabilities ?? const [];
+        final listsMatch = plaintext.supportedCapabilities.length == remoteCaps.length &&
+            plaintext.supportedCapabilities.every((c) => remoteCaps.contains(c));
+
+        if (!listsMatch) {
+          print('[VANTRA][SECURITY] Capability advertisement mismatch! Terminating connection.');
+          final transport = ref.read(transportProvider);
+          await transport.disconnect(event.endpointId);
+          return;
+        }
+
+        final localCapabilities = const [VantraCapability.text];
+        final negotiatedCapabilities = localCapabilities
+            .where((c) => plaintext.supportedCapabilities.contains(c))
+            .toList();
+
+        final readySession = activeSession.copyWith(
+          status: SessionStatus.connected,
+          enabledCapabilities: negotiatedCapabilities,
+        );
+
+        state = state.copyWith(
+          sessions: {
+            ...state.sessions,
+            peerId: readySession,
+          },
+        );
+
+        print('[VANTRA][SECURITY] CAPABILITY_NEGOTIATION_SUCCESS for peer $peerId. Enabled capabilities: $negotiatedCapabilities');
+
+        await _sendAck(event.endpointId, session, plaintext.messageId);
+        _flushQueue(peerId);
       }
     } catch (e, stack) {
       VantraLogger.log('[VANTRA][SECURITY] DECRYPT / INTEGRITY CHECK FAILED for message ${event.messageId}: $e', e, stack);
@@ -481,6 +533,30 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     print('[VANTRA][CRYPTO] SESSION READY endpointId=${identity.endpointId} sessionId=${derivedKeys.sessionId} securityState=SECURE');
 
+    // Version range negotiation
+    final localMin = kMinSupportedProtocolVersion;
+    final localMax = kCurrentProtocolVersion;
+    final remoteMin = identity.minSupportedVersion ?? 1;
+    final remoteMax = identity.maxSupportedVersion ?? 1;
+
+    final start = localMin > remoteMin ? localMin : remoteMin;
+    final end = localMax < remoteMax ? localMax : remoteMax;
+
+    if (start > end) {
+      print('[VANTRA][SECURITY] Incompatible version range: local [$localMin..$localMax], remote [$remoteMin..$remoteMax]. Disconnecting.');
+      final transport = ref.read(transportProvider);
+      await transport.disconnect(identity.endpointId);
+      return;
+    }
+    final negotiatedVersion = end;
+    final isV1 = negotiatedVersion == 1;
+
+    final localCapabilities = const [VantraCapability.text];
+    final remoteCapabilities = identity.supportedCapabilities ?? const [VantraCapability.text];
+    final negotiatedCapabilities = localCapabilities
+        .where((c) => remoteCapabilities.contains(c))
+        .toList();
+
     // 4. Update database peer record
     await repo.upsertPeer(
       identity.peerId,
@@ -489,18 +565,23 @@ class MessagingNotifier extends Notifier<MessagingState> {
       publicKey: identity.identityPublicKeyHex,
       fingerprint: remoteFingerprint,
       trustState: trustState,
-      protocolVersion: identity.protocolVersion,
+      protocolVersion: negotiatedVersion,
     );
 
     final updatedSession = PeerSession(
       peerId: identity.peerId,
       displayName: identity.displayName,
       endpointId: identity.endpointId,
-      status: SessionStatus.connected,
+      status: isV1 ? SessionStatus.connected : SessionStatus.handshaking,
       publicKey: identity.identityPublicKeyHex,
       fingerprint: remoteFingerprint,
       trustState: trustState,
       isSecure: true,
+      negotiatedVersion: negotiatedVersion,
+      enabledCapabilities: isV1 ? negotiatedCapabilities : null,
+      remoteMinVersion: remoteMin,
+      remoteMaxVersion: remoteMax,
+      remoteCapabilities: remoteCapabilities,
     );
 
     state = state.copyWith(
@@ -514,10 +595,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
       },
     );
 
-    print('[VANTRA][SECURITY] STATE: SECURE with peer ${identity.peerId} (SessionId: ${derivedKeys.sessionId})');
+    print('[VANTRA][SECURITY] STATE: SECURE with peer ${identity.peerId} (SessionId: ${derivedKeys.sessionId}, NegotiatedVersion: $negotiatedVersion)');
 
-    // Reconnection: Flush queue upon secure session establishment
-    _flushQueue(identity.peerId);
+    if (!isV1) {
+      print('[VANTRA][SECURITY] Initiating V2 CapabilitiesExchange with peer ${identity.peerId}');
+      await _sendCapabilitiesExchange(identity.peerId);
+    } else {
+      // Reconnection: Flush queue upon secure session establishment
+      _flushQueue(identity.peerId);
+    }
   }
 
   void _handleDiscoveredPeersUpdate(List<DiscoveredNearbyPeer> discoveredList) {
@@ -807,7 +893,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     print('[VANTRA][SECURITY] OUTBOUND HANDSHAKE DETAILS: localPeerId=${localId.peerId}, localFingerprint=${localId.fingerprint}, ephPubLen=${ephPub.bytes.length}, sigLen=${signatureBytes.length}');
 
-    // 3. Transmit IDENTITY_SECURE protobuf packet
+    // 3. Transmit IDENTITY_SECURE protobuf packet (using V1 wire version for compatibility)
     await _service.sendSecureIdentity(
       endpointId: endpointId,
       peerId: localId.peerId,
@@ -815,9 +901,56 @@ class MessagingNotifier extends Notifier<MessagingState> {
       identityPublicKey: Uint8List.fromList(idPubBytes),
       ephemeralPublicKey: Uint8List.fromList(ephPub.bytes),
       signature: Uint8List.fromList(signatureBytes),
-      protocolVersion: kCurrentProtocolVersion,
+      protocolVersion: 1, // V1 wire compatibility
+      minSupportedVersion: kMinSupportedProtocolVersion,
+      maxSupportedVersion: kCurrentProtocolVersion,
+      supportedCapabilities: const [VantraCapability.text],
     );
     print('[VANTRA][SECURITY] HANDSHAKE PACKET SENT to $endpointId');
+  }
+
+  Future<void> _sendCapabilitiesExchange(String peerId) async {
+    final session = state.sessions[peerId];
+    final secSession = _securitySessions[peerId];
+    if (session == null || secSession == null) return;
+
+    final msgId = const Uuid().v4();
+    final seq = secSession.nextSendSequence();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+
+    final domainPlaintext = DomainCapabilitiesExchange(
+      messageId: msgId,
+      sessionId: secSession.sessionId,
+      sequence: seq,
+      timestampMs: timestamp,
+      senderId: ref.read(localIdentityStateProvider).peerId,
+      receiverId: peerId,
+      minSupportedVersion: kMinSupportedProtocolVersion,
+      maxSupportedVersion: kCurrentProtocolVersion,
+      supportedCapabilities: const [VantraCapability.text],
+    );
+
+    final bytes = _service.codec.encodePlaintext(domainPlaintext);
+
+    final encrypted = await _cryptoService.encryptBytes(
+      secretKey: secSession.sendKey,
+      sessionSalt: secSession.sessionSalt,
+      sequence: seq,
+      messageId: msgId,
+      plaintextBytes: bytes,
+    );
+
+    await _service.sendEncryptedMessage(
+      endpointId: session.endpointId,
+      messageId: msgId,
+      sessionId: secSession.sessionId,
+      sequence: seq,
+      nonce: Uint8List.fromList(encrypted.nonce),
+      ciphertext: Uint8List.fromList(encrypted.ciphertext),
+      mac: Uint8List.fromList(encrypted.mac),
+      protocolVersion: session.negotiatedVersion ?? kCurrentProtocolVersion,
+    );
+    print('[VANTRA][SECURITY] Sent CapabilitiesExchange to ${session.endpointId}');
   }
 
   // Phase 7: Persistent Queue Flusher
@@ -1069,6 +1202,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final repo = ref.read(messagingRepositoryProvider);
     await repo.updatePeerNickname(peerId, nickname);
   }
+
+  @visibleForTesting
+  Map<String, SecuritySession> get securitySessions => _securitySessions;
 
   List<int> _hexDecode(String hex) {
     final result = <int>[];

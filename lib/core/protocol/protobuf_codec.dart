@@ -6,6 +6,42 @@ import 'protocol_exception.dart';
 import 'protocol_message.dart';
 import 'protocol_version.dart';
 
+Capability _mapToProtoCapability(VantraCapability cap) {
+  switch (cap) {
+    case VantraCapability.text:
+      return Capability.CAPABILITY_TEXT;
+    case VantraCapability.image:
+      return Capability.CAPABILITY_IMAGE;
+    case VantraCapability.audio:
+      return Capability.CAPABILITY_AUDIO;
+    case VantraCapability.video:
+      return Capability.CAPABILITY_VIDEO;
+    case VantraCapability.file:
+      return Capability.CAPABILITY_FILE;
+    case VantraCapability.group:
+      return Capability.CAPABILITY_GROUP;
+  }
+}
+
+VantraCapability? _mapToDomainCapability(Capability cap) {
+  switch (cap) {
+    case Capability.CAPABILITY_TEXT:
+      return VantraCapability.text;
+    case Capability.CAPABILITY_IMAGE:
+      return VantraCapability.image;
+    case Capability.CAPABILITY_AUDIO:
+      return VantraCapability.audio;
+    case Capability.CAPABILITY_VIDEO:
+      return VantraCapability.video;
+    case Capability.CAPABILITY_FILE:
+      return VantraCapability.file;
+    case Capability.CAPABILITY_GROUP:
+      return VantraCapability.group;
+    default:
+      return null;
+  }
+}
+
 class ProtobufCodec implements ProtocolCodec {
   const ProtobufCodec();
 
@@ -23,6 +59,11 @@ class ProtobufCodec implements ProtocolCodec {
           identityPublicKey: handshake.identityPublicKey,
           ephemeralPublicKey: handshake.ephemeralPublicKey,
           signature: handshake.signature,
+          minSupportedVersion: handshake.minSupportedVersion ?? 0,
+          maxSupportedVersion: handshake.maxSupportedVersion ?? 0,
+          supportedCapabilities: handshake.supportedCapabilities
+              ?.map(_mapToProtoCapability)
+              .toList(),
         );
       case DomainEncryptedEnvelope encrypted:
         pbEnvelope.encryptedMessage = EncryptedEnvelope(
@@ -93,6 +134,14 @@ class ProtobufCodec implements ProtocolCodec {
           identityPublicKey: Uint8List.fromList(h.identityPublicKey),
           ephemeralPublicKey: Uint8List.fromList(h.ephemeralPublicKey),
           signature: Uint8List.fromList(h.signature),
+          minSupportedVersion: h.minSupportedVersion != 0 ? h.minSupportedVersion : null,
+          maxSupportedVersion: h.maxSupportedVersion != 0 ? h.maxSupportedVersion : null,
+          supportedCapabilities: h.supportedCapabilities.isNotEmpty
+              ? h.supportedCapabilities
+                  .map(_mapToDomainCapability)
+                  .whereType<VantraCapability>()
+                  .toList()
+              : null,
         );
 
       case VantraWireEnvelope_Payload.encryptedMessage:
@@ -162,6 +211,14 @@ class ProtobufCodec implements ProtocolCodec {
               ? DeliveryStatus.DELIVERY_DELIVERED
               : DeliveryStatus.DELIVERY_UNSPECIFIED,
         );
+      case DomainCapabilitiesExchange capMsg:
+        pbPlaintext.capabilitiesExchange = CapabilitiesExchange(
+          minSupportedVersion: capMsg.minSupportedVersion,
+          maxSupportedVersion: capMsg.maxSupportedVersion,
+          supportedCapabilities: capMsg.supportedCapabilities
+              .map(_mapToProtoCapability)
+              .toList(),
+        );
     }
 
     return pbPlaintext.writeToBuffer();
@@ -225,6 +282,23 @@ class ProtobufCodec implements ProtocolCodec {
           status: ack.status == DeliveryStatus.DELIVERY_DELIVERED
               ? DomainDeliveryStatus.delivered
               : DomainDeliveryStatus.unspecified,
+        );
+
+      case VantraPlaintext_Body.capabilitiesExchange:
+        final cap = pbPlaintext.capabilitiesExchange;
+        return DomainCapabilitiesExchange(
+          messageId: pbPlaintext.messageId,
+          sessionId: pbPlaintext.sessionId,
+          sequence: seqInt,
+          timestampMs: pbPlaintext.timestampMs.toInt(),
+          senderId: pbPlaintext.senderId,
+          receiverId: pbPlaintext.receiverId,
+          minSupportedVersion: cap.minSupportedVersion,
+          maxSupportedVersion: cap.maxSupportedVersion,
+          supportedCapabilities: cap.supportedCapabilities
+              .map(_mapToDomainCapability)
+              .whereType<VantraCapability>()
+              .toList(),
         );
 
       case VantraPlaintext_Body.notSet:

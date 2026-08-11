@@ -1,3 +1,4 @@
+import 'package:vantra/core/protocol/protocol_message.dart';
 import 'peer_trust_state.dart';
 
 enum SessionStatus {
@@ -17,6 +18,11 @@ class PeerSession {
   final String? fingerprint;
   final PeerTrustState trustState;
   final bool isSecure;
+  final int? negotiatedVersion;
+  final List<VantraCapability>? enabledCapabilities;
+  final int? remoteMinVersion;
+  final int? remoteMaxVersion;
+  final List<VantraCapability>? remoteCapabilities;
 
   const PeerSession({
     required this.peerId,
@@ -27,6 +33,11 @@ class PeerSession {
     this.fingerprint,
     this.trustState = PeerTrustState.untrusted,
     this.isSecure = false,
+    this.negotiatedVersion,
+    this.enabledCapabilities,
+    this.remoteMinVersion,
+    this.remoteMaxVersion,
+    this.remoteCapabilities,
   });
 
   PeerSession copyWith({
@@ -38,6 +49,11 @@ class PeerSession {
     String? fingerprint,
     PeerTrustState? trustState,
     bool? isSecure,
+    int? negotiatedVersion,
+    List<VantraCapability>? enabledCapabilities,
+    int? remoteMinVersion,
+    int? remoteMaxVersion,
+    List<VantraCapability>? remoteCapabilities,
   }) {
     return PeerSession(
       peerId: peerId ?? this.peerId,
@@ -48,6 +64,11 @@ class PeerSession {
       fingerprint: fingerprint ?? this.fingerprint,
       trustState: trustState ?? this.trustState,
       isSecure: isSecure ?? this.isSecure,
+      negotiatedVersion: negotiatedVersion ?? this.negotiatedVersion,
+      enabledCapabilities: enabledCapabilities ?? this.enabledCapabilities,
+      remoteMinVersion: remoteMinVersion ?? this.remoteMinVersion,
+      remoteMaxVersion: remoteMaxVersion ?? this.remoteMaxVersion,
+      remoteCapabilities: remoteCapabilities ?? this.remoteCapabilities,
     );
   }
 }

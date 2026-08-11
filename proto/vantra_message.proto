@@ -23,6 +23,10 @@ message IdentitySecurePayload {
   bytes identity_public_key = 3;  // 32 bytes Ed25519
   bytes ephemeral_public_key = 4; // 32 bytes X25519
   bytes signature = 5;            // 64 bytes Ed25519 signature
+  // New in V2:
+  uint32 min_supported_version = 6;
+  uint32 max_supported_version = 7;
+  repeated Capability supported_capabilities = 8;
 }
 
 // 2. Encrypted Envelope (Wire container for encrypted payloads)
@@ -47,7 +51,24 @@ message VantraPlaintext {
   oneof body {
     TextBody text = 7;
     AckBody ack = 8;
+    CapabilitiesExchange capabilities_exchange = 9; // New in V2
   }
+}
+
+message CapabilitiesExchange {
+  uint32 min_supported_version = 1;
+  uint32 max_supported_version = 2;
+  repeated Capability supported_capabilities = 3;
+}
+
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  CAPABILITY_TEXT = 1;
+  CAPABILITY_IMAGE = 2;
+  CAPABILITY_AUDIO = 3;
+  CAPABILITY_VIDEO = 4;
+  CAPABILITY_FILE = 5;
+  CAPABILITY_GROUP = 6;
 }
 
 message TextBody {

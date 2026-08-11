@@ -1,40 +1,44 @@
-# VANTRA V2 — Phase 11: Protocol V2 & Capability Negotiation Implementation Plan
+# VANTRA V2 — Phase 11: Protocol V2 & Capability Negotiation Implementation Plan (Revised)
 
-This implementation plan details the architecture, design patterns, and file changes required to evolve VANTRA's wire protocol into a capability-aware, forward-compatible system (Protocol V2).
-
----
-
-## 1. Phase 1–10 Protocol Architecture Audit
-
-*   **P2P Transport**: Native Google Nearby Connections via `Transport` / `NearbyTransport`.
-*   **Serialized Wire Envelope**: `VantraWireEnvelope` (version `1`).
-*   **Decrypted Plaintext**: `VantraPlaintext` containing `oneof body` with `TextBody` and `AckBody`.
-*   **Security Boundary**: Ephemeral X25519 Diffie-Hellman key agreement, Ed25519 signature validation during handshake, HKDF session key derivation, and ChaCha20-Poly1305 symmetric message encryption.
-*   **Queueing**: Outgoing messages are stored in SQLite and flushed sequentially in FIFO order once a secure session is established.
-*   **Reconnection**: Phase 10 background auto-connection triggers for trusted peers, deriving a fresh secure session.
+This document details the final specification and implementation plan for Phase 11. It establishes a capability-aware, version-negotiating P2P communication layer (Protocol V2) while maintaining 100% backward compatibility with deployed V1 devices.
 
 ---
 
-## 2. Current Protocol V1 Limitations
+## 1. V1 ↔ V2 Compatibility Design (Crucial)
 
-*   **Static Message Payload**: `VantraPlaintext` only supports `TextBody` and `AckBody`. Adding new types (images, files) requires altering the core message structure, which is not forward-compatible.
-*   **No Capability Awareness**: Devices assume their peer supports all features. There is no mechanism to announce supported features or negotiate them before communication begins.
-*   **Static Versioning**: No range negotiation; version mismatch results in immediate disconnect.
+To prevent V1 devices from throwing validation errors when decoding handshake envelopes, we enforce the following rules:
+
+### A. Envelope Compatibility
+*   The outer wire envelope (`VantraWireEnvelope`) sent during handshake by a V2 device **MUST set its `protocol_version` field to `1`**. This ensures that V1 devices, which validate that the incoming version is $\le$ `kCurrentProtocolVersion` (which is `1` on V1), will not reject the packet.
+
+### B. Handshake Transcript Encoding & Signature Invariant
+*   The Ed25519 signature is computed over a manually encoded byte array of only the V1 fields (via `CanonicalEncoder.encodeHandshakeTranscript`).
+*   In V2, we add new fields to the end of `IdentitySecurePayload` in Protobuf: `min_supported_version`, `max_supported_version`, and `supported_capabilities`.
+*   Because Protobuf ignores unknown fields during parsing, a V1 device will successfully parse `IdentitySecurePayload`, verify the signature on the V1 fields, and establish the session.
+*   A V2 device will parse the message, verify the signature on the V1 fields, and read the version range/capability properties.
+*   **Transcript Isolation**: The signature is NEVER computed over the new fields directly during the handshake. This guarantees that V1 devices can successfully verify the handshake from a V2 device.
 
 ---
 
-## 3. Proposed V2 Versioning Architecture
+## 2. Separation of Version Concepts
 
-To support future features while remaining backward-compatible, VANTRA will split protocol control into two layers:
-1.  **Wire Protocol Version**: Determines the structural decoding rules for the envelope (e.g. `V1`, `V2`).
-2.  **Feature Capabilities**: Declares specific features supported by the application binary (e.g. `TEXT`, `IMAGE`, `FILE`).
+The architecture strictly separates three version concepts:
+1.  **Wire Version**: The structural encoding version of the envelope (represented in the `protocol_version` field of `VantraWireEnvelope`).
+    *   Initiators/Advertisers send `protocol_version = 1` for the handshake.
+    *   Once V2 is negotiated, subsequent secure messages use wire version `2`.
+2.  **Supported Version Range**: The range of protocol versions the binary understands.
+    *   V1 Device: `[1, 1]` (implied when fields are missing).
+    *   V2 Device: `[1, 2]`.
+3.  **Negotiated Session Version**: The deterministic single version calculated independently by both devices.
+    *   Algorithm: `intersection = [max(local_min, remote_min), min(local_max, remote_max)]`.
+    *   If `intersection` is empty: Handshake fails with `NO_COMMON_VERSION`, and the transport disconnects.
+    *   Otherwise: `negotiated_version = intersection.max`.
 
 ---
 
-## 4. Capability Registry Design
+## 3. Capability States & Registry
 
-We define a protobuf enum representing supported capabilities:
-
+### A. Registry (Protobuf Enum)
 ```protobuf
 enum Capability {
   CAPABILITY_UNSPECIFIED = 0;
@@ -47,48 +51,73 @@ enum Capability {
 }
 ```
 
-For Phase 11, the application will only advertise and enable `CAPABILITY_TEXT`. Future capabilities are registered in the schema but remain unadvertised.
+### B. Capability Lifecycle States
+*   **SUPPORTED**: Features implemented in the current code binary.
+    *   *Phase 11*: `[CAPABILITY_TEXT]`.
+*   **ADVERTISED**: Capabilities sent to the remote peer during handshake.
+    *   *Phase 11*: `[CAPABILITY_TEXT]`.
+*   **REMOTE_SUPPORTED**: Capabilities parsed from the remote handshake.
+*   **NEGOTIATED**: The intersection of local `ADVERTISED` and remote `REMOTE_SUPPORTED` lists.
+*   **ENABLED**: Active capabilities allowed for the current session.
 
 ---
 
-## 5. Version and Capability Negotiation Design
+## 4. State Machine & Session Negotiation
 
-Capabilities and version ranges are negotiated inside the **authenticated encrypted channel** immediately after the connection becomes `CONNECTED` and before any queue flushing or user messaging begins:
+The session state machine progresses sequentially to prevent race conditions or unilateral downgrades:
 
 ```text
-Nearby connection
-      ↓
-IDENTITY_SECURE (V1-compatible handshake)
-      ↓
-Ed25519 signature verified
-      ↓
-Symmetric Session Keys Derived (X25519 + HKDF)
-      ↓
-Session Status: handshaking (authenticating)
-      ↓
-First encrypted packet: VantraPlaintext(CapabilitiesExchange)
-      ↓
-Verify peer's capabilities & version ranges
-      ↓
-Negotiated version & capability intersection computed
-      ↓
-Session Status: connected (secure & ready)
-      ↓
-FIFO Queue Flush (Text Messages)
+       SECURE_SESSION_ESTABLISHED (X25519 DH complete)
+                    │
+                    ▼
+          NEGOTIATION_LOCAL_SENT
+ (Send VantraPlaintext(CapabilitiesExchange) as seq 1)
+                    │
+                    ▼
+        NEGOTIATION_REMOTE_RECEIVED
+                    │
+                    ▼
+       NEGOTIATION_RESULT_CALCULATED
+ (Verify exchange values match handshake fields)
+                    │
+                    ▼
+           NEGOTIATION_COMPLETE
+                    │
+                    ▼
+              SESSION_READY
+                    │
+                    ▼
+               QUEUE_FLUSH
 ```
 
+### Simultaneous Capability Messages
+Both devices transmit their `CapabilitiesExchange` payload as sequence `1` in their respective directional streams. Receipt is processed asynchronously. The session only transitions to `SessionStatus.connected` once both messages have been successfully processed and verified.
+
 ### Legacy V1 Device Fallback
-If a V2 device receives a handshake with `protocol_version = 1`, it:
-1.  Bypasses the `CapabilitiesExchange` step.
-2.  Immediately transitions the session to `SessionStatus.connected`.
-3.  Defaults the negotiated capabilities to `[CAPABILITY_TEXT]`.
+If the calculated negotiated version is `1` (which happens when connecting to a V1 peer):
+1.  The V2 device immediately skips the `CapabilitiesExchange` state.
+2.  Transitions directly to `connected` (secure & ready).
+3.  Defaults negotiated capabilities to `[CAPABILITY_TEXT]`.
+4.  Flushes queue.
+This ensures V1 devices remain completely unaffected and do not receive unrecognized message types.
 
 ---
 
-## 6. Secure Negotiation Boundary & Downgrade Protection
+## 5. Security & Downgrade Protection
 
-*   **Boundary**: Capability negotiation happens exclusively within the encrypted session tunnel (`VantraPlaintext` encrypted via ChaCha20-Poly1305). No capability claims are exposed or processed outside the authenticated encryption boundary.
-*   **Downgrade Protection**: If a V2 device connects to a V2 peer, it enforces the capability exchange. If the peer attempts to send messages before completing the capability exchange or attempts to downgrade the session without authorization, the connection is immediately terminated.
+*   **Session Binding**: The capability exchange takes place entirely inside the encrypted, replay-protected, and sequence-verified channel using the derived X25519 session keys.
+*   **Handshake Parameter Verification**: The decrypted `CapabilitiesExchange` message carries the version ranges and capability lists. Both sides verify that these values match the unencrypted handshake advertisements. If there is any discrepancy, the connection is immediately terminated.
+*   **Malicious Downgrade Rejection**: A V2 peer cannot unilaterally command the other to "use V1" if the negotiated result (based on the intersected ranges) indicates V2.
+
+---
+
+## 6. Unknown Enum Handling
+
+To handle future capabilities safely:
+*   We map protobuf enum values using an explicit helper.
+*   Any unrecognized capability integer maps to `null` and is filtered out (treated as unsupported and ignored).
+*   Any explicit `CAPABILITY_UNSPECIFIED` is ignored.
+*   Malformed or corrupted capability data fails validation and terminates the negotiation.
 
 ---
 
@@ -104,7 +133,6 @@ package vantra.protocol;
 option java_package = "me.vantra.proto";
 option java_outer_classname = "VantraProto";
 
-// Outer wire envelope remains backward-compatible
 message VantraWireEnvelope {
   uint32 protocol_version = 1;
 
@@ -121,6 +149,10 @@ message IdentitySecurePayload {
   bytes identity_public_key = 3;
   bytes ephemeral_public_key = 4;
   bytes signature = 5;
+  // New in V2:
+  uint32 min_supported_version = 6;
+  uint32 max_supported_version = 7;
+  repeated Capability supported_capabilities = 8;
 }
 
 message EncryptedEnvelope {
@@ -186,99 +218,55 @@ message ProtocolErrorPayload {
 
 ---
 
-## 8. Unknown Fields and Fail-Safe Handling
-
-*   **Protobuf Tolerance**: Unknown fields are ignored during parsing without crashing.
-*   **Unknown Capabilities**: Unsupported enums or message variants are parsed as `CAPABILITY_UNSPECIFIED` and ignored.
-*   **Fail-Safe**: If an unsupported capability is requested or encountered, it triggers a warning message in the UI: `"This device does not support this content type."`
-
----
-
-## 9. File-by-File Changes
+## 8. File-by-File Changes
 
 ### [vantra_message.proto](file:///c:/Users/Logesh/Documents/Vantra/proto/vantra_message.proto)
-*   Add the `CapabilitiesExchange` message.
-*   Add the `Capability` enum.
-*   Incorporate `CapabilitiesExchange` inside `VantraPlaintext` under field index `9`.
+*   Add `CapabilitiesExchange` and `Capability` definitions.
 
 ### [protocol_version.dart](file:///c:/Users/Logesh/Documents/Vantra/lib/core/protocol/protocol_version.dart)
-*   Increment `kCurrentProtocolVersion` to `2`.
-*   Maintain `kMinSupportedProtocolVersion` at `1` to preserve backward compatibility.
+*   Define `kCurrentProtocolVersion = 2` and `kMinSupportedProtocolVersion = 1`.
 
 ### [protocol_message.dart](file:///c:/Users/Logesh/Documents/Vantra/lib/core/protocol/protocol_message.dart)
-*   Define the `DomainCapabilitiesExchange` class extending `DomainPlaintext`.
-*   Expose the `VantraCapability` enum in Dart.
+*   Define `DomainCapabilitiesExchange` extending `DomainPlaintext`.
+*   Expose `VantraCapability` in Dart.
 
 ### [protobuf_codec.dart](file:///c:/Users/Logesh/Documents/Vantra/lib/core/protocol/protobuf_codec.dart)
-*   Add serialization and deserialization mapping for `DomainCapabilitiesExchange`.
+*   Add serialization support for `DomainCapabilitiesExchange`.
 
 ### [messaging_provider.dart](file:///c:/Users/Logesh/Documents/Vantra/lib/core/messaging/messaging_provider.dart)
-*   **State Updates**: Expose negotiated capabilities list in `PeerSession`.
-*   **Auto-Accept & Handshake**:
-    *   During handshake, check `protocolVersion` of incoming `SessionSecureIdentity`.
-    *   If version = 1: Transition session immediately to `SessionStatus.connected`, negotiated version = 1, and enabled capabilities = `[text]`.
-    *   If version = 2: Keep session status as `SessionStatus.handshaking`, and transmit the local `CapabilitiesExchange` message encrypted.
-*   **Incoming plaintexts**: On receiving `DomainCapabilitiesExchange`:
-    *   Evaluate version range.
-    *   Compute the intersection of local and remote capabilities.
-    *   Store negotiated capability list in `PeerSession`.
-    *   Transition session status to `SessionStatus.connected` (secure & ready).
-    *   Trigger `_flushQueue()` to transmit queued messages.
+*   Add state machine checks for `SessionStatus` during negotiation.
+*   Enforce queue gating (flushing only after `negotiationComplete`).
 
 ---
 
-## 10. Database Requirements
-
-*   No SQLite database schema changes or migrations are needed. Capability negotiation is session-specific and maintained strictly in memory.
-
----
-
-## 11. Security Invariants
-
-*   Capabilities can never establish trust.
-*   Capability negotiation cannot bypass Ed25519 signature checks.
-*   Downgrade attacks are prevented by checking version policies inside the secure tunnel.
-
----
-
-## 12. Failure / Recovery Matrix
+## 9. Failure / Recovery Matrix
 
 | Failure Event | Expected State Transition | Recovery Action |
 | :--- | :--- | :--- |
-| **No common version** | Handshake rejected | Disconnect Nearby link, return protocol error. |
-| **Negotiation timeout** | Session status failed | Disconnect transport endpoint, log error, and schedule backoff retry. |
-| **Peer disconnects during exchange** | Session status disconnected | Clear session, resume background scanning. |
-| **Unknown capability encountered** | Capability ignored | Map to `CAPABILITY_UNSPECIFIED`, proceed with common subsets. |
+| **No common version** | Reject handshake | Disconnect Nearby link, return protocol error. |
+| **Negotiation timeout** | Reset session status | Disconnect transport endpoint, retry backoff. |
+| **Tampered handshake values** | Disconnect | Terminate Nearby link immediately on mismatch detection. |
 
 ---
 
-## 13. Automated Test Plan
+## 10. Automated Test Plan
 
 ### Test 1 — Version Negotiation (V1 ↔ V2)
-A V2 device connects to a V1 device.
-*   **Expected**: Handshake completes successfully, capability exchange is bypassed, negotiated version is set to 1, and messaging proceeds using `CAPABILITY_TEXT`.
+*   Connect V2 and V1 devices.
+*   **Expected**: negotiated version = 1, capability exchange bypassed, session ready, text messaging works.
 
 ### Test 2 — Version Negotiation (V2 ↔ V2)
-Two V2 devices connect.
-*   **Expected**: Handshake completes, capabilities are exchanged, session status becomes `connected`, queue flushes.
+*   Connect two V2 devices.
+*   **Expected**: negotiated version = 2, capability exchange runs, session ready.
 
-### Test 3 — Incompatible Versions
-Device A (min=2, max=2) connects to Device B (min=1, max=1).
-*   **Expected**: Connection rejected due to incompatible version range.
-
-### Test 4 — Capability Intersection
-Device A supports `[TEXT, IMAGE]` and Device B supports `[TEXT, FILE]`.
-*   **Expected**: Negotiated capability is `[TEXT]`.
-
-### Test 5 — Downgrade Protection
-A malicious peer attempts to downgrade the session version below the minimum allowed version after handshake.
-*   **Expected**: Handshake fails, transport disconnected.
+### Test 3 — Downgrade Protection
+*   MITM modifies handshake range in transit.
+*   **Expected**: Disconnect on CapabilitiesExchange validation mismatch.
 
 ---
 
-## 14. Verification Checklist
+## 11. Physical Device Verification Plan
 
-- [ ] Protobuf compilation runs clean: `protoc --dart_out=...`
-- [ ] Static analysis runs clean: `flutter analyze`
-- [ ] All automated unit/widget/integration tests pass: `flutter test`
-- [ ] Debug APK compiles successfully: `flutter build apk --debug`
+1.  **V2 ↔ V2 Physical Test**: Verify auto-accept, negotiation, and message delivery.
+2.  **V2 ↔ Deployed V1 Physical Test**: Run a device with the new V2 build against a device running the older Phase 10 build, ensuring no crashes occur and messaging works.
+3.  **Automatic Reconnect**: Verify reconnection lifecycle triggers negotiation correctly.

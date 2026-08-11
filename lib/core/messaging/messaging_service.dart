@@ -16,6 +16,9 @@ class SessionSecureIdentity {
   final Uint8List identityPublicKey;
   final Uint8List ephemeralPublicKey;
   final Uint8List signature;
+  final int? minSupportedVersion;
+  final int? maxSupportedVersion;
+  final List<VantraCapability>? supportedCapabilities;
 
   const SessionSecureIdentity({
     required this.endpointId,
@@ -25,6 +28,9 @@ class SessionSecureIdentity {
     required this.identityPublicKey,
     required this.ephemeralPublicKey,
     required this.signature,
+    this.minSupportedVersion,
+    this.maxSupportedVersion,
+    this.supportedCapabilities,
   });
 
   String get identityPublicKeyHex => identityPublicKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
@@ -88,6 +94,9 @@ class MessagingService {
     required Uint8List ephemeralPublicKey,
     required Uint8List signature,
     int protocolVersion = kCurrentProtocolVersion,
+    int? minSupportedVersion,
+    int? maxSupportedVersion,
+    List<VantraCapability>? supportedCapabilities,
   }) async {
     VantraLogger.log('[VANTRA][SECURITY] Transmitting IDENTITY_SECURE protobuf packet to $endpointId');
     final envelope = DomainHandshakePayload(
@@ -97,6 +106,9 @@ class MessagingService {
       identityPublicKey: identityPublicKey,
       ephemeralPublicKey: ephemeralPublicKey,
       signature: signature,
+      minSupportedVersion: minSupportedVersion,
+      maxSupportedVersion: maxSupportedVersion,
+      supportedCapabilities: supportedCapabilities,
     );
     final bytes = codec.encodeWireEnvelope(envelope);
     await _transport.send(endpointId, bytes);
@@ -165,6 +177,9 @@ class MessagingService {
             identityPublicKey: handshake.identityPublicKey,
             ephemeralPublicKey: handshake.ephemeralPublicKey,
             signature: handshake.signature,
+            minSupportedVersion: handshake.minSupportedVersion,
+            maxSupportedVersion: handshake.maxSupportedVersion,
+            supportedCapabilities: handshake.supportedCapabilities,
           ));
 
         case DomainEncryptedEnvelope enc:
