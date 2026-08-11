@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
-import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/networking/nearby_connection_service.dart';
 import 'package:vantra/core/themes/vantra_theme.dart';
 import 'package:vantra/core/utils/logger.dart';
@@ -105,6 +104,7 @@ class GlobalConnectionListener extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(messagingStateProvider);
     final request = state.activeConnectionRequest;
+    final mismatch = state.identityMismatchRequest;
 
     return Stack(
       children: [
@@ -143,18 +143,19 @@ class GlobalConnectionListener extends ConsumerWidget {
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
                                 color: VantraTheme.textPrimary,
+                                decoration: TextDecoration.none,
                               ),
                             ),
                             const SizedBox(height: 12),
                             Text(
                               'Device: ${request.endpointName}',
-                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: VantraTheme.textPrimary),
+                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: VantraTheme.textPrimary, decoration: TextDecoration.none),
                               textAlign: TextAlign.center,
                             ),
                             const SizedBox(height: 4),
                             const Text(
                               'Establish secure offline pairing connection',
-                              style: TextStyle(fontSize: 12, color: VantraTheme.textSecondary),
+                              style: TextStyle(fontSize: 12, color: VantraTheme.textSecondary, decoration: TextDecoration.none),
                               textAlign: TextAlign.center,
                             ),
                             if (request.authenticationToken != null) ...[
@@ -173,6 +174,7 @@ class GlobalConnectionListener extends ConsumerWidget {
                                     fontWeight: FontWeight.bold,
                                     letterSpacing: 2,
                                     color: VantraTheme.amberWarning,
+                                    decoration: TextDecoration.none,
                                   ),
                                 ),
                               ),
@@ -184,7 +186,7 @@ class GlobalConnectionListener extends ConsumerWidget {
                                 Expanded(
                                   child: OutlinedButton(
                                     onPressed: () {
-                                      ref.read(transportProvider).rejectConnection(request.endpointId);
+                                      ref.read(messagingStateProvider.notifier).rejectConnectionRequest(request.endpointId);
                                     },
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: VantraTheme.redBlocked,
@@ -198,7 +200,7 @@ class GlobalConnectionListener extends ConsumerWidget {
                                 Expanded(
                                   child: ElevatedButton(
                                     onPressed: () {
-                                      ref.read(transportProvider).acceptConnection(request.endpointId);
+                                      ref.read(messagingStateProvider.notifier).acceptConnectionRequest(request.endpointId);
                                     },
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: VantraTheme.greenVerified,
@@ -206,6 +208,89 @@ class GlobalConnectionListener extends ConsumerWidget {
                                       padding: const EdgeInsets.symmetric(vertical: 12),
                                     ),
                                     child: const Text('ACCEPT'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          )
+        else if (mismatch != null)
+          Positioned.fill(
+            child: Material(
+              color: Colors.black87,
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0),
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    child: Card(
+                      color: VantraTheme.surface.withValues(alpha: 0.9),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16.0),
+                        side: const BorderSide(color: VantraTheme.redBlocked, width: 1.5),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.warning_amber_rounded,
+                              size: 48,
+                              color: VantraTheme.redBlocked,
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'Security change detected',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: VantraTheme.textPrimary,
+                                decoration: TextDecoration.none,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'The identity of this device does not match the identity you previously trusted.',
+                              style: TextStyle(fontSize: 14, color: VantraTheme.textSecondary, decoration: TextDecoration.none),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 24),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () {
+                                      ref.read(messagingStateProvider.notifier).rejectIdentityChange(mismatch.peerId);
+                                    },
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: VantraTheme.redBlocked,
+                                      side: const BorderSide(color: VantraTheme.redBlocked),
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                    ),
+                                    child: const Text('KEEP BLOCKED'),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () {
+                                      ref.read(messagingStateProvider.notifier).acceptIdentityChange(mismatch.peerId, mismatch.newPublicKey);
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: VantraTheme.greenVerified,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                    ),
+                                    child: const Text('VERIFY AGAIN'),
                                   ),
                                 ),
                               ],

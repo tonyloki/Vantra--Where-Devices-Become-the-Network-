@@ -2,8 +2,21 @@
 
 ## Phase Status
 
-*   **Current Phase:** Phase 7
-*   **Status:** Protocol Buffers wire protocol, encrypted ACK model, sequence verification, duplicate-message ACK recovery, and retry queues completed.
+*   **Current Phase:** Phase 10
+*   **Status:** Discovery candidate metadata hint protocol, auto-connect retry queues, and background auto-accept/verification completed.
+
+---
+
+## 1. Nearby Discovery Suffix Protocol
+
+VANTRA coordinates background candidate discovery by embedding identity hints into the Nearby Connections local advertising name:
+*   **Format:** `"$displayName:$peerId"`
+*   **Delimiter:** `:` (colon).
+*   **Construction:** The advertiser reads its local profile display name and UUID, formatted as `displayName:peerId`.
+*   **Parsing:** The discoverer parses the advertising string:
+    *   The prefix before the last colon is parsed as the `displayName`.
+    *   The suffix after the last colon is resolved as the candidate `peerId`.
+*   **Cryptographic Limitation:** This suffix is purely a candidate hint for database record lookup. The peer's identity is authenticated only during the subsequent `IdentitySecurePayload` handshake.
 
 ---
 

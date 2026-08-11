@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:nearby_connections/nearby_connections.dart';
@@ -41,6 +43,8 @@ class NearbyTransport implements Transport {
         serviceId: _serviceId,
         onConnectionInitiated: (id, info) {
           VantraLogger.log('NearbyTransport: Connection initiated by $id (${info.endpointName})');
+          print('[VANTRA][NEARBY] CONNECTION_INITIATED endpoint=$id name=${info.endpointName}');
+          print('[VANTRA][NEARBY] REQUEST_INFO_CREATED endpoint=$id');
           _connectionUpdateController.add(ConnectionUpdate(
             endpointId: id,
             status: ConnectionStatus.connecting,
@@ -51,6 +55,7 @@ class NearbyTransport implements Transport {
         },
         onConnectionResult: (id, status) {
           VantraLogger.log('NearbyTransport: Connection result for $id: $status');
+          print('[VANTRA][NEARBY] CONNECTION_RESULT endpoint=$id status=$status');
           if (status == Status.CONNECTED) {
             _connectionUpdateController.add(ConnectionUpdate(
               endpointId: id,
@@ -124,6 +129,7 @@ class NearbyTransport implements Transport {
         serviceId: _serviceId,
         onEndpointFound: (id, name, serviceId) {
           VantraLogger.log('NearbyTransport: Endpoint found $id ($name)');
+          print('[VANTRA][NEARBY] DISCOVERED endpoint=$id name=$name');
           if (!_discoveredPeers.any((p) => p.id == id)) {
             _discoveredPeers.add(DiscoveredPeer(id: id, name: name, serviceId: serviceId));
             _discoveredPeersController.add(List.unmodifiable(_discoveredPeers));
@@ -168,16 +174,13 @@ class NearbyTransport implements Transport {
   @override
   Future<void> connect(String localName, String endpointId) async {
     VantraLogger.log('NearbyTransport: connect to $endpointId');
-    try {
-      await stopDiscovery();
-    } catch (e) {
-      VantraLogger.log('NearbyTransport: failed to stop discovery before connect: $e');
-    }
     final result = await _nearby.requestConnection(
       localName,
       endpointId,
       onConnectionInitiated: (id, info) {
         VantraLogger.log('NearbyTransport: Connection initiated with $id (${info.endpointName})');
+        print('[VANTRA][NEARBY] CONNECTION_INITIATED endpoint=$id name=${info.endpointName}');
+        print('[VANTRA][NEARBY] REQUEST_INFO_CREATED endpoint=$id');
         _connectionUpdateController.add(ConnectionUpdate(
           endpointId: id,
           status: ConnectionStatus.connecting,
@@ -188,6 +191,7 @@ class NearbyTransport implements Transport {
       },
       onConnectionResult: (id, status) {
         VantraLogger.log('NearbyTransport: Connection result for $id: $status');
+        print('[VANTRA][NEARBY] CONNECTION_RESULT endpoint=$id status=$status');
         if (status == Status.CONNECTED) {
           _connectionUpdateController.add(ConnectionUpdate(
             endpointId: id,
@@ -226,6 +230,7 @@ class NearbyTransport implements Transport {
   @override
   Future<void> acceptConnection(String endpointId) async {
     VantraLogger.log('NearbyTransport: acceptConnection for $endpointId');
+    print('[VANTRA][NEARBY] ACCEPT_CONNECTION_CALLED endpoint=$endpointId');
     final result = await _nearby.acceptConnection(
       endpointId,
       onPayLoadRecieved: (id, payload) {
@@ -250,6 +255,7 @@ class NearbyTransport implements Transport {
   @override
   Future<void> rejectConnection(String endpointId) async {
     VantraLogger.log('NearbyTransport: rejectConnection for $endpointId');
+    print('[VANTRA][NEARBY] REJECT_CONNECTION_CALLED endpoint=$endpointId');
     final result = await _nearby.rejectConnection(endpointId);
     if (!result) {
       throw const VantraException('Failed to reject connection');

@@ -226,7 +226,7 @@ class _PocPageState extends ConsumerState<PocPage> {
   Future<void> _acceptConnection(String endpointId) async {
     try {
       _log('Accepting connection with $endpointId');
-      await ref.read(transportProvider).acceptConnection(endpointId);
+      await ref.read(messagingStateProvider.notifier).acceptConnectionRequest(endpointId);
     } catch (e) {
       _log('Accept connection failed: $e');
     }
@@ -235,7 +235,7 @@ class _PocPageState extends ConsumerState<PocPage> {
   Future<void> _rejectConnection(String endpointId) async {
     try {
       _log('Rejecting connection with $endpointId');
-      await ref.read(transportProvider).rejectConnection(endpointId);
+      await ref.read(messagingStateProvider.notifier).rejectConnectionRequest(endpointId);
     } catch (e) {
       _log('Reject connection failed: $e');
     }

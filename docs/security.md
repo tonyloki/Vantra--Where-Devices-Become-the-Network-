@@ -1,9 +1,7 @@
 # VANTRA — Security Architecture
 
-## Phase Status
-
-*   **Current Phase:** Phase 7
-*   **Status:** Cryptographic Identity, Trust Management, Peer Blocking, Replay Protection, and Encrypted ACKs completed.
+## Phase Status*   **Current Phase:** Phase 10
+*   **Status:** Auto-reconnection identity mismatch invariants and cryptographic signature checking completed.
 
 ---
 
@@ -27,9 +25,12 @@ VANTRA splits device identity into three distinct concepts:
                   └─────────► Fingerprint not verified ──────────► MITM Vulnerability remains
         ```
 
+> [!IMPORTANT]
+> **Discovery Suffix Security Boundary**: The advertised `peerId` suffix in the Nearby name is strictly a candidate identifier (discovery hint). It is NOT cryptographic proof of identity. The identity is authenticated solely by verifying the Ed25519 signature of the handshake transcript.
+
 ---
 
-## 2. Security State Machine & Blocking Security Invariant
+## 2. Security State Machine & Invariants
 
 For every active Nearby Connections link, the application executes the following state transitions:
 
@@ -39,16 +40,35 @@ For every active Nearby Connections link, the application executes the following
            ▼
    SECURITY_HANDSHAKE (Identity exchanged, signatures verified)
            │
-           ├──────────────────────────┬────────────────────────────┐
-           ▼ (Success & Allowed)      ▼ (Distrusted / Blocked)     ▼ (Signature/Ver Failure)
-   IDENTITY_VERIFIED          CONNECTION REJECTED           HANDSHAKE_FAILED
-           │                          │                            │
-           ▼                          ▼                            ▼
-      KEY_DERIVED                 DISCONNECT (Abrupt teardown)   DISCONNECT
-           │
-           ▼
-    SECURE (Ready for Protobuf ENCRYPTED_TEXT ciphers)
+           ├──────────────────────────┬────────────────────────────┬─────────────────────────────┐
+           ▼ (Success & Allowed)      ▼ (Distrusted / Blocked)     ▼ (Signature/Ver Failure)     ▼ (Public Key Mismatch)
+   IDENTITY_VERIFIED          CONNECTION REJECTED           HANDSHAKE_FAILED              IDENTITY_MISMATCH
+           │                          │                            │                             │
+           ▼                          ▼                            ▼                             ▼
+      KEY_DERIVED                 DISCONNECT (Abrupt teardown)   DISCONNECT                    DISCONNECT
+           │                                                                                     │
+           ▼                                                                                     ▼
+     SECURE (Ready for Protobuf ciphers)                                                   SECURITY WARNING
 ```
+
+### Discovery Identity Security Invariant
+*   `endpointId` is temporary.
+*   Advertised `peerId` is untrusted metadata.
+*   Stored `peerId + publicKey` represents the persistent identity relationship.
+*   Only the signed `IDENTITY_SECURE` handshake authenticates the peer.
+*   A matching advertised `peerId` MUST NOT bypass cryptographic verification.
+
+### Trusted Reconnection Invariant
+*   A trusted peer may automatically bypass the USER CONFIRMATION UI, but it may NEVER bypass cryptographic authentication.
+*   Every reconnection must still perform a secure handshake.
+
+### Identity Mismatch Invariant
+If a candidate peer advertises `peerId == trusted peerId` but presents a different Ed25519 public key during the handshake:
+1.  **Do NOT derive session keys** or enter `SECURE`.
+2.  **Disconnect the Nearby endpoint** immediately.
+3.  **Do NOT modify the existing trusted record automatically** in the database.
+4.  **Populate `identityMismatchRequest`** to surface the red-alert dialog.
+5.  **Require explicit user action** (accept to re-verify/overwrite, or reject to block/distrust) to modify database trust state.
 
 ### Blocking Security Invariant
 When an `IDENTITY_SECURE` handshake is received:

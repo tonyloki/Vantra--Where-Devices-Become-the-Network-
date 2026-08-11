@@ -94,13 +94,14 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
       final displayName = localIdentity.displayName.isNotEmpty
           ? localIdentity.displayName
           : 'VantraDevice';
+      final advertisingName = '$displayName:${localIdentity.peerId}';
 
       final transport = ref.read(transportProvider);
       final peerDiscovery = ref.read(peerDiscoveryServiceProvider);
 
       try {
-        VantraLogger.log('[VANTRA][LIFECYCLE] Starting advertising for $displayName');
-        await transport.startAdvertising(displayName);
+        VantraLogger.log('[VANTRA][LIFECYCLE] Starting advertising for $advertisingName');
+        await transport.startAdvertising(advertisingName);
       } on PlatformException catch (e) {
         final isAlreadyAdvertising = e.code == '8001' ||
             e.message?.contains('STATUS_ALREADY_ADVERTISING') == true ||
@@ -113,8 +114,8 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
       }
 
       try {
-        VantraLogger.log('[VANTRA][LIFECYCLE] Starting discovery for $displayName');
-        await peerDiscovery.startDiscovery(localName: displayName);
+        VantraLogger.log('[VANTRA][LIFECYCLE] Starting discovery for $advertisingName');
+        await peerDiscovery.startDiscovery(localName: advertisingName);
       } on PlatformException catch (e) {
         final isAlreadyDiscovering = e.code == '8002' ||
             e.message?.contains('STATUS_ALREADY_DISCOVERING') == true ||
@@ -184,10 +185,11 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
         final displayName = localIdentity.displayName.isNotEmpty
             ? localIdentity.displayName
             : 'VantraDevice';
+        final advertisingName = '$displayName:${localIdentity.peerId}';
 
         if (!state.isAdvertising) {
           try {
-            await ref.read(transportProvider).startAdvertising(displayName);
+            await ref.read(transportProvider).startAdvertising(advertisingName);
           } on PlatformException catch (e) {
             final isAlreadyAdvertising = e.code == '8001' ||
                 e.message?.contains('STATUS_ALREADY_ADVERTISING') == true ||
@@ -201,7 +203,7 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
 
         if (!state.isDiscovering) {
           try {
-            await ref.read(peerDiscoveryServiceProvider).startDiscovery(localName: displayName);
+            await ref.read(peerDiscoveryServiceProvider).startDiscovery(localName: advertisingName);
           } on PlatformException catch (e) {
             final isAlreadyDiscovering = e.code == '8002' ||
                 e.message?.contains('STATUS_ALREADY_DISCOVERING') == true ||

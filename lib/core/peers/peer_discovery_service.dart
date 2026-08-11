@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'dart:async';
 import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/utils/logger.dart';
@@ -97,6 +99,7 @@ class PeerDiscoveryService {
 
   Future<void> connect(String endpointId, {String localName = 'VantraDevice'}) async {
     VantraLogger.log('[VANTRA][DISCOVERY] Initiating connection to endpoint $endpointId');
+    print('[VANTRA][NEARBY] CONNECT_REQUEST_SENT endpoint=$endpointId');
     if (_discoveredMap.containsKey(endpointId)) {
       _discoveredMap[endpointId] = _discoveredMap[endpointId]!.copyWith(isConnecting: true);
       _discoveredController.add(_discoveredMap.values.toList());
@@ -109,12 +112,17 @@ class PeerDiscoveryService {
 
     for (final raw in rawPeers) {
       currentEndpoints.add(raw.id);
-      if (!_discoveredMap.containsKey(raw.id)) {
-        _discoveredMap[raw.id] = DiscoveredNearbyPeer(
-          endpointId: raw.id,
-          endpointName: raw.name,
-        );
-      }
+      final index = raw.name.indexOf(':');
+      final name = index != -1 ? raw.name.substring(0, index) : raw.name;
+      final peerId = index != -1 ? raw.name.substring(index + 1) : null;
+
+      _discoveredMap[raw.id] = DiscoveredNearbyPeer(
+        endpointId: raw.id,
+        endpointName: name,
+        resolvedPeerId: peerId,
+        isConnecting: _discoveredMap[raw.id]?.isConnecting ?? false,
+        isConnected: _discoveredMap[raw.id]?.isConnected ?? false,
+      );
     }
 
     // Remove lost endpoints

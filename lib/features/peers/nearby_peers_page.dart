@@ -6,6 +6,7 @@ import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/peers/peer_provider.dart';
 import 'package:vantra/core/themes/vantra_theme.dart';
 import 'package:vantra/core/networking/nearby_connection_service.dart';
+import 'package:vantra/core/identity/local_identity_provider.dart';
 
 class NearbyPeersPage extends ConsumerStatefulWidget {
   const NearbyPeersPage({super.key});
@@ -22,6 +23,7 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
     final isDiscovering = ref.watch(isDiscoveringProvider).value ?? false;
     final nearbyPeersAsync = ref.watch(discoveredNearbyPeersProvider);
     final messagingState = ref.watch(messagingStateProvider);
+    final localIdentity = ref.watch(localIdentityStateProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -188,7 +190,12 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                                   child: CircularProgressIndicator(strokeWidth: 2, color: VantraTheme.primary),
                                 )
                               : OutlinedButton(
-                                  onPressed: () => discoveryService.connect(peer.endpointId),
+                                  onPressed: () => discoveryService.connect(
+                                    peer.endpointId,
+                                    localName: localIdentity.displayName.isNotEmpty
+                                        ? localIdentity.displayName
+                                        : 'VantraDevice',
+                                  ),
                                   style: OutlinedButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                                   ),

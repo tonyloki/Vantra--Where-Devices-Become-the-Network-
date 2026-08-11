@@ -2,8 +2,8 @@
 
 ## Phase Status
 
-*   **Current Phase:** Phase 9
-*   **Status:** Production UI/UX Polish, global connection lifecycle controls, app entry experience, and custom launcher icons completed.
+*   **Current Phase:** Phase 10
+*   **Status:** Persistent trusted peer auto-reconnection, background auto-accept/auto-connect, and cryptographic validation completed.
 
 ---
 

@@ -36,11 +36,22 @@ class FakeTransport implements Transport {
     _payloadController.add(PayloadReceivedEvent(endpointId: endpointId, bytes: bytes));
   }
 
-  @override
-  Future<void> acceptConnection(String endpointId) async {}
+  int acceptConnectionCount = 0;
+  int rejectConnectionCount = 0;
+  final List<String> acceptedEndpoints = [];
+  final List<String> rejectedEndpoints = [];
 
   @override
-  Future<void> rejectConnection(String endpointId) async {}
+  Future<void> acceptConnection(String endpointId) async {
+    acceptConnectionCount++;
+    acceptedEndpoints.add(endpointId);
+  }
+
+  @override
+  Future<void> rejectConnection(String endpointId) async {
+    rejectConnectionCount++;
+    rejectedEndpoints.add(endpointId);
+  }
 
   @override
   Future<void> connect(String localName, String endpointId) async {}

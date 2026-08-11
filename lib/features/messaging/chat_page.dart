@@ -408,13 +408,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         child: TextField(
                           key: const Key('chat_input_field'),
                           controller: _controller,
-                          enabled: isConnected && !isBlocked,
+                          enabled: (isConnected || isTrusted) && !isBlocked,
                           textCapitalization: TextCapitalization.sentences,
                           style: const TextStyle(color: VantraTheme.textPrimary),
                           decoration: InputDecoration(
                             hintText: isBlocked
                                 ? 'Peer is blocked'
-                                : isConnected
+                                : (isConnected || isTrusted)
                                     ? 'Type an encrypted message...'
                                     : 'Disconnected',
                             hintStyle: const TextStyle(color: VantraTheme.textMuted),
@@ -436,7 +436,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           Icons.send_rounded,
                           color: Colors.white,
                         ),
-                        onPressed: (isConnected && !isBlocked)
+                        onPressed: ((isConnected || isTrusted) && !isBlocked)
                             ? () {
                                 final text = _controller.text.trim();
                                 final statusName = session?.status.name ?? 'disconnected';
