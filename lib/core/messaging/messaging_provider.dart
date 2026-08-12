@@ -91,6 +91,7 @@ class MessagingState {
     ConnectionStatus? connectionStatus,
     String? activeEndpointId,
     String? activeEndpointName,
+    bool clearActiveEndpoint = false,
     String? activeConversationPeerId,
     bool clearActiveConversation = false,
     ConnectionRequestInfo? activeConnectionRequest,
@@ -102,8 +103,12 @@ class MessagingState {
       sessions: sessions ?? this.sessions,
       endpointToPeerId: endpointToPeerId ?? this.endpointToPeerId,
       connectionStatus: connectionStatus ?? this.connectionStatus,
-      activeEndpointId: activeEndpointId ?? this.activeEndpointId,
-      activeEndpointName: activeEndpointName ?? this.activeEndpointName,
+      activeEndpointId: clearActiveEndpoint
+          ? null
+          : (activeEndpointId ?? this.activeEndpointId),
+      activeEndpointName: clearActiveEndpoint
+          ? null
+          : (activeEndpointName ?? this.activeEndpointName),
       activeConversationPeerId: clearActiveConversation
           ? null
           : (activeConversationPeerId ?? this.activeConversationPeerId),
@@ -162,6 +167,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
   // Connection Request Idempotency Tracking
   final Set<String> _acceptedEndpoints = {};
   final Set<String> _rejectedEndpoints = {};
+  final Set<String> _activeConnectLocks = {};
+  final Map<String, Timer> _handshakeTimers = {};
 
   StreamSubscription? _discoveredPeersSub;
   final Map<String, DateTime> _lastConnectAttempt = {};
@@ -198,6 +205,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
       _activePeerFlushes.clear();
       _acceptedEndpoints.clear();
       _rejectedEndpoints.clear();
+      _activeConnectLocks.clear();
+      for (final t in _handshakeTimers.values) {
+        t.cancel();
+      }
+      _handshakeTimers.clear();
       _lastConnectAttempt.clear();
       _reconnectBackoff.clear();
       for (final t in _ackTimers.values) {
@@ -701,11 +713,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     _securitySessions[identity.peerId] = secSession;
+    _handshakeTimers.remove(identity.endpointId)?.cancel();
+    _activeConnectLocks.remove(identity.peerId);
     _reconnectBackoff.remove(identity.peerId);
     _lastConnectAttempt.remove(identity.peerId);
 
     print('[VANTRA][CRYPTO] SESSION READY endpointId=${identity.endpointId} sessionId=${derivedKeys.sessionId} securityState=SECURE');
     print('[VANTRA][CONNECTION] SESSION_READY: peerId=${identity.peerId}, endpointId=${identity.endpointId}, sessionId=${derivedKeys.sessionId}');
+    print('[VANTRA][SESSION] peer=${identity.peerId} state=SECURE');
 
     // Version range negotiation
     final localMin = kMinSupportedProtocolVersion;
@@ -780,6 +795,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       await _sendCapabilitiesExchange(identity.peerId);
     } else {
       // Reconnection: Flush queue upon secure session establishment
+      print('[VANTRA][MESSAGE] peer=${identity.peerId} queue_flush_started');
       _flushQueue(identity.peerId);
     }
   }
@@ -794,6 +810,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final peerId = peer.resolvedPeerId;
       if (peerId == null || peerId.isEmpty) continue;
 
+      if (_activeConnectLocks.contains(peerId)) {
+        continue;
+      }
+
       final session = state.sessions[peerId];
       if (session != null &&
           (session.status == SessionStatus.connected ||
@@ -803,13 +823,26 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
 
       final lastAttempt = _lastConnectAttempt[peerId];
-      final backoff = _reconnectBackoff[peerId] ?? const Duration(seconds: 5);
+      final backoff = _reconnectBackoff[peerId] ?? const Duration(seconds: 1);
       if (lastAttempt != null && DateTime.now().difference(lastAttempt) < backoff) {
+        continue;
+      }
+
+      // DETERMINISTIC INITIATOR DECISION
+      final localPeerId = localIdentity.peerId;
+      final remotePeerId = peerId;
+      final comparison = localPeerId.compareTo(remotePeerId);
+      final role = comparison < 0 ? 'INITIATOR' : 'RESPONDER';
+
+      print('[VANTRA][CONNECTION] ROLE_DECISION localPeerId=$localPeerId remotePeerId=$remotePeerId role=$role');
+
+      if (comparison >= 0) {
         continue;
       }
 
       repo.getPeer(peerId).then((dbPeer) {
         if (dbPeer != null && dbPeer.trustState == PeerTrustState.trusted) {
+          if (_activeConnectLocks.contains(peerId)) return;
           final currentSession = state.sessions[peerId];
           if (currentSession != null &&
               (currentSession.status == SessionStatus.connected ||
@@ -821,14 +854,21 @@ class MessagingNotifier extends Notifier<MessagingState> {
           print('[VANTRA][NEARBY] TRUSTED_PEER_DISCOVERED peerId=$peerId name=${peer.effectiveName}');
           print('[VANTRA][NEARBY] AUTO_RECONNECT peerId=$peerId endpointId=${peer.endpointId}');
 
+          _activeConnectLocks.add(peerId);
           _lastConnectAttempt[peerId] = DateTime.now();
-          _reconnectBackoff[peerId] = Duration(seconds: (backoff.inSeconds * 2).clamp(5, 60));
+          _reconnectBackoff[peerId] = Duration(seconds: (backoff.inSeconds * 2).clamp(1, 60));
 
+          print('[VANTRA][RETRY] peer=$peerId retry_in=${_reconnectBackoff[peerId]!.inSeconds}s');
+          print('[VANTRA][CONNECTION] REQUEST_START: endpointId=${peer.endpointId}, localName=${localIdentity.displayName}:${localIdentity.peerId}, mode=AUTO_CONNECT');
           print('[VANTRA][NEARBY] CONNECT_ATTEMPT endpointId=${peer.endpointId}');
           ref.read(peerDiscoveryServiceProvider).connect(
             peer.endpointId,
             localName: '${localIdentity.displayName}:${localIdentity.peerId}',
-          ).catchError((e) {
+          ).then((_) {
+            print('[VANTRA][CONNECTION] REQUEST_SUCCESS: endpointId=${peer.endpointId}');
+          }).catchError((e) {
+            _activeConnectLocks.remove(peerId);
+            print('[VANTRA][CONNECTION] REQUEST_ERROR: endpointId=${peer.endpointId}, error=$e');
             print('[VANTRA][NEARBY] Auto-connect failed to connect for endpointId=${peer.endpointId}: $e');
           });
         }
@@ -850,6 +890,25 @@ class MessagingNotifier extends Notifier<MessagingState> {
       _acceptedEndpoints.remove(update.endpointId);
       _rejectedEndpoints.remove(update.endpointId);
       print('[VANTRA][NEARBY] CONNECTION_ESTABLISHED endpoint=${update.endpointId}');
+
+      // Arm 15-second handshake watchdog timer
+      _handshakeTimers[update.endpointId]?.cancel();
+      _handshakeTimers[update.endpointId] = Timer(const Duration(seconds: 15), () async {
+        print('[VANTRA][CONNECTION] HANDSHAKE_TIMEOUT endpointId=${update.endpointId}');
+        final pId = state.endpointToPeerId[update.endpointId];
+        if (pId != null) {
+          _activeConnectLocks.remove(pId);
+          final sess = state.sessions[pId];
+          if (sess != null && !sess.isSecure) {
+            print('[VANTRA][SECURITY] Handshake timed out for peer $pId. Destroying session and disconnecting.');
+            _securitySessions.remove(pId);
+            _pendingEphemeralKeys.remove(update.endpointId);
+            try {
+              await ref.read(transportProvider).disconnect(update.endpointId);
+            } catch (_) {}
+          }
+        }
+      });
 
       state = state.copyWith(
         connectionStatus: ConnectionStatus.connected,
@@ -878,6 +937,52 @@ class MessagingNotifier extends Notifier<MessagingState> {
       print('[VANTRA][SECURITY] STATE: CONNECTING (endpointId=${update.endpointId}, isIncoming=${update.isIncoming}, token=${update.authenticationToken})');
       print('[VANTRA][NEARBY] GLOBAL_REQUEST_RECEIVED endpoint=${update.endpointId}');
 
+      final localIdentity = ref.read(localIdentityStateProvider);
+
+      if (candidatePeerId != null && candidatePeerId.isNotEmpty) {
+        final localPeerId = localIdentity.peerId;
+        final remotePeerId = candidatePeerId;
+        final role = localPeerId.compareTo(remotePeerId) < 0 ? 'INITIATOR' : 'RESPONDER';
+        print('[VANTRA][CONNECTION] ROLE_DECISION localPeerId=$localPeerId remotePeerId=$remotePeerId role=$role');
+      }
+
+      // SIMULTANEOUS CONNECTION REQUEST SAFETY CHECK:
+      if (update.isIncoming == true && state.activeEndpointId != null && state.activeEndpointId != update.endpointId) {
+        final pendingOutgoingPeerId = state.endpointToPeerId[state.activeEndpointId];
+        if (candidatePeerId != null && candidatePeerId == pendingOutgoingPeerId) {
+          final localPeerId = localIdentity.peerId;
+          final remotePeerId = candidatePeerId;
+          final isInitiator = localPeerId.compareTo(remotePeerId) < 0;
+
+          if (isInitiator) {
+            print('[VANTRA][CONNECTION] DUPLICATE_REQUEST_IGNORED localPeerId=$localPeerId remotePeerId=$remotePeerId');
+            rejectConnectionRequest(update.endpointId);
+            return;
+          } else {
+            print('[VANTRA][CONNECTION] Outgoing request abandoned due to simultaneous incoming request from initiator $remotePeerId');
+            // Cancel/abandon outgoing attempt by calling disconnect() at transport layer
+            final outgoingEndpointId = state.activeEndpointId!;
+            try {
+              ref.read(transportProvider).disconnect(outgoingEndpointId);
+            } catch (_) {}
+            
+            // Clean up the outgoing session local state to prepare for accepting the incoming request
+            final newEndpointToPeerId = Map<String, String>.from(state.endpointToPeerId);
+            newEndpointToPeerId.remove(outgoingEndpointId);
+            state = state.copyWith(
+              endpointToPeerId: newEndpointToPeerId,
+            );
+          }
+        }
+      }
+
+      // Set activeEndpointId immediately to avoid race conditions during async database queries
+      state = state.copyWith(
+        connectionStatus: ConnectionStatus.connecting,
+        activeEndpointId: update.endpointId,
+        activeEndpointName: candidateName,
+      );
+
       if (update.isIncoming == false) {
         print('[VANTRA][CONNECTION] Outgoing request auto-accepting in background: endpointId=${update.endpointId}');
         acceptConnectionRequest(update.endpointId);
@@ -888,7 +993,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
         print('[VANTRA][NEARBY] ENDPOINT_RESOLVED endpointId=${update.endpointId} peerId=$candidatePeerId');
         final repo = ref.read(messagingRepositoryProvider);
         repo.getPeer(candidatePeerId).then((dbPeer) async {
-          if (dbPeer != null && dbPeer.trustState == PeerTrustState.trusted) {
+          // Guard against race conditions where connection failed/disconnected while database lookup was running
+          if (state.activeEndpointId != update.endpointId) {
+            print('[VANTRA][NEARBY] Connection was aborted before database lookup finished for endpointId=${update.endpointId}');
+            return;
+          }
+
+          if (dbPeer != null && dbPeer.trustState == PeerTrustState.trusted && state.identityMismatchRequest?.peerId != candidatePeerId) {
             print('[VANTRA][NEARBY] Auto-accepting trusted peer candidate in background endpointId=${update.endpointId}');
             
             final updatedSession = PeerSession(
@@ -924,7 +1035,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
             _showManualPairingOverlay(update, candidateName, candidatePeerId);
           }
         }).catchError((_) {
-          _showManualPairingOverlay(update, candidateName, candidatePeerId);
+          if (state.activeEndpointId == update.endpointId) {
+            _showManualPairingOverlay(update, candidateName, candidatePeerId);
+          }
         });
       } else {
         _showManualPairingOverlay(update, candidateName, null);
@@ -942,10 +1055,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
       print('[VANTRA][SECURITY] STATE: DISCONNECTED/REJECTED/ERROR (endpointId=${update.endpointId}, status=${update.status.name})');
       _acceptedEndpoints.remove(update.endpointId);
       _rejectedEndpoints.remove(update.endpointId);
+      _handshakeTimers.remove(update.endpointId)?.cancel();
 
       final peerId = state.endpointToPeerId[update.endpointId];
       if (peerId != null) {
         print('[VANTRA][CRYPTO] SESSION DESTROYED endpointId=${update.endpointId}');
+        _activeConnectLocks.remove(peerId);
         _securitySessions.remove(peerId);
         _backoffTimers[peerId]?.cancel();
         _backoffTimers.remove(peerId);
@@ -961,10 +1076,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
       _pendingEphemeralKeys.remove(update.endpointId);
 
+      final newEndpointToPeerId = Map<String, String>.from(state.endpointToPeerId);
+      newEndpointToPeerId.remove(update.endpointId);
+
       state = state.copyWith(
         connectionStatus: update.status,
-        activeEndpointId: null,
-        activeEndpointName: null,
+        clearActiveEndpoint: true,
+        endpointToPeerId: newEndpointToPeerId,
         clearActiveConnectionRequest: true,
       );
     } else {
@@ -998,6 +1116,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   Future<void> acceptConnectionRequest(String endpointId) async {
     print('[VANTRA][CONNECTION] REQUEST_ACCEPT_CLICKED: endpointId=$endpointId');
+    print('[VANTRA][CONNECTION] ACCEPT_BUTTON_PRESSED: endpointId=$endpointId');
     print('[VANTRA][NEARBY] ACCEPT_PRESSED endpoint=$endpointId');
     if (_acceptedEndpoints.contains(endpointId)) {
       print('[VANTRA][NEARBY] Already accepted endpoint $endpointId, skipping duplicate accept call');
@@ -1008,12 +1127,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
     // Transition to accepting status but do NOT clear activeConnectionRequest yet
     state = state.copyWith(connectionStatus: ConnectionStatus.accepting);
 
+    print('[VANTRA][CONNECTION] ACCEPT_START: endpointId=$endpointId');
     print('[VANTRA][CONNECTION] ACCEPT_CALL_START: endpointId=$endpointId');
     try {
       final transport = ref.read(transportProvider);
       await transport.acceptConnection(endpointId);
+      print('[VANTRA][CONNECTION] ACCEPT_SUCCESS: endpointId=$endpointId');
       print('[VANTRA][CONNECTION] ACCEPT_CALL_SUCCESS: endpointId=$endpointId');
     } catch (e) {
+      print('[VANTRA][CONNECTION] ACCEPT_ERROR: endpointId=$endpointId, error=$e');
       print('[VANTRA][CONNECTION] ACCEPT_CALL_ERROR: endpointId=$endpointId, error=$e');
       print('[VANTRA][NEARBY] Error calling acceptConnection on transport: $e');
     }

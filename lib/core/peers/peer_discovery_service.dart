@@ -98,6 +98,20 @@ class PeerDiscoveryService {
   }
 
   Future<void> connect(String endpointId, {String localName = 'VantraDevice'}) async {
+    final localIndex = localName.indexOf(':');
+    final localPeerId = localIndex != -1 ? localName.substring(localIndex + 1) : '';
+    final remotePeer = _discoveredMap[endpointId];
+    final remotePeerId = remotePeer?.resolvedPeerId;
+
+    if (localPeerId.isNotEmpty && remotePeerId != null && remotePeerId.isNotEmpty) {
+      final role = localPeerId.compareTo(remotePeerId) < 0 ? 'INITIATOR' : 'RESPONDER';
+      print('[VANTRA][CONNECTION] ROLE_DECISION localPeerId=$localPeerId remotePeerId=$remotePeerId role=$role');
+      if (localPeerId.compareTo(remotePeerId) >= 0) {
+        print('[VANTRA][CONNECTION] Aborting connect: local device is the designated RESPONDER for remote peer $remotePeerId');
+        return;
+      }
+    }
+
     VantraLogger.log('[VANTRA][DISCOVERY] Initiating connection to endpoint $endpointId');
     print('[VANTRA][NEARBY] CONNECT_REQUEST_SENT endpoint=$endpointId');
     if (_discoveredMap.containsKey(endpointId)) {

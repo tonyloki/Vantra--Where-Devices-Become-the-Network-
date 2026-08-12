@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -141,6 +143,9 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                     final isConnected = session?.status == SessionStatus.connected;
                     final isConnecting = peer.isConnecting || session?.status == SessionStatus.connecting || session?.status == SessionStatus.handshaking;
 
+                    final remotePeerId = peer.resolvedPeerId;
+                    final isInitiator = remotePeerId != null && localIdentity.peerId.isNotEmpty && localIdentity.peerId.compareTo(remotePeerId) < 0;
+
                     return ListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                       leading: CircleAvatar(
@@ -189,21 +194,34 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                                   height: 20,
                                   child: CircularProgressIndicator(strokeWidth: 2, color: VantraTheme.primary),
                                 )
-                              : OutlinedButton(
-                                  onPressed: () {
-                                    final displayName = localIdentity.displayName.isNotEmpty
-                                        ? localIdentity.displayName
-                                        : 'VantraDevice';
-                                    discoveryService.connect(
-                                      peer.endpointId,
-                                      localName: '$displayName:${localIdentity.peerId}',
-                                    );
-                                  },
-                                  style: OutlinedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                  ),
-                                  child: const Text('Connect'),
-                                ),
+                              : isInitiator
+                                  ? OutlinedButton(
+                                      onPressed: () {
+                                        print('[VANTRA][CONNECTION] CONNECT_BUTTON_PRESSED: endpointId=${peer.endpointId}, name=${peer.effectiveName}');
+                                        final displayName = localIdentity.displayName.isNotEmpty
+                                            ? localIdentity.displayName
+                                            : 'VantraDevice';
+                                        discoveryService.connect(
+                                          peer.endpointId,
+                                          localName: '$displayName:${localIdentity.peerId}',
+                                        );
+                                      },
+                                      style: OutlinedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                      ),
+                                      child: const Text('Connect'),
+                                    )
+                                  : const Padding(
+                                      padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 6.0),
+                                      child: Text(
+                                        'Waiting for connection…',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: VantraTheme.textSecondary,
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                      ),
+                                    ),
                     );
                   },
                 );

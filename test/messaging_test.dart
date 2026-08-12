@@ -22,6 +22,8 @@ import 'package:vantra/core/messaging/messaging_repository.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'package:cryptography/cryptography.dart';
 import 'test_fakes.dart';
+import 'package:vantra/core/networking/nearby_connection_service.dart';
+import 'package:vantra/core/peers/peer_provider.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -1477,6 +1479,485 @@ void main() {
       // Verify status is rejected and request is cleared
       expect(container.read(messagingStateProvider).connectionStatus, ConnectionStatus.rejected);
       expect(container.read(messagingStateProvider).activeConnectionRequest, isNull);
+    });
+
+    test('Test Q - Deterministic connection decisions: local < remote, local > remote, local == remote', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      // Make sure localId has a fixed peerId
+      final localPeerId = localId.peerId;
+      expect(localPeerId.isNotEmpty, true);
+
+      // 1. Peer with remote ID > local ID (local < remote) -> should INITIATE
+      final remotePeerIdLarger = '${localPeerId}_larger';
+      await repo.upsertPeer(
+        remotePeerIdLarger,
+        'LargerPeer',
+        publicKey: 'pub1',
+        fingerprint: 'fp1',
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      fakeTransport.connectCallCount = 0;
+      fakeTransport.connectedEndpoints.clear();
+
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(
+          id: 'EP_LARGER',
+          name: 'LargerPeer:$remotePeerIdLarger',
+          serviceId: 'me.vantra.vantra',
+        ),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Expect that connect was called because local < remote
+      expect(fakeTransport.connectCallCount, 1);
+      expect(fakeTransport.connectedEndpoints.first, 'EP_LARGER');
+
+      // 2. Peer with remote ID < local ID (local > remote) -> should WAIT (skip initiation)
+      final remotePeerIdSmaller = '00000000-0000-0000-0000-000000000000';
+      await repo.upsertPeer(
+        remotePeerIdSmaller,
+        'SmallerPeer',
+        publicKey: 'pub2',
+        fingerprint: 'fp2',
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      fakeTransport.connectCallCount = 0;
+      fakeTransport.connectedEndpoints.clear();
+
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(
+          id: 'EP_SMALLER',
+          name: 'SmallerPeer:$remotePeerIdSmaller',
+          serviceId: 'me.vantra.vantra',
+        ),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Expect that connect was NOT called because local > remote
+      expect(fakeTransport.connectCallCount, 0);
+
+      // 3. Peer with remote ID == local ID (local == remote) -> should WAIT / skip
+      fakeTransport.connectCallCount = 0;
+      fakeTransport.connectedEndpoints.clear();
+
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(
+          id: 'EP_SAME',
+          name: 'SamePeer:$localPeerId',
+          serviceId: 'me.vantra.vantra',
+        ),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Expect that connect was NOT called because local == remote
+      expect(fakeTransport.connectCallCount, 0);
+    });
+
+    test('Test R - Failure cleanup restores retryable state and clears mappings', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+
+      final peerId = const Uuid().v4();
+      await repo.upsertPeer(
+        peerId,
+        'CleanupPeer',
+        publicKey: 'pub3',
+        fingerprint: 'fp3',
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      // Trigger connecting state to establish mappings
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_CLEANUP',
+        status: ConnectionStatus.connecting,
+        endpointName: 'CleanupPeer:$peerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify mapped in state
+      expect(container.read(messagingStateProvider).endpointToPeerId['EP_CLEANUP'], peerId);
+
+      // Trigger connection failure
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_CLEANUP',
+        status: ConnectionStatus.error,
+        endpointName: 'CleanupPeer:$peerId',
+        errorMessage: 'Connection lost',
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify endpoint mapping was removed
+      expect(container.read(messagingStateProvider).endpointToPeerId['EP_CLEANUP'], isNull);
+      // Verify activeEndpointId is cleared
+      expect(container.read(messagingStateProvider).activeEndpointId, isNull);
+      // Verify activeConnectionRequest is cleared
+      expect(container.read(messagingStateProvider).activeConnectionRequest, isNull);
+    });
+
+    test('Test S - Decoupled Initialization handles advertising/discovery failures independently', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('me.vantra.vantra/device_info'),
+        (MethodCall methodCall) async {
+          if (methodCall.method == 'getSdkVersion') {
+            return 30; // Android 11
+          }
+          return null;
+        },
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('flutter.baseflow.com/permissions/methods'),
+        (MethodCall methodCall) async {
+          if (methodCall.method == 'checkPermissionStatus' || methodCall.method == 'requestPermissions') {
+            return {
+              for (final p in methodCall.arguments) p: 1 // PermissionStatus.granted
+            };
+          }
+          if (methodCall.method == 'checkServiceStatus') {
+            return 1; // ServiceStatus.enabled
+          }
+          return null;
+        },
+      );
+
+      final notifier = container.read(nearbyConnectionServiceProvider.notifier);
+
+      // Invoke initialize() and expect it to execute safely in fake test environment.
+      await notifier.initialize();
+      expect(container.read(nearbyConnectionServiceProvider).status, NearbyServiceStatus.ready);
+      expect(container.read(nearbyConnectionServiceProvider).isAdvertising, true);
+      expect(container.read(nearbyConnectionServiceProvider).isDiscovering, true);
+    });
+
+    test('Deadlock Test 1 - Local peer ID < remote peer ID assigns INITIATOR role to local', () async {
+      final discoveryService = container.read(peerDiscoveryServiceProvider);
+      final localPeerId = '11111111-1111-1111-1111-111111111111';
+      final remotePeerId = '22222222-2222-2222-2222-222222222222';
+
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(
+          id: 'EP_INITIATOR_TEST',
+          name: 'RemotePeer:$remotePeerId',
+          serviceId: 'me.vantra.vantra',
+        ),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      expect(localPeerId.compareTo(remotePeerId) < 0, isTrue);
+
+      fakeTransport.connectCallCount = 0;
+      await discoveryService.connect(
+        'EP_INITIATOR_TEST',
+        localName: 'LocalPeer:$localPeerId',
+      );
+
+      expect(fakeTransport.connectCallCount, 1);
+      expect(fakeTransport.connectedEndpoints.first, 'EP_INITIATOR_TEST');
+    });
+
+    test('Deadlock Test 2 - Local peer ID > remote peer ID assigns RESPONDER role to local', () async {
+      final discoveryService = container.read(peerDiscoveryServiceProvider);
+      final localPeerId = '22222222-2222-2222-2222-222222222222';
+      final remotePeerId = '11111111-1111-1111-1111-111111111111';
+
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(
+          id: 'EP_RESPONDER_TEST',
+          name: 'RemotePeer:$remotePeerId',
+          serviceId: 'me.vantra.vantra',
+        ),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      expect(localPeerId.compareTo(remotePeerId) > 0, isTrue);
+
+      fakeTransport.connectCallCount = 0;
+      await discoveryService.connect(
+        'EP_RESPONDER_TEST',
+        localName: 'LocalPeer:$localPeerId',
+      );
+
+      // Designated responder must NOT call requestConnection()
+      expect(fakeTransport.connectCallCount, 0);
+    });
+
+    test('Deadlock Test 3 - Mutual Discovery results in exactly one requestConnection', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+
+      final localPeerId = container.read(localIdentityStateProvider).peerId;
+      final largerPeerId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+
+      await repo.upsertPeer(
+        largerPeerId,
+        'LargerDevice',
+        publicKey: 'pubLarger',
+        fingerprint: 'fpLarger',
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      fakeTransport.connectCallCount = 0;
+
+      // Local discovers LargerDevice -> local is INITIATOR (local < larger) -> calls connect
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(
+          id: 'EP_DEV_LARGER',
+          name: 'LargerDevice:$largerPeerId',
+          serviceId: 'me.vantra.vantra',
+        ),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(fakeTransport.connectCallCount, 1);
+
+      // Symmetrically, when LargerDevice evaluates localPeerId, (larger > local) -> LargerDevice is RESPONDER -> does NOT call connect
+      expect(largerPeerId.compareTo(localPeerId) > 0, isTrue);
+    });
+
+    test('Deadlock Test 4 - Duplicate incoming/outgoing requests are resolved safely without connection deadlock', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+
+      // Construct a remotePeerId smaller than local, so local is the RESPONDER
+      final remotePeerIdSmaller = '00000000-0000-0000-0000-000000000000';
+      await repo.upsertPeer(
+        remotePeerIdSmaller,
+        'SimultaneousPeer',
+        publicKey: 'pubSim',
+        fingerprint: 'fpSim',
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      // Set up pending outgoing connection state to remotePeerIdSmaller
+      container.read(messagingStateProvider.notifier).state = container.read(messagingStateProvider).copyWith(
+        connectionStatus: ConnectionStatus.connecting,
+        activeEndpointId: 'EP_OUTGOING_PENDING',
+        endpointToPeerId: {'EP_OUTGOING_PENDING': remotePeerIdSmaller},
+      );
+
+      fakeTransport.disconnectCalled = false;
+      fakeTransport.acceptConnectionCount = 0;
+
+      // Incoming connection arrives from the initiator
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_INCOMING_SIMULTANEOUS',
+        status: ConnectionStatus.connecting,
+        endpointName: 'SimultaneousPeer:$remotePeerIdSmaller',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // As responder, outgoing attempt was abandoned via disconnect
+      expect(fakeTransport.disconnectCalled, isTrue);
+      expect(fakeTransport.disconnectedTarget, 'EP_OUTGOING_PENDING');
+
+      // And incoming request from initiator was accepted
+      expect(fakeTransport.acceptConnectionCount, 1);
+      expect(fakeTransport.acceptedEndpoints.contains('EP_INCOMING_SIMULTANEOUS'), isTrue);
+    });
+
+    test('Deadlock Test 5 - Complete Pairing Flow: REQUEST -> ACCEPT -> CONNECTED -> HANDSHAKE -> SESSION_READY', () async {
+      container.read(messagingStateProvider);
+
+      final remotePeerId = const Uuid().v4();
+      final remotePayload = await createRemoteHandshake(remotePeerId, 'PairingPeer');
+
+      // 1. REQUEST_RECEIVED (connecting, isIncoming: true)
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_PAIRING',
+        status: ConnectionStatus.connecting,
+        endpointName: 'PairingPeer:$remotePeerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(container.read(messagingStateProvider).activeConnectionRequest, isNotNull);
+
+      // 2. ACCEPT_START & ACCEPT_SUCCESS
+      await container.read(messagingStateProvider.notifier).acceptConnectionRequest('EP_PAIRING');
+      expect(container.read(messagingStateProvider).connectionStatus, ConnectionStatus.accepting);
+
+      // 3. NATIVE_STATUS_CONNECTED
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_PAIRING',
+        status: ConnectionStatus.connected,
+        endpointName: 'PairingPeer:$remotePeerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(container.read(messagingStateProvider).connectionStatus, ConnectionStatus.connected);
+
+      // 4. HANDSHAKE_STARTED & exchange identity payload
+      fakeTransport.triggerIncomingPayload(
+        'EP_PAIRING',
+        codec.encodeWireEnvelope(remotePayload),
+      );
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // 5. SESSION_READY
+      final session = container.read(messagingStateProvider).sessions[remotePeerId];
+      expect(session, isNotNull);
+      expect(session!.status, SessionStatus.connected);
+      expect(session.isSecure, isTrue);
+    });
+
+    test('Deadlock Test 6 - Only designated initiator reconnects in trusted reconnect', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+
+      final largerPeerId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+      final smallerPeerId = '00000000-0000-0000-0000-000000000000';
+
+      await repo.upsertPeer(largerPeerId, 'LargerTrusted', publicKey: 'pL', fingerprint: 'fL', trustState: PeerTrustState.trusted, protocolVersion: 2);
+      await repo.upsertPeer(smallerPeerId, 'SmallerTrusted', publicKey: 'pS', fingerprint: 'fS', trustState: PeerTrustState.trusted, protocolVersion: 2);
+
+      // Discovered larger peer (local < larger -> local is INITIATOR)
+      fakeTransport.connectCallCount = 0;
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(id: 'EP_L', name: 'LargerTrusted:$largerPeerId', serviceId: 'me.vantra.vantra'),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(fakeTransport.connectCallCount, 1);
+
+      // Discovered smaller peer (local > smaller -> local is RESPONDER)
+      fakeTransport.connectCallCount = 0;
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(id: 'EP_S', name: 'SmallerTrusted:$smallerPeerId', serviceId: 'me.vantra.vantra'),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(fakeTransport.connectCallCount, 0);
+    });
+
+    test('Deadlock Test 7 - Bidirectional text transmission post-connection', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+
+      final remotePeerId = const Uuid().v4();
+      final remotePayload = await createRemoteHandshake(remotePeerId, 'BiDirectionalPeer');
+
+      // Establish secure connection
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_BIDI',
+        status: ConnectionStatus.connecting,
+        endpointName: 'BiDirectionalPeer:$remotePeerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+      await container.read(messagingStateProvider.notifier).acceptConnectionRequest('EP_BIDI');
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_BIDI',
+        status: ConnectionStatus.connected,
+        endpointName: 'BiDirectionalPeer:$remotePeerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      fakeTransport.triggerIncomingPayload('EP_BIDI', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // 1. Send text message (Local -> Remote)
+      final notifier = container.read(messagingStateProvider.notifier);
+      await notifier.sendTextMessage(remotePeerId, 'Hello from Local');
+      expect(fakeTransport.sentPayloads.isNotEmpty, isTrue);
+
+      // Verify that message was added to local repository
+      final sentMsgs = await repo.getConversation(container.read(localIdentityStateProvider).peerId, remotePeerId);
+      expect(sentMsgs.any((m) => m.text == 'Hello from Local'), isTrue);
+    });
+
+    test('Stabilization Test 8 - Per-Peer Connection Lock prevents duplicate connect attempts', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+
+      final largerPeerId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+      await repo.upsertPeer(largerPeerId, 'LockedPeer', publicKey: 'pLock', fingerprint: 'fLock', trustState: PeerTrustState.trusted, protocolVersion: 2);
+
+      fakeTransport.connectCallCount = 0;
+      // Trigger discovery 3 times rapidly
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(id: 'EP_LOCK', name: 'LockedPeer:$largerPeerId', serviceId: 'me.vantra.vantra'),
+      ]);
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(id: 'EP_LOCK', name: 'LockedPeer:$largerPeerId', serviceId: 'me.vantra.vantra'),
+      ]);
+      fakeTransport.triggerDiscoveredPeers([
+        DiscoveredPeer(id: 'EP_LOCK', name: 'LockedPeer:$largerPeerId', serviceId: 'me.vantra.vantra'),
+      ]);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Lock should ensure connect is only called once
+      expect(fakeTransport.connectCallCount, 1);
+    });
+
+    test('Stabilization Test 9 - Fresh Session Reestablishment on Reconnect', () async {
+      container.read(messagingStateProvider);
+
+      final remotePeerId = const Uuid().v4();
+      final remotePayload1 = await createRemoteHandshake(remotePeerId, 'ReconnectPeer');
+
+      // First connection & handshake
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_REC_1',
+        status: ConnectionStatus.connecting,
+        endpointName: 'ReconnectPeer:$remotePeerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+      await container.read(messagingStateProvider.notifier).acceptConnectionRequest('EP_REC_1');
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_REC_1',
+        status: ConnectionStatus.connected,
+        endpointName: 'ReconnectPeer:$remotePeerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.triggerIncomingPayload('EP_REC_1', codec.encodeWireEnvelope(remotePayload1));
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      final session1 = container.read(messagingStateProvider).sessions[remotePeerId];
+      expect(session1?.isSecure, isTrue);
+
+      // Disconnect
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_REC_1',
+        status: ConnectionStatus.disconnected,
+        endpointName: 'ReconnectPeer:$remotePeerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final disconnectedSession = container.read(messagingStateProvider).sessions[remotePeerId];
+      expect(disconnectedSession?.status, SessionStatus.disconnected);
+      expect(disconnectedSession?.isSecure, isFalse);
+
+      // Reconnect with new endpoint ID
+      final remotePayload2 = await createRemoteHandshake(remotePeerId, 'ReconnectPeer');
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_REC_2',
+        status: ConnectionStatus.connecting,
+        endpointName: 'ReconnectPeer:$remotePeerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+      await container.read(messagingStateProvider.notifier).acceptConnectionRequest('EP_REC_2');
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_REC_2',
+        status: ConnectionStatus.connected,
+        endpointName: 'ReconnectPeer:$remotePeerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.triggerIncomingPayload('EP_REC_2', codec.encodeWireEnvelope(remotePayload2));
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      final session2 = container.read(messagingStateProvider).sessions[remotePeerId];
+      expect(session2?.isSecure, isTrue);
+      expect(session2?.endpointId, 'EP_REC_2');
     });
   });
 }

@@ -9,7 +9,7 @@ import 'package:vantra/core/errors/vantra_exceptions.dart';
 
 class NearbyTransport implements Transport {
   final _nearby = Nearby();
-  final _strategy = Strategy.P2P_POINT_TO_POINT;
+  final _strategy = Strategy.P2P_CLUSTER;
   static const _serviceId = 'me.vantra.vantra';
 
   final _discoveredPeersController = StreamController<List<DiscoveredPeer>>.broadcast();
@@ -43,6 +43,8 @@ class NearbyTransport implements Transport {
         serviceId: _serviceId,
         onConnectionInitiated: (id, info) {
           VantraLogger.log('NearbyTransport: Connection initiated by $id (${info.endpointName})');
+          print('[VANTRA][CONNECTION] CALLBACK_STATUS=CONNECTING: endpointId=$id, peerId=null, state=connecting');
+          print('[VANTRA][CONNECTION] REQUEST_RECEIVED: endpointId=$id, peerName=${info.endpointName}, direction=${info.isIncomingConnection ? "incoming" : "outgoing"}');
           print('[VANTRA][NEARBY] CONNECTION_INITIATED endpoint=$id name=${info.endpointName}');
           print('[VANTRA][NEARBY] REQUEST_INFO_CREATED endpoint=$id');
           _connectionUpdateController.add(ConnectionUpdate(
@@ -55,8 +57,10 @@ class NearbyTransport implements Transport {
         },
         onConnectionResult: (id, status) {
           VantraLogger.log('NearbyTransport: Connection result for $id: $status');
+          print('[VANTRA][CONNECTION] CALLBACK_STATUS=${status.name}: endpointId=$id');
           print('[VANTRA][NEARBY] CONNECTION_RESULT endpoint=$id status=$status');
           if (status == Status.CONNECTED) {
+            print('[VANTRA][CONNECTION] NATIVE_STATUS_CONNECTED: endpointId=$id');
             _connectionUpdateController.add(ConnectionUpdate(
               endpointId: id,
               status: ConnectionStatus.connected,
@@ -79,6 +83,7 @@ class NearbyTransport implements Transport {
         },
         onDisconnected: (id) {
           VantraLogger.log('NearbyTransport: Disconnected from $id');
+          print('[VANTRA][CONNECTION] CALLBACK_STATUS=DISCONNECTED: endpointId=$id');
           _connectionUpdateController.add(ConnectionUpdate(
             endpointId: id,
             status: ConnectionStatus.disconnected,
@@ -88,9 +93,11 @@ class NearbyTransport implements Transport {
       );
 
       if (!result) {
+        print('[VANTRA][NEARBY] advertising=FAILED error=startAdvertising returned false');
         throw const VantraException('Failed to start advertising');
       }
       _isAdvertising = true;
+      print('[VANTRA][NEARBY] advertising=STARTED localName=$localName serviceId=$_serviceId strategy=${_strategy.name}');
     } on PlatformException catch (e) {
       final isAlreadyAdvertising = e.code == '8001' ||
           e.message?.contains('STATUS_ALREADY_ADVERTISING') == true ||
@@ -99,17 +106,31 @@ class NearbyTransport implements Transport {
       if (isAlreadyAdvertising) {
         VantraLogger.log('NearbyTransport: Native reported already advertising. Reconciling state.');
         _isAdvertising = true;
+        print('[VANTRA][NEARBY] advertising=STARTED localName=$localName serviceId=$_serviceId strategy=${_strategy.name} (Reconciled)');
       } else {
+        print('[VANTRA][NEARBY] advertising=FAILED error=$e');
         rethrow;
       }
+    } catch (e) {
+      print('[VANTRA][NEARBY] advertising=FAILED error=$e');
+      rethrow;
     }
   }
 
   @override
   Future<void> stopAdvertising() async {
+    if (!_isAdvertising) {
+      VantraLogger.log('NearbyTransport: Already not advertising, skipping stopAdvertising');
+      return;
+    }
     VantraLogger.log('NearbyTransport: stopAdvertising');
     _isAdvertising = false;
-    await _nearby.stopAdvertising();
+    try {
+      await _nearby.stopAdvertising();
+      print('[VANTRA][NEARBY] advertising=STOPPED');
+    } catch (e) {
+      print('[VANTRA][NEARBY] advertising=STOP_ERROR error=$e');
+    }
   }
 
   @override
@@ -137,6 +158,7 @@ class NearbyTransport implements Transport {
         },
         onEndpointLost: (id) {
           VantraLogger.log('NearbyTransport: Endpoint lost $id');
+          print('[VANTRA][NEARBY] LOST endpoint=$id');
           if (id != null) {
             _discoveredPeers.removeWhere((p) => p.id == id);
             _discoveredPeersController.add(List.unmodifiable(_discoveredPeers));
@@ -145,9 +167,11 @@ class NearbyTransport implements Transport {
       );
 
       if (!result) {
+        print('[VANTRA][NEARBY] discovery=FAILED error=startDiscovery returned false');
         throw const VantraException('Failed to start discovery');
       }
       _isDiscovering = true;
+      print('[VANTRA][NEARBY] discovery=STARTED localName=$localName serviceId=$_serviceId strategy=${_strategy.name}');
     } on PlatformException catch (e) {
       final isAlreadyDiscovering = e.code == '8002' ||
           e.message?.contains('STATUS_ALREADY_DISCOVERING') == true ||
@@ -156,17 +180,31 @@ class NearbyTransport implements Transport {
       if (isAlreadyDiscovering) {
         VantraLogger.log('NearbyTransport: Native reported already discovering. Reconciling state.');
         _isDiscovering = true;
+        print('[VANTRA][NEARBY] discovery=STARTED localName=$localName serviceId=$_serviceId strategy=${_strategy.name} (Reconciled)');
       } else {
+        print('[VANTRA][NEARBY] discovery=FAILED error=$e');
         rethrow;
       }
+    } catch (e) {
+      print('[VANTRA][NEARBY] discovery=FAILED error=$e');
+      rethrow;
     }
   }
 
   @override
   Future<void> stopDiscovery() async {
+    if (!_isDiscovering) {
+      VantraLogger.log('NearbyTransport: Already not discovering, skipping stopDiscovery');
+      return;
+    }
     VantraLogger.log('NearbyTransport: stopDiscovery');
     _isDiscovering = false;
-    await _nearby.stopDiscovery();
+    try {
+      await _nearby.stopDiscovery();
+      print('[VANTRA][NEARBY] discovery=STOPPED');
+    } catch (e) {
+      print('[VANTRA][NEARBY] discovery=STOP_ERROR error=$e');
+    }
     _discoveredPeers.clear();
     _discoveredPeersController.add(List.unmodifiable(_discoveredPeers));
   }
@@ -174,56 +212,69 @@ class NearbyTransport implements Transport {
   @override
   Future<void> connect(String localName, String endpointId) async {
     VantraLogger.log('NearbyTransport: connect to $endpointId');
-    final result = await _nearby.requestConnection(
-      localName,
-      endpointId,
-      onConnectionInitiated: (id, info) {
-        VantraLogger.log('NearbyTransport: Connection initiated with $id (${info.endpointName})');
-        print('[VANTRA][NEARBY] CONNECTION_INITIATED endpoint=$id name=${info.endpointName}');
-        print('[VANTRA][NEARBY] REQUEST_INFO_CREATED endpoint=$id');
-        _connectionUpdateController.add(ConnectionUpdate(
-          endpointId: id,
-          status: ConnectionStatus.connecting,
-          endpointName: info.endpointName,
-          authenticationToken: info.authenticationToken,
-          isIncoming: info.isIncomingConnection,
-        ));
-      },
-      onConnectionResult: (id, status) {
-        VantraLogger.log('NearbyTransport: Connection result for $id: $status');
-        print('[VANTRA][NEARBY] CONNECTION_RESULT endpoint=$id status=$status');
-        if (status == Status.CONNECTED) {
+    print('[VANTRA][CONNECTION] REQUEST_START: endpointId=$endpointId, localName=$localName');
+    try {
+      final result = await _nearby.requestConnection(
+        localName,
+        endpointId,
+        onConnectionInitiated: (id, info) {
+          VantraLogger.log('NearbyTransport: Connection initiated with $id (${info.endpointName})');
+          print('[VANTRA][CONNECTION] CALLBACK_STATUS=CONNECTING: endpointId=$id, peerId=null, state=connecting');
+          print('[VANTRA][CONNECTION] REQUEST_RECEIVED: endpointId=$id, peerName=${info.endpointName}, direction=${info.isIncomingConnection ? "incoming" : "outgoing"}');
+          print('[VANTRA][NEARBY] CONNECTION_INITIATED endpoint=$id name=${info.endpointName}');
+          print('[VANTRA][NEARBY] REQUEST_INFO_CREATED endpoint=$id');
           _connectionUpdateController.add(ConnectionUpdate(
             endpointId: id,
-            status: ConnectionStatus.connected,
-            endpointName: id,
+            status: ConnectionStatus.connecting,
+            endpointName: info.endpointName,
+            authenticationToken: info.authenticationToken,
+            isIncoming: info.isIncomingConnection,
           ));
-        } else if (status == Status.REJECTED) {
+        },
+        onConnectionResult: (id, status) {
+          VantraLogger.log('NearbyTransport: Connection result for $id: $status');
+          print('[VANTRA][CONNECTION] CALLBACK_STATUS=${status.name}: endpointId=$id');
+          print('[VANTRA][NEARBY] CONNECTION_RESULT endpoint=$id status=$status');
+          if (status == Status.CONNECTED) {
+            print('[VANTRA][CONNECTION] NATIVE_STATUS_CONNECTED: endpointId=$id');
+            _connectionUpdateController.add(ConnectionUpdate(
+              endpointId: id,
+              status: ConnectionStatus.connected,
+              endpointName: id,
+            ));
+          } else if (status == Status.REJECTED) {
+            _connectionUpdateController.add(ConnectionUpdate(
+              endpointId: id,
+              status: ConnectionStatus.rejected,
+              endpointName: id,
+            ));
+          } else {
+            _connectionUpdateController.add(ConnectionUpdate(
+              endpointId: id,
+              status: ConnectionStatus.error,
+              endpointName: id,
+              errorMessage: 'Connection failed with status: $status',
+            ));
+          }
+        },
+        onDisconnected: (id) {
+          VantraLogger.log('NearbyTransport: Disconnected from $id');
+          print('[VANTRA][CONNECTION] CALLBACK_STATUS=DISCONNECTED: endpointId=$id');
           _connectionUpdateController.add(ConnectionUpdate(
             endpointId: id,
-            status: ConnectionStatus.rejected,
+            status: ConnectionStatus.disconnected,
             endpointName: id,
           ));
-        } else {
-          _connectionUpdateController.add(ConnectionUpdate(
-            endpointId: id,
-            status: ConnectionStatus.error,
-            endpointName: id,
-            errorMessage: 'Connection failed with status: $status',
-          ));
-        }
-      },
-      onDisconnected: (id) {
-        VantraLogger.log('NearbyTransport: Disconnected from $id');
-        _connectionUpdateController.add(ConnectionUpdate(
-          endpointId: id,
-          status: ConnectionStatus.disconnected,
-          endpointName: id,
-        ));
-      },
-    );
-    if (!result) {
-      throw const VantraException('Failed to request connection');
+        },
+      );
+      if (!result) {
+        print('[VANTRA][CONNECTION] REQUEST_ERROR: endpointId=$endpointId, error=requestConnection returned false');
+        throw const VantraException('Failed to request connection');
+      }
+      print('[VANTRA][CONNECTION] REQUEST_SUCCESS: endpointId=$endpointId');
+    } catch (e) {
+      print('[VANTRA][CONNECTION] REQUEST_ERROR: endpointId=$endpointId, error=$e');
+      rethrow;
     }
   }
 

@@ -53,8 +53,16 @@ class FakeTransport implements Transport {
     rejectedEndpoints.add(endpointId);
   }
 
+  int connectCallCount = 0;
+  final List<String> connectedEndpoints = [];
+  final List<String> connectLocalNames = [];
+
   @override
-  Future<void> connect(String localName, String endpointId) async {}
+  Future<void> connect(String localName, String endpointId) async {
+    connectCallCount++;
+    connectedEndpoints.add(endpointId);
+    connectLocalNames.add(localName);
+  }
 
   @override
   Future<void> disconnect(String endpointId) async {

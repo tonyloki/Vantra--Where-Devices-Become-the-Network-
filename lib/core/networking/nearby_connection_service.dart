@@ -7,6 +7,7 @@ import 'package:vantra/core/networking/transport_provider.dart';
 import 'package:vantra/core/peers/peer_provider.dart';
 import 'package:vantra/core/utils/logger.dart';
 import 'package:vantra/core/utils/permissions.dart';
+import 'package:vantra/core/errors/vantra_exceptions.dart';
 
 enum NearbyServiceStatus {
   initializing,
@@ -99,38 +100,54 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
       final transport = ref.read(transportProvider);
       final peerDiscovery = ref.read(peerDiscoveryServiceProvider);
 
+      bool advertisingStarted = false;
       try {
         VantraLogger.log('[VANTRA][LIFECYCLE] Starting advertising for $advertisingName');
         await transport.startAdvertising(advertisingName);
+        advertisingStarted = true;
       } on PlatformException catch (e) {
         final isAlreadyAdvertising = e.code == '8001' ||
             e.message?.contains('STATUS_ALREADY_ADVERTISING') == true ||
             e.toString().contains('8001') ||
             e.toString().contains('STATUS_ALREADY_ADVERTISING');
-        if (!isAlreadyAdvertising) {
-          rethrow;
+        if (isAlreadyAdvertising) {
+          VantraLogger.log('[VANTRA][LIFECYCLE] Reconciled STATUS_ALREADY_ADVERTISING exception');
+          advertisingStarted = true;
+        } else {
+          VantraLogger.log('[VANTRA][LIFECYCLE] Failed to start advertising: $e');
         }
-        VantraLogger.log('[VANTRA][LIFECYCLE] Reconciled STATUS_ALREADY_ADVERTISING exception');
+      } catch (e) {
+        VantraLogger.log('[VANTRA][LIFECYCLE] Failed to start advertising: $e');
       }
 
+      bool discoveryStarted = false;
       try {
         VantraLogger.log('[VANTRA][LIFECYCLE] Starting discovery for $advertisingName');
         await peerDiscovery.startDiscovery(localName: advertisingName);
+        discoveryStarted = true;
       } on PlatformException catch (e) {
         final isAlreadyDiscovering = e.code == '8002' ||
             e.message?.contains('STATUS_ALREADY_DISCOVERING') == true ||
             e.toString().contains('8002') ||
             e.toString().contains('STATUS_ALREADY_DISCOVERING');
-        if (!isAlreadyDiscovering) {
-          rethrow;
+        if (isAlreadyDiscovering) {
+          VantraLogger.log('[VANTRA][LIFECYCLE] Reconciled STATUS_ALREADY_DISCOVERING exception');
+          discoveryStarted = true;
+        } else {
+          VantraLogger.log('[VANTRA][LIFECYCLE] Failed to start discovery: $e');
         }
-        VantraLogger.log('[VANTRA][LIFECYCLE] Reconciled STATUS_ALREADY_DISCOVERING exception');
+      } catch (e) {
+        VantraLogger.log('[VANTRA][LIFECYCLE] Failed to start discovery: $e');
+      }
+
+      if (!advertisingStarted && !discoveryStarted) {
+        throw VantraException('Both advertising and discovery failed to start');
       }
 
       state = state.copyWith(
         status: NearbyServiceStatus.ready,
-        isAdvertising: true,
-        isDiscovering: true,
+        isAdvertising: advertisingStarted,
+        isDiscovering: discoveryStarted,
         clearError: true,
       );
       VantraLogger.log('[VANTRA][LIFECYCLE] NearbyConnectionService fully ready');
@@ -187,37 +204,49 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
             : 'VantraDevice';
         final advertisingName = '$displayName:${localIdentity.peerId}';
 
+        bool advertisingStarted = state.isAdvertising;
         if (!state.isAdvertising) {
           try {
             await ref.read(transportProvider).startAdvertising(advertisingName);
+            advertisingStarted = true;
           } on PlatformException catch (e) {
             final isAlreadyAdvertising = e.code == '8001' ||
                 e.message?.contains('STATUS_ALREADY_ADVERTISING') == true ||
                 e.toString().contains('8001') ||
                 e.toString().contains('STATUS_ALREADY_ADVERTISING');
-            if (!isAlreadyAdvertising) {
-              rethrow;
+            if (isAlreadyAdvertising) {
+              advertisingStarted = true;
+            } else {
+              VantraLogger.log('[VANTRA][LIFECYCLE] Resume: Failed to start advertising: $e');
             }
+          } catch (e) {
+            VantraLogger.log('[VANTRA][LIFECYCLE] Resume: Failed to start advertising: $e');
           }
         }
 
+        bool discoveryStarted = state.isDiscovering;
         if (!state.isDiscovering) {
           try {
             await ref.read(peerDiscoveryServiceProvider).startDiscovery(localName: advertisingName);
+            discoveryStarted = true;
           } on PlatformException catch (e) {
             final isAlreadyDiscovering = e.code == '8002' ||
                 e.message?.contains('STATUS_ALREADY_DISCOVERING') == true ||
                 e.toString().contains('8002') ||
                 e.toString().contains('STATUS_ALREADY_DISCOVERING');
-            if (!isAlreadyDiscovering) {
-              rethrow;
+            if (isAlreadyDiscovering) {
+              discoveryStarted = true;
+            } else {
+              VantraLogger.log('[VANTRA][LIFECYCLE] Resume: Failed to start discovery: $e');
             }
+          } catch (e) {
+            VantraLogger.log('[VANTRA][LIFECYCLE] Resume: Failed to start discovery: $e');
           }
         }
 
         state = state.copyWith(
-          isAdvertising: true,
-          isDiscovering: true,
+          isAdvertising: advertisingStarted,
+          isDiscovering: discoveryStarted,
         );
       } catch (_) {}
     }
