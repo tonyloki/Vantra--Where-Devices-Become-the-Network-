@@ -33,6 +33,8 @@ class ConversationsPage extends ConsumerWidget {
     switch (status) {
       case MessageStatus.pending:
         return const Icon(Icons.access_time_rounded, size: 13, color: VantraTheme.textMuted);
+      case MessageStatus.sending:
+        return const Icon(Icons.access_time_rounded, size: 13, color: VantraTheme.textMuted);
       case MessageStatus.failed:
         return const Icon(Icons.error_outline_rounded, size: 13, color: VantraTheme.redBlocked);
       case MessageStatus.sent:

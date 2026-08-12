@@ -8,6 +8,14 @@ class VantraMessage {
   final int timestamp;
   final MessageStatus status;
   final int retryCount;
+  final String type;
+  final String? mediaPath;
+  final String? mimeType;
+  final String? fileName;
+  final int? fileSize;
+  final int? width;
+  final int? height;
+  final String? transferId;
 
   const VantraMessage({
     required this.messageId,
@@ -17,15 +25,30 @@ class VantraMessage {
     required this.timestamp,
     this.status = MessageStatus.sent,
     this.retryCount = 0,
+    this.type = 'TEXT',
+    this.mediaPath,
+    this.mimeType,
+    this.fileName,
+    this.fileSize,
+    this.width,
+    this.height,
+    this.transferId,
   });
 
   Map<String, dynamic> toJson() => {
-    'type': 'TEXT',
+    'type': type,
     'messageId': messageId,
     'senderId': senderId,
     'receiverId': receiverId,
     'text': text,
     'timestamp': timestamp,
+    'mediaPath': mediaPath,
+    'mimeType': mimeType,
+    'fileName': fileName,
+    'fileSize': fileSize,
+    'width': width,
+    'height': height,
+    'transferId': transferId,
   };
 
   factory VantraMessage.fromJson(Map<String, dynamic> json) {
@@ -37,6 +60,14 @@ class VantraMessage {
       timestamp: json['timestamp'] as int,
       status: MessageStatus.received,
       retryCount: 0,
+      type: json['type'] as String? ?? 'TEXT',
+      mediaPath: json['mediaPath'] as String?,
+      mimeType: json['mimeType'] as String?,
+      fileName: json['fileName'] as String?,
+      fileSize: json['fileSize'] as int?,
+      width: json['width'] as int?,
+      height: json['height'] as int?,
+      transferId: json['transferId'] as String?,
     );
   }
 
@@ -48,6 +79,14 @@ class VantraMessage {
     int? timestamp,
     MessageStatus? status,
     int? retryCount,
+    String? type,
+    String? mediaPath,
+    String? mimeType,
+    String? fileName,
+    int? fileSize,
+    int? width,
+    int? height,
+    String? transferId,
   }) {
     return VantraMessage(
       messageId: messageId ?? this.messageId,
@@ -57,6 +96,14 @@ class VantraMessage {
       timestamp: timestamp ?? this.timestamp,
       status: status ?? this.status,
       retryCount: retryCount ?? this.retryCount,
+      type: type ?? this.type,
+      mediaPath: mediaPath ?? this.mediaPath,
+      mimeType: mimeType ?? this.mimeType,
+      fileName: fileName ?? this.fileName,
+      fileSize: fileSize ?? this.fileSize,
+      width: width ?? this.width,
+      height: height ?? this.height,
+      transferId: transferId ?? this.transferId,
     );
   }
 }

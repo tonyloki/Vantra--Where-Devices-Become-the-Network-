@@ -144,6 +144,79 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _mediaPathMeta = const VerificationMeta(
+    'mediaPath',
+  );
+  @override
+  late final GeneratedColumn<String> mediaPath = GeneratedColumn<String>(
+    'media_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _mimeTypeMeta = const VerificationMeta(
+    'mimeType',
+  );
+  @override
+  late final GeneratedColumn<String> mimeType = GeneratedColumn<String>(
+    'mime_type',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _fileNameMeta = const VerificationMeta(
+    'fileName',
+  );
+  @override
+  late final GeneratedColumn<String> fileName = GeneratedColumn<String>(
+    'file_name',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _fileSizeMeta = const VerificationMeta(
+    'fileSize',
+  );
+  @override
+  late final GeneratedColumn<int> fileSize = GeneratedColumn<int>(
+    'file_size',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _widthMeta = const VerificationMeta('width');
+  @override
+  late final GeneratedColumn<int> width = GeneratedColumn<int>(
+    'width',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _heightMeta = const VerificationMeta('height');
+  @override
+  late final GeneratedColumn<int> height = GeneratedColumn<int>(
+    'height',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _transferIdMeta = const VerificationMeta(
+    'transferId',
+  );
+  @override
+  late final GeneratedColumn<String> transferId = GeneratedColumn<String>(
+    'transfer_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     localId,
@@ -158,6 +231,13 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     createdAt,
     retryCount,
     lastAttempt,
+    mediaPath,
+    mimeType,
+    fileName,
+    fileSize,
+    width,
+    height,
+    transferId,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -254,6 +334,48 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         ),
       );
     }
+    if (data.containsKey('media_path')) {
+      context.handle(
+        _mediaPathMeta,
+        mediaPath.isAcceptableOrUnknown(data['media_path']!, _mediaPathMeta),
+      );
+    }
+    if (data.containsKey('mime_type')) {
+      context.handle(
+        _mimeTypeMeta,
+        mimeType.isAcceptableOrUnknown(data['mime_type']!, _mimeTypeMeta),
+      );
+    }
+    if (data.containsKey('file_name')) {
+      context.handle(
+        _fileNameMeta,
+        fileName.isAcceptableOrUnknown(data['file_name']!, _fileNameMeta),
+      );
+    }
+    if (data.containsKey('file_size')) {
+      context.handle(
+        _fileSizeMeta,
+        fileSize.isAcceptableOrUnknown(data['file_size']!, _fileSizeMeta),
+      );
+    }
+    if (data.containsKey('width')) {
+      context.handle(
+        _widthMeta,
+        width.isAcceptableOrUnknown(data['width']!, _widthMeta),
+      );
+    }
+    if (data.containsKey('height')) {
+      context.handle(
+        _heightMeta,
+        height.isAcceptableOrUnknown(data['height']!, _heightMeta),
+      );
+    }
+    if (data.containsKey('transfer_id')) {
+      context.handle(
+        _transferIdMeta,
+        transferId.isAcceptableOrUnknown(data['transfer_id']!, _transferIdMeta),
+      );
+    }
     return context;
   }
 
@@ -313,6 +435,34 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.int,
         data['${effectivePrefix}last_attempt'],
       ),
+      mediaPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}media_path'],
+      ),
+      mimeType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}mime_type'],
+      ),
+      fileName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}file_name'],
+      ),
+      fileSize: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}file_size'],
+      ),
+      width: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}width'],
+      ),
+      height: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}height'],
+      ),
+      transferId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}transfer_id'],
+      ),
     );
   }
 
@@ -338,6 +488,13 @@ class Message extends DataClass implements Insertable<Message> {
   final int createdAt;
   final int retryCount;
   final int? lastAttempt;
+  final String? mediaPath;
+  final String? mimeType;
+  final String? fileName;
+  final int? fileSize;
+  final int? width;
+  final int? height;
+  final String? transferId;
   const Message({
     required this.localId,
     required this.messageId,
@@ -351,6 +508,13 @@ class Message extends DataClass implements Insertable<Message> {
     required this.createdAt,
     required this.retryCount,
     this.lastAttempt,
+    this.mediaPath,
+    this.mimeType,
+    this.fileName,
+    this.fileSize,
+    this.width,
+    this.height,
+    this.transferId,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -373,6 +537,27 @@ class Message extends DataClass implements Insertable<Message> {
     if (!nullToAbsent || lastAttempt != null) {
       map['last_attempt'] = Variable<int>(lastAttempt);
     }
+    if (!nullToAbsent || mediaPath != null) {
+      map['media_path'] = Variable<String>(mediaPath);
+    }
+    if (!nullToAbsent || mimeType != null) {
+      map['mime_type'] = Variable<String>(mimeType);
+    }
+    if (!nullToAbsent || fileName != null) {
+      map['file_name'] = Variable<String>(fileName);
+    }
+    if (!nullToAbsent || fileSize != null) {
+      map['file_size'] = Variable<int>(fileSize);
+    }
+    if (!nullToAbsent || width != null) {
+      map['width'] = Variable<int>(width);
+    }
+    if (!nullToAbsent || height != null) {
+      map['height'] = Variable<int>(height);
+    }
+    if (!nullToAbsent || transferId != null) {
+      map['transfer_id'] = Variable<String>(transferId);
+    }
     return map;
   }
 
@@ -392,6 +577,27 @@ class Message extends DataClass implements Insertable<Message> {
       lastAttempt: lastAttempt == null && nullToAbsent
           ? const Value.absent()
           : Value(lastAttempt),
+      mediaPath: mediaPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mediaPath),
+      mimeType: mimeType == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mimeType),
+      fileName: fileName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fileName),
+      fileSize: fileSize == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fileSize),
+      width: width == null && nullToAbsent
+          ? const Value.absent()
+          : Value(width),
+      height: height == null && nullToAbsent
+          ? const Value.absent()
+          : Value(height),
+      transferId: transferId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(transferId),
     );
   }
 
@@ -413,6 +619,13 @@ class Message extends DataClass implements Insertable<Message> {
       createdAt: serializer.fromJson<int>(json['createdAt']),
       retryCount: serializer.fromJson<int>(json['retryCount']),
       lastAttempt: serializer.fromJson<int?>(json['lastAttempt']),
+      mediaPath: serializer.fromJson<String?>(json['mediaPath']),
+      mimeType: serializer.fromJson<String?>(json['mimeType']),
+      fileName: serializer.fromJson<String?>(json['fileName']),
+      fileSize: serializer.fromJson<int?>(json['fileSize']),
+      width: serializer.fromJson<int?>(json['width']),
+      height: serializer.fromJson<int?>(json['height']),
+      transferId: serializer.fromJson<String?>(json['transferId']),
     );
   }
   @override
@@ -431,6 +644,13 @@ class Message extends DataClass implements Insertable<Message> {
       'createdAt': serializer.toJson<int>(createdAt),
       'retryCount': serializer.toJson<int>(retryCount),
       'lastAttempt': serializer.toJson<int?>(lastAttempt),
+      'mediaPath': serializer.toJson<String?>(mediaPath),
+      'mimeType': serializer.toJson<String?>(mimeType),
+      'fileName': serializer.toJson<String?>(fileName),
+      'fileSize': serializer.toJson<int?>(fileSize),
+      'width': serializer.toJson<int?>(width),
+      'height': serializer.toJson<int?>(height),
+      'transferId': serializer.toJson<String?>(transferId),
     };
   }
 
@@ -447,6 +667,13 @@ class Message extends DataClass implements Insertable<Message> {
     int? createdAt,
     int? retryCount,
     Value<int?> lastAttempt = const Value.absent(),
+    Value<String?> mediaPath = const Value.absent(),
+    Value<String?> mimeType = const Value.absent(),
+    Value<String?> fileName = const Value.absent(),
+    Value<int?> fileSize = const Value.absent(),
+    Value<int?> width = const Value.absent(),
+    Value<int?> height = const Value.absent(),
+    Value<String?> transferId = const Value.absent(),
   }) => Message(
     localId: localId ?? this.localId,
     messageId: messageId ?? this.messageId,
@@ -460,6 +687,13 @@ class Message extends DataClass implements Insertable<Message> {
     createdAt: createdAt ?? this.createdAt,
     retryCount: retryCount ?? this.retryCount,
     lastAttempt: lastAttempt.present ? lastAttempt.value : this.lastAttempt,
+    mediaPath: mediaPath.present ? mediaPath.value : this.mediaPath,
+    mimeType: mimeType.present ? mimeType.value : this.mimeType,
+    fileName: fileName.present ? fileName.value : this.fileName,
+    fileSize: fileSize.present ? fileSize.value : this.fileSize,
+    width: width.present ? width.value : this.width,
+    height: height.present ? height.value : this.height,
+    transferId: transferId.present ? transferId.value : this.transferId,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -483,6 +717,15 @@ class Message extends DataClass implements Insertable<Message> {
       lastAttempt: data.lastAttempt.present
           ? data.lastAttempt.value
           : this.lastAttempt,
+      mediaPath: data.mediaPath.present ? data.mediaPath.value : this.mediaPath,
+      mimeType: data.mimeType.present ? data.mimeType.value : this.mimeType,
+      fileName: data.fileName.present ? data.fileName.value : this.fileName,
+      fileSize: data.fileSize.present ? data.fileSize.value : this.fileSize,
+      width: data.width.present ? data.width.value : this.width,
+      height: data.height.present ? data.height.value : this.height,
+      transferId: data.transferId.present
+          ? data.transferId.value
+          : this.transferId,
     );
   }
 
@@ -500,7 +743,14 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('isRead: $isRead, ')
           ..write('createdAt: $createdAt, ')
           ..write('retryCount: $retryCount, ')
-          ..write('lastAttempt: $lastAttempt')
+          ..write('lastAttempt: $lastAttempt, ')
+          ..write('mediaPath: $mediaPath, ')
+          ..write('mimeType: $mimeType, ')
+          ..write('fileName: $fileName, ')
+          ..write('fileSize: $fileSize, ')
+          ..write('width: $width, ')
+          ..write('height: $height, ')
+          ..write('transferId: $transferId')
           ..write(')'))
         .toString();
   }
@@ -519,6 +769,13 @@ class Message extends DataClass implements Insertable<Message> {
     createdAt,
     retryCount,
     lastAttempt,
+    mediaPath,
+    mimeType,
+    fileName,
+    fileSize,
+    width,
+    height,
+    transferId,
   );
   @override
   bool operator ==(Object other) =>
@@ -535,7 +792,14 @@ class Message extends DataClass implements Insertable<Message> {
           other.isRead == this.isRead &&
           other.createdAt == this.createdAt &&
           other.retryCount == this.retryCount &&
-          other.lastAttempt == this.lastAttempt);
+          other.lastAttempt == this.lastAttempt &&
+          other.mediaPath == this.mediaPath &&
+          other.mimeType == this.mimeType &&
+          other.fileName == this.fileName &&
+          other.fileSize == this.fileSize &&
+          other.width == this.width &&
+          other.height == this.height &&
+          other.transferId == this.transferId);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -551,6 +815,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int> createdAt;
   final Value<int> retryCount;
   final Value<int?> lastAttempt;
+  final Value<String?> mediaPath;
+  final Value<String?> mimeType;
+  final Value<String?> fileName;
+  final Value<int?> fileSize;
+  final Value<int?> width;
+  final Value<int?> height;
+  final Value<String?> transferId;
   const MessagesCompanion({
     this.localId = const Value.absent(),
     this.messageId = const Value.absent(),
@@ -564,6 +835,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.createdAt = const Value.absent(),
     this.retryCount = const Value.absent(),
     this.lastAttempt = const Value.absent(),
+    this.mediaPath = const Value.absent(),
+    this.mimeType = const Value.absent(),
+    this.fileName = const Value.absent(),
+    this.fileSize = const Value.absent(),
+    this.width = const Value.absent(),
+    this.height = const Value.absent(),
+    this.transferId = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.localId = const Value.absent(),
@@ -578,6 +856,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     required int createdAt,
     this.retryCount = const Value.absent(),
     this.lastAttempt = const Value.absent(),
+    this.mediaPath = const Value.absent(),
+    this.mimeType = const Value.absent(),
+    this.fileName = const Value.absent(),
+    this.fileSize = const Value.absent(),
+    this.width = const Value.absent(),
+    this.height = const Value.absent(),
+    this.transferId = const Value.absent(),
   }) : messageId = Value(messageId),
        senderId = Value(senderId),
        receiverId = Value(receiverId),
@@ -599,6 +884,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? createdAt,
     Expression<int>? retryCount,
     Expression<int>? lastAttempt,
+    Expression<String>? mediaPath,
+    Expression<String>? mimeType,
+    Expression<String>? fileName,
+    Expression<int>? fileSize,
+    Expression<int>? width,
+    Expression<int>? height,
+    Expression<String>? transferId,
   }) {
     return RawValuesInsertable({
       if (localId != null) 'local_id': localId,
@@ -613,6 +905,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (createdAt != null) 'created_at': createdAt,
       if (retryCount != null) 'retry_count': retryCount,
       if (lastAttempt != null) 'last_attempt': lastAttempt,
+      if (mediaPath != null) 'media_path': mediaPath,
+      if (mimeType != null) 'mime_type': mimeType,
+      if (fileName != null) 'file_name': fileName,
+      if (fileSize != null) 'file_size': fileSize,
+      if (width != null) 'width': width,
+      if (height != null) 'height': height,
+      if (transferId != null) 'transfer_id': transferId,
     });
   }
 
@@ -629,6 +928,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int>? createdAt,
     Value<int>? retryCount,
     Value<int?>? lastAttempt,
+    Value<String?>? mediaPath,
+    Value<String?>? mimeType,
+    Value<String?>? fileName,
+    Value<int?>? fileSize,
+    Value<int?>? width,
+    Value<int?>? height,
+    Value<String?>? transferId,
   }) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -643,6 +949,13 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       createdAt: createdAt ?? this.createdAt,
       retryCount: retryCount ?? this.retryCount,
       lastAttempt: lastAttempt ?? this.lastAttempt,
+      mediaPath: mediaPath ?? this.mediaPath,
+      mimeType: mimeType ?? this.mimeType,
+      fileName: fileName ?? this.fileName,
+      fileSize: fileSize ?? this.fileSize,
+      width: width ?? this.width,
+      height: height ?? this.height,
+      transferId: transferId ?? this.transferId,
     );
   }
 
@@ -687,6 +1000,27 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (lastAttempt.present) {
       map['last_attempt'] = Variable<int>(lastAttempt.value);
     }
+    if (mediaPath.present) {
+      map['media_path'] = Variable<String>(mediaPath.value);
+    }
+    if (mimeType.present) {
+      map['mime_type'] = Variable<String>(mimeType.value);
+    }
+    if (fileName.present) {
+      map['file_name'] = Variable<String>(fileName.value);
+    }
+    if (fileSize.present) {
+      map['file_size'] = Variable<int>(fileSize.value);
+    }
+    if (width.present) {
+      map['width'] = Variable<int>(width.value);
+    }
+    if (height.present) {
+      map['height'] = Variable<int>(height.value);
+    }
+    if (transferId.present) {
+      map['transfer_id'] = Variable<String>(transferId.value);
+    }
     return map;
   }
 
@@ -704,7 +1038,14 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('isRead: $isRead, ')
           ..write('createdAt: $createdAt, ')
           ..write('retryCount: $retryCount, ')
-          ..write('lastAttempt: $lastAttempt')
+          ..write('lastAttempt: $lastAttempt, ')
+          ..write('mediaPath: $mediaPath, ')
+          ..write('mimeType: $mimeType, ')
+          ..write('fileName: $fileName, ')
+          ..write('fileSize: $fileSize, ')
+          ..write('width: $width, ')
+          ..write('height: $height, ')
+          ..write('transferId: $transferId')
           ..write(')'))
         .toString();
   }
@@ -1433,6 +1774,13 @@ typedef $$MessagesTableCreateCompanionBuilder =
       required int createdAt,
       Value<int> retryCount,
       Value<int?> lastAttempt,
+      Value<String?> mediaPath,
+      Value<String?> mimeType,
+      Value<String?> fileName,
+      Value<int?> fileSize,
+      Value<int?> width,
+      Value<int?> height,
+      Value<String?> transferId,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -1448,6 +1796,13 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int> createdAt,
       Value<int> retryCount,
       Value<int?> lastAttempt,
+      Value<String?> mediaPath,
+      Value<String?> mimeType,
+      Value<String?> fileName,
+      Value<int?> fileSize,
+      Value<int?> width,
+      Value<int?> height,
+      Value<String?> transferId,
     });
 
 class $$MessagesTableFilterComposer
@@ -1517,6 +1872,41 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<int> get lastAttempt => $composableBuilder(
     column: $table.lastAttempt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mediaPath => $composableBuilder(
+    column: $table.mediaPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mimeType => $composableBuilder(
+    column: $table.mimeType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get fileSize => $composableBuilder(
+    column: $table.fileSize,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get width => $composableBuilder(
+    column: $table.width,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get height => $composableBuilder(
+    column: $table.height,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get transferId => $composableBuilder(
+    column: $table.transferId,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1589,6 +1979,41 @@ class $$MessagesTableOrderingComposer
     column: $table.lastAttempt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get mediaPath => $composableBuilder(
+    column: $table.mediaPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mimeType => $composableBuilder(
+    column: $table.mimeType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get fileSize => $composableBuilder(
+    column: $table.fileSize,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get width => $composableBuilder(
+    column: $table.width,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get height => $composableBuilder(
+    column: $table.height,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get transferId => $composableBuilder(
+    column: $table.transferId,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -1643,6 +2068,29 @@ class $$MessagesTableAnnotationComposer
     column: $table.lastAttempt,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get mediaPath =>
+      $composableBuilder(column: $table.mediaPath, builder: (column) => column);
+
+  GeneratedColumn<String> get mimeType =>
+      $composableBuilder(column: $table.mimeType, builder: (column) => column);
+
+  GeneratedColumn<String> get fileName =>
+      $composableBuilder(column: $table.fileName, builder: (column) => column);
+
+  GeneratedColumn<int> get fileSize =>
+      $composableBuilder(column: $table.fileSize, builder: (column) => column);
+
+  GeneratedColumn<int> get width =>
+      $composableBuilder(column: $table.width, builder: (column) => column);
+
+  GeneratedColumn<int> get height =>
+      $composableBuilder(column: $table.height, builder: (column) => column);
+
+  GeneratedColumn<String> get transferId => $composableBuilder(
+    column: $table.transferId,
+    builder: (column) => column,
+  );
 }
 
 class $$MessagesTableTableManager
@@ -1685,6 +2133,13 @@ class $$MessagesTableTableManager
                 Value<int> createdAt = const Value.absent(),
                 Value<int> retryCount = const Value.absent(),
                 Value<int?> lastAttempt = const Value.absent(),
+                Value<String?> mediaPath = const Value.absent(),
+                Value<String?> mimeType = const Value.absent(),
+                Value<String?> fileName = const Value.absent(),
+                Value<int?> fileSize = const Value.absent(),
+                Value<int?> width = const Value.absent(),
+                Value<int?> height = const Value.absent(),
+                Value<String?> transferId = const Value.absent(),
               }) => MessagesCompanion(
                 localId: localId,
                 messageId: messageId,
@@ -1698,6 +2153,13 @@ class $$MessagesTableTableManager
                 createdAt: createdAt,
                 retryCount: retryCount,
                 lastAttempt: lastAttempt,
+                mediaPath: mediaPath,
+                mimeType: mimeType,
+                fileName: fileName,
+                fileSize: fileSize,
+                width: width,
+                height: height,
+                transferId: transferId,
               ),
           createCompanionCallback:
               ({
@@ -1713,6 +2175,13 @@ class $$MessagesTableTableManager
                 required int createdAt,
                 Value<int> retryCount = const Value.absent(),
                 Value<int?> lastAttempt = const Value.absent(),
+                Value<String?> mediaPath = const Value.absent(),
+                Value<String?> mimeType = const Value.absent(),
+                Value<String?> fileName = const Value.absent(),
+                Value<int?> fileSize = const Value.absent(),
+                Value<int?> width = const Value.absent(),
+                Value<int?> height = const Value.absent(),
+                Value<String?> transferId = const Value.absent(),
               }) => MessagesCompanion.insert(
                 localId: localId,
                 messageId: messageId,
@@ -1726,6 +2195,13 @@ class $$MessagesTableTableManager
                 createdAt: createdAt,
                 retryCount: retryCount,
                 lastAttempt: lastAttempt,
+                mediaPath: mediaPath,
+                mimeType: mimeType,
+                fileName: fileName,
+                fileSize: fileSize,
+                width: width,
+                height: height,
+                transferId: transferId,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

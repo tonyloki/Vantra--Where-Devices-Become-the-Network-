@@ -211,6 +211,24 @@ const VantraPlaintext$json = {
       '9': 0,
       '10': 'capabilitiesExchange'
     },
+    {
+      '1': 'media_control',
+      '3': 10,
+      '4': 1,
+      '5': 11,
+      '6': '.vantra.protocol.MediaControl',
+      '9': 0,
+      '10': 'mediaControl'
+    },
+    {
+      '1': 'media_chunk',
+      '3': 11,
+      '4': 1,
+      '5': 11,
+      '6': '.vantra.protocol.MediaChunk',
+      '9': 0,
+      '10': 'mediaChunk'
+    },
   ],
   '8': [
     {'1': 'body'},
@@ -226,7 +244,82 @@ final $typed_data.Uint8List vantraPlaintextDescriptor = $convert.base64Decode(
     'YW50cmEucHJvdG9jb2wuVGV4dEJvZHlIAFIEdGV4dBIsCgNhY2sYCCABKAsyGC52YW50cmEucH'
     'JvdG9jb2wuQWNrQm9keUgAUgNhY2sSXAoVY2FwYWJpbGl0aWVzX2V4Y2hhbmdlGAkgASgLMiUu'
     'dmFudHJhLnByb3RvY29sLkNhcGFiaWxpdGllc0V4Y2hhbmdlSABSFGNhcGFiaWxpdGllc0V4Y2'
-    'hhbmdlQgYKBGJvZHk=');
+    'hhbmdlEkQKDW1lZGlhX2NvbnRyb2wYCiABKAsyHS52YW50cmEucHJvdG9jb2wuTWVkaWFDb250'
+    'cm9sSABSDG1lZGlhQ29udHJvbBI+CgttZWRpYV9jaHVuaxgLIAEoCzIbLnZhbnRyYS5wcm90b2'
+    'NvbC5NZWRpYUNodW5rSABSCm1lZGlhQ2h1bmtCBgoEYm9keQ==');
+
+@$core.Deprecated('Use mediaControlDescriptor instead')
+const MediaControl$json = {
+  '1': 'MediaControl',
+  '2': [
+    {
+      '1': 'type',
+      '3': 1,
+      '4': 1,
+      '5': 14,
+      '6': '.vantra.protocol.MediaControl.Type',
+      '10': 'type'
+    },
+    {'1': 'transfer_id', '3': 2, '4': 1, '5': 9, '10': 'transferId'},
+    {'1': 'file_name', '3': 3, '4': 1, '5': 9, '10': 'fileName'},
+    {'1': 'file_size', '3': 4, '4': 1, '5': 4, '10': 'fileSize'},
+    {'1': 'mime_type', '3': 5, '4': 1, '5': 9, '10': 'mimeType'},
+    {'1': 'total_chunks', '3': 6, '4': 1, '5': 13, '10': 'totalChunks'},
+    {'1': 'chunk_size', '3': 7, '4': 1, '5': 13, '10': 'chunkSize'},
+    {'1': 'width', '3': 8, '4': 1, '5': 13, '10': 'width'},
+    {'1': 'height', '3': 9, '4': 1, '5': 13, '10': 'height'},
+    {'1': 'caption', '3': 10, '4': 1, '5': 9, '10': 'caption'},
+    {
+      '1': 'next_expected_chunk',
+      '3': 11,
+      '4': 1,
+      '5': 13,
+      '10': 'nextExpectedChunk'
+    },
+  ],
+  '4': [MediaControl_Type$json],
+};
+
+@$core.Deprecated('Use mediaControlDescriptor instead')
+const MediaControl_Type$json = {
+  '1': 'Type',
+  '2': [
+    {'1': 'TYPE_UNSPECIFIED', '2': 0},
+    {'1': 'OFFER', '2': 1},
+    {'1': 'ACCEPT', '2': 2},
+    {'1': 'REJECT', '2': 3},
+    {'1': 'CANCEL', '2': 4},
+  ],
+};
+
+/// Descriptor for `MediaControl`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List mediaControlDescriptor = $convert.base64Decode(
+    'CgxNZWRpYUNvbnRyb2wSNgoEdHlwZRgBIAEoDjIiLnZhbnRyYS5wcm90b2NvbC5NZWRpYUNvbn'
+    'Ryb2wuVHlwZVIEdHlwZRIfCgt0cmFuc2Zlcl9pZBgCIAEoCVIKdHJhbnNmZXJJZBIbCglmaWxl'
+    'X25hbWUYAyABKAlSCGZpbGVOYW1lEhsKCWZpbGVfc2l6ZRgEIAEoBFIIZmlsZVNpemUSGwoJbW'
+    'ltZV90eXBlGAUgASgJUghtaW1lVHlwZRIhCgx0b3RhbF9jaHVua3MYBiABKA1SC3RvdGFsQ2h1'
+    'bmtzEh0KCmNodW5rX3NpemUYByABKA1SCWNodW5rU2l6ZRIUCgV3aWR0aBgIIAEoDVIFd2lkdG'
+    'gSFgoGaGVpZ2h0GAkgASgNUgZoZWlnaHQSGAoHY2FwdGlvbhgKIAEoCVIHY2FwdGlvbhIuChNu'
+    'ZXh0X2V4cGVjdGVkX2NodW5rGAsgASgNUhFuZXh0RXhwZWN0ZWRDaHVuayJLCgRUeXBlEhQKEF'
+    'RZUEVfVU5TUEVDSUZJRUQQABIJCgVPRkZFUhABEgoKBkFDQ0VQVBACEgoKBlJFSkVDVBADEgoK'
+    'BkNBTkNFTBAE');
+
+@$core.Deprecated('Use mediaChunkDescriptor instead')
+const MediaChunk$json = {
+  '1': 'MediaChunk',
+  '2': [
+    {'1': 'transfer_id', '3': 1, '4': 1, '5': 9, '10': 'transferId'},
+    {'1': 'chunk_index', '3': 2, '4': 1, '5': 13, '10': 'chunkIndex'},
+    {'1': 'total_chunks', '3': 3, '4': 1, '5': 13, '10': 'totalChunks'},
+    {'1': 'data', '3': 4, '4': 1, '5': 12, '10': 'data'},
+  ],
+};
+
+/// Descriptor for `MediaChunk`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List mediaChunkDescriptor = $convert.base64Decode(
+    'CgpNZWRpYUNodW5rEh8KC3RyYW5zZmVyX2lkGAEgASgJUgp0cmFuc2ZlcklkEh8KC2NodW5rX2'
+    'luZGV4GAIgASgNUgpjaHVua0luZGV4EiEKDHRvdGFsX2NodW5rcxgDIAEoDVILdG90YWxDaHVu'
+    'a3MSEgoEZGF0YRgEIAEoDFIEZGF0YQ==');
 
 @$core.Deprecated('Use capabilitiesExchangeDescriptor instead')
 const CapabilitiesExchange$json = {

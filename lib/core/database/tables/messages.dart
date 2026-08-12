@@ -31,4 +31,11 @@ class Messages extends Table {
   IntColumn get createdAt => integer()();
   IntColumn get retryCount => integer().withDefault(const Constant(0))();
   IntColumn get lastAttempt => integer().nullable()();
+  TextColumn get mediaPath => text().nullable()();
+  TextColumn get mimeType => text().nullable()();
+  TextColumn get fileName => text().nullable()();
+  IntColumn get fileSize => integer().nullable()();
+  IntColumn get width => integer().nullable()();
+  IntColumn get height => integer().nullable()();
+  TextColumn get transferId => text().nullable()();
 }

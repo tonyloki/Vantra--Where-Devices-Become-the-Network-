@@ -147,3 +147,65 @@ class DomainCapabilitiesExchange extends DomainPlaintext {
     required this.supportedCapabilities,
   });
 }
+
+enum DomainMediaControlType {
+  unspecified,
+  offer,
+  accept,
+  reject,
+  cancel,
+}
+
+class DomainMediaControl extends DomainPlaintext {
+  final DomainMediaControlType type;
+  final String transferId;
+  final String? fileName;
+  final int? fileSize;
+  final String? mimeType;
+  final int? totalChunks;
+  final int? chunkSize;
+  final int? width;
+  final int? height;
+  final String? caption;
+  final int? nextExpectedChunk;
+
+  const DomainMediaControl({
+    required super.messageId,
+    required super.sessionId,
+    required super.sequence,
+    required super.timestampMs,
+    required super.senderId,
+    required super.receiverId,
+    required this.type,
+    required this.transferId,
+    this.fileName,
+    this.fileSize,
+    this.mimeType,
+    this.totalChunks,
+    this.chunkSize,
+    this.width,
+    this.height,
+    this.caption,
+    this.nextExpectedChunk,
+  });
+}
+
+class DomainMediaChunk extends DomainPlaintext {
+  final String transferId;
+  final int chunkIndex;
+  final int totalChunks;
+  final Uint8List data;
+
+  const DomainMediaChunk({
+    required super.messageId,
+    required super.sessionId,
+    required super.sequence,
+    required super.timestampMs,
+    required super.senderId,
+    required super.receiverId,
+    required this.transferId,
+    required this.chunkIndex,
+    required this.totalChunks,
+    required this.data,
+  });
+}

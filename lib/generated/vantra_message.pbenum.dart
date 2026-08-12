@@ -67,5 +67,33 @@ class DeliveryStatus extends $pb.ProtobufEnum {
   const DeliveryStatus._(super.value, super.name);
 }
 
+class MediaControl_Type extends $pb.ProtobufEnum {
+  static const MediaControl_Type TYPE_UNSPECIFIED =
+      MediaControl_Type._(0, _omitEnumNames ? '' : 'TYPE_UNSPECIFIED');
+  static const MediaControl_Type OFFER =
+      MediaControl_Type._(1, _omitEnumNames ? '' : 'OFFER');
+  static const MediaControl_Type ACCEPT =
+      MediaControl_Type._(2, _omitEnumNames ? '' : 'ACCEPT');
+  static const MediaControl_Type REJECT =
+      MediaControl_Type._(3, _omitEnumNames ? '' : 'REJECT');
+  static const MediaControl_Type CANCEL =
+      MediaControl_Type._(4, _omitEnumNames ? '' : 'CANCEL');
+
+  static const $core.List<MediaControl_Type> values = <MediaControl_Type>[
+    TYPE_UNSPECIFIED,
+    OFFER,
+    ACCEPT,
+    REJECT,
+    CANCEL,
+  ];
+
+  static final $core.List<MediaControl_Type?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 4);
+  static MediaControl_Type? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const MediaControl_Type._(super.value, super.name);
+}
+
 const $core.bool _omitEnumNames =
     $core.bool.fromEnvironment('protobuf.omit_enum_names');

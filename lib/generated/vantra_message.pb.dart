@@ -413,7 +413,14 @@ class EncryptedEnvelope extends $pb.GeneratedMessage {
   void clearMac() => $_clearField(6);
 }
 
-enum VantraPlaintext_Body { text, ack, capabilitiesExchange, notSet }
+enum VantraPlaintext_Body {
+  text,
+  ack,
+  capabilitiesExchange,
+  mediaControl,
+  mediaChunk,
+  notSet
+}
 
 /// 3. Plaintext Payload (Encrypted inside EncryptedEnvelope.ciphertext)
 class VantraPlaintext extends $pb.GeneratedMessage {
@@ -427,6 +434,8 @@ class VantraPlaintext extends $pb.GeneratedMessage {
     TextBody? text,
     AckBody? ack,
     CapabilitiesExchange? capabilitiesExchange,
+    MediaControl? mediaControl,
+    MediaChunk? mediaChunk,
   }) {
     final result = create();
     if (messageId != null) result.messageId = messageId;
@@ -439,6 +448,8 @@ class VantraPlaintext extends $pb.GeneratedMessage {
     if (ack != null) result.ack = ack;
     if (capabilitiesExchange != null)
       result.capabilitiesExchange = capabilitiesExchange;
+    if (mediaControl != null) result.mediaControl = mediaControl;
+    if (mediaChunk != null) result.mediaChunk = mediaChunk;
     return result;
   }
 
@@ -456,6 +467,8 @@ class VantraPlaintext extends $pb.GeneratedMessage {
     7: VantraPlaintext_Body.text,
     8: VantraPlaintext_Body.ack,
     9: VantraPlaintext_Body.capabilitiesExchange,
+    10: VantraPlaintext_Body.mediaControl,
+    11: VantraPlaintext_Body.mediaChunk,
     0: VantraPlaintext_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
@@ -463,7 +476,7 @@ class VantraPlaintext extends $pb.GeneratedMessage {
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'vantra.protocol'),
       createEmptyInstance: create)
-    ..oo(0, [7, 8, 9])
+    ..oo(0, [7, 8, 9, 10, 11])
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
     ..aOS(2, _omitFieldNames ? '' : 'sessionId')
     ..a<$fixnum.Int64>(
@@ -478,6 +491,10 @@ class VantraPlaintext extends $pb.GeneratedMessage {
     ..aOM<CapabilitiesExchange>(
         9, _omitFieldNames ? '' : 'capabilitiesExchange',
         subBuilder: CapabilitiesExchange.create)
+    ..aOM<MediaControl>(10, _omitFieldNames ? '' : 'mediaControl',
+        subBuilder: MediaControl.create)
+    ..aOM<MediaChunk>(11, _omitFieldNames ? '' : 'mediaChunk',
+        subBuilder: MediaChunk.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -502,11 +519,15 @@ class VantraPlaintext extends $pb.GeneratedMessage {
   @$pb.TagNumber(7)
   @$pb.TagNumber(8)
   @$pb.TagNumber(9)
+  @$pb.TagNumber(10)
+  @$pb.TagNumber(11)
   VantraPlaintext_Body whichBody() =>
       _VantraPlaintext_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(7)
   @$pb.TagNumber(8)
   @$pb.TagNumber(9)
+  @$pb.TagNumber(10)
+  @$pb.TagNumber(11)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -595,6 +616,300 @@ class VantraPlaintext extends $pb.GeneratedMessage {
   void clearCapabilitiesExchange() => $_clearField(9);
   @$pb.TagNumber(9)
   CapabilitiesExchange ensureCapabilitiesExchange() => $_ensure(8);
+
+  @$pb.TagNumber(10)
+  MediaControl get mediaControl => $_getN(9);
+  @$pb.TagNumber(10)
+  set mediaControl(MediaControl value) => $_setField(10, value);
+  @$pb.TagNumber(10)
+  $core.bool hasMediaControl() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearMediaControl() => $_clearField(10);
+  @$pb.TagNumber(10)
+  MediaControl ensureMediaControl() => $_ensure(9);
+
+  @$pb.TagNumber(11)
+  MediaChunk get mediaChunk => $_getN(10);
+  @$pb.TagNumber(11)
+  set mediaChunk(MediaChunk value) => $_setField(11, value);
+  @$pb.TagNumber(11)
+  $core.bool hasMediaChunk() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearMediaChunk() => $_clearField(11);
+  @$pb.TagNumber(11)
+  MediaChunk ensureMediaChunk() => $_ensure(10);
+}
+
+class MediaControl extends $pb.GeneratedMessage {
+  factory MediaControl({
+    MediaControl_Type? type,
+    $core.String? transferId,
+    $core.String? fileName,
+    $fixnum.Int64? fileSize,
+    $core.String? mimeType,
+    $core.int? totalChunks,
+    $core.int? chunkSize,
+    $core.int? width,
+    $core.int? height,
+    $core.String? caption,
+    $core.int? nextExpectedChunk,
+  }) {
+    final result = create();
+    if (type != null) result.type = type;
+    if (transferId != null) result.transferId = transferId;
+    if (fileName != null) result.fileName = fileName;
+    if (fileSize != null) result.fileSize = fileSize;
+    if (mimeType != null) result.mimeType = mimeType;
+    if (totalChunks != null) result.totalChunks = totalChunks;
+    if (chunkSize != null) result.chunkSize = chunkSize;
+    if (width != null) result.width = width;
+    if (height != null) result.height = height;
+    if (caption != null) result.caption = caption;
+    if (nextExpectedChunk != null) result.nextExpectedChunk = nextExpectedChunk;
+    return result;
+  }
+
+  MediaControl._();
+
+  factory MediaControl.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory MediaControl.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'MediaControl',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'vantra.protocol'),
+      createEmptyInstance: create)
+    ..aE<MediaControl_Type>(1, _omitFieldNames ? '' : 'type',
+        enumValues: MediaControl_Type.values)
+    ..aOS(2, _omitFieldNames ? '' : 'transferId')
+    ..aOS(3, _omitFieldNames ? '' : 'fileName')
+    ..a<$fixnum.Int64>(
+        4, _omitFieldNames ? '' : 'fileSize', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..aOS(5, _omitFieldNames ? '' : 'mimeType')
+    ..aI(6, _omitFieldNames ? '' : 'totalChunks',
+        fieldType: $pb.PbFieldType.OU3)
+    ..aI(7, _omitFieldNames ? '' : 'chunkSize', fieldType: $pb.PbFieldType.OU3)
+    ..aI(8, _omitFieldNames ? '' : 'width', fieldType: $pb.PbFieldType.OU3)
+    ..aI(9, _omitFieldNames ? '' : 'height', fieldType: $pb.PbFieldType.OU3)
+    ..aOS(10, _omitFieldNames ? '' : 'caption')
+    ..aI(11, _omitFieldNames ? '' : 'nextExpectedChunk',
+        fieldType: $pb.PbFieldType.OU3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MediaControl clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MediaControl copyWith(void Function(MediaControl) updates) =>
+      super.copyWith((message) => updates(message as MediaControl))
+          as MediaControl;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static MediaControl create() => MediaControl._();
+  @$core.override
+  MediaControl createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static MediaControl getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<MediaControl>(create);
+  static MediaControl? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  MediaControl_Type get type => $_getN(0);
+  @$pb.TagNumber(1)
+  set type(MediaControl_Type value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasType() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearType() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get transferId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set transferId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasTransferId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearTransferId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get fileName => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set fileName($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasFileName() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearFileName() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get fileSize => $_getI64(3);
+  @$pb.TagNumber(4)
+  set fileSize($fixnum.Int64 value) => $_setInt64(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasFileSize() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearFileSize() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get mimeType => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set mimeType($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasMimeType() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearMimeType() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.int get totalChunks => $_getIZ(5);
+  @$pb.TagNumber(6)
+  set totalChunks($core.int value) => $_setUnsignedInt32(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasTotalChunks() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearTotalChunks() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.int get chunkSize => $_getIZ(6);
+  @$pb.TagNumber(7)
+  set chunkSize($core.int value) => $_setUnsignedInt32(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasChunkSize() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearChunkSize() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.int get width => $_getIZ(7);
+  @$pb.TagNumber(8)
+  set width($core.int value) => $_setUnsignedInt32(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasWidth() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearWidth() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.int get height => $_getIZ(8);
+  @$pb.TagNumber(9)
+  set height($core.int value) => $_setUnsignedInt32(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasHeight() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearHeight() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $core.String get caption => $_getSZ(9);
+  @$pb.TagNumber(10)
+  set caption($core.String value) => $_setString(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasCaption() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearCaption() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  $core.int get nextExpectedChunk => $_getIZ(10);
+  @$pb.TagNumber(11)
+  set nextExpectedChunk($core.int value) => $_setUnsignedInt32(10, value);
+  @$pb.TagNumber(11)
+  $core.bool hasNextExpectedChunk() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearNextExpectedChunk() => $_clearField(11);
+}
+
+class MediaChunk extends $pb.GeneratedMessage {
+  factory MediaChunk({
+    $core.String? transferId,
+    $core.int? chunkIndex,
+    $core.int? totalChunks,
+    $core.List<$core.int>? data,
+  }) {
+    final result = create();
+    if (transferId != null) result.transferId = transferId;
+    if (chunkIndex != null) result.chunkIndex = chunkIndex;
+    if (totalChunks != null) result.totalChunks = totalChunks;
+    if (data != null) result.data = data;
+    return result;
+  }
+
+  MediaChunk._();
+
+  factory MediaChunk.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory MediaChunk.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'MediaChunk',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'vantra.protocol'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'transferId')
+    ..aI(2, _omitFieldNames ? '' : 'chunkIndex', fieldType: $pb.PbFieldType.OU3)
+    ..aI(3, _omitFieldNames ? '' : 'totalChunks',
+        fieldType: $pb.PbFieldType.OU3)
+    ..a<$core.List<$core.int>>(
+        4, _omitFieldNames ? '' : 'data', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MediaChunk clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MediaChunk copyWith(void Function(MediaChunk) updates) =>
+      super.copyWith((message) => updates(message as MediaChunk)) as MediaChunk;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static MediaChunk create() => MediaChunk._();
+  @$core.override
+  MediaChunk createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static MediaChunk getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<MediaChunk>(create);
+  static MediaChunk? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get transferId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set transferId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasTransferId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearTransferId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.int get chunkIndex => $_getIZ(1);
+  @$pb.TagNumber(2)
+  set chunkIndex($core.int value) => $_setUnsignedInt32(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasChunkIndex() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearChunkIndex() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.int get totalChunks => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set totalChunks($core.int value) => $_setUnsignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasTotalChunks() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearTotalChunks() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.List<$core.int> get data => $_getN(3);
+  @$pb.TagNumber(4)
+  set data($core.List<$core.int> value) => $_setBytes(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasData() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearData() => $_clearField(4);
 }
 
 class CapabilitiesExchange extends $pb.GeneratedMessage {

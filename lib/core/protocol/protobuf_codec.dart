@@ -42,6 +42,38 @@ VantraCapability? _mapToDomainCapability(Capability cap) {
   }
 }
 
+MediaControl_Type _mapToProtoMediaControlType(DomainMediaControlType type) {
+  switch (type) {
+    case DomainMediaControlType.unspecified:
+      return MediaControl_Type.TYPE_UNSPECIFIED;
+    case DomainMediaControlType.offer:
+      return MediaControl_Type.OFFER;
+    case DomainMediaControlType.accept:
+      return MediaControl_Type.ACCEPT;
+    case DomainMediaControlType.reject:
+      return MediaControl_Type.REJECT;
+    case DomainMediaControlType.cancel:
+      return MediaControl_Type.CANCEL;
+  }
+}
+
+DomainMediaControlType _mapToDomainMediaControlType(MediaControl_Type type) {
+  switch (type) {
+    case MediaControl_Type.TYPE_UNSPECIFIED:
+      return DomainMediaControlType.unspecified;
+    case MediaControl_Type.OFFER:
+      return DomainMediaControlType.offer;
+    case MediaControl_Type.ACCEPT:
+      return DomainMediaControlType.accept;
+    case MediaControl_Type.REJECT:
+      return DomainMediaControlType.reject;
+    case MediaControl_Type.CANCEL:
+      return DomainMediaControlType.cancel;
+    default:
+      return DomainMediaControlType.unspecified;
+  }
+}
+
 class ProtobufCodec implements ProtocolCodec {
   const ProtobufCodec();
 
@@ -219,6 +251,27 @@ class ProtobufCodec implements ProtocolCodec {
               .map(_mapToProtoCapability)
               .toList(),
         );
+      case DomainMediaControl mediaCtrl:
+        pbPlaintext.mediaControl = MediaControl(
+          type: _mapToProtoMediaControlType(mediaCtrl.type),
+          transferId: mediaCtrl.transferId,
+          fileName: mediaCtrl.fileName ?? '',
+          fileSize: Int64(mediaCtrl.fileSize ?? 0),
+          mimeType: mediaCtrl.mimeType ?? '',
+          totalChunks: mediaCtrl.totalChunks ?? 0,
+          chunkSize: mediaCtrl.chunkSize ?? 0,
+          width: mediaCtrl.width ?? 0,
+          height: mediaCtrl.height ?? 0,
+          caption: mediaCtrl.caption ?? '',
+          nextExpectedChunk: mediaCtrl.nextExpectedChunk ?? 0,
+        );
+      case DomainMediaChunk mediaChunk:
+        pbPlaintext.mediaChunk = MediaChunk(
+          transferId: mediaChunk.transferId,
+          chunkIndex: mediaChunk.chunkIndex,
+          totalChunks: mediaChunk.totalChunks,
+          data: mediaChunk.data,
+        );
     }
 
     return pbPlaintext.writeToBuffer();
@@ -299,6 +352,43 @@ class ProtobufCodec implements ProtocolCodec {
               .map(_mapToDomainCapability)
               .whereType<VantraCapability>()
               .toList(),
+        );
+
+      case VantraPlaintext_Body.mediaControl:
+        final ctrl = pbPlaintext.mediaControl;
+        return DomainMediaControl(
+          messageId: pbPlaintext.messageId,
+          sessionId: pbPlaintext.sessionId,
+          sequence: seqInt,
+          timestampMs: pbPlaintext.timestampMs.toInt(),
+          senderId: pbPlaintext.senderId,
+          receiverId: pbPlaintext.receiverId,
+          type: _mapToDomainMediaControlType(ctrl.type),
+          transferId: ctrl.transferId,
+          fileName: ctrl.fileName.isNotEmpty ? ctrl.fileName : null,
+          fileSize: ctrl.fileSize != Int64.ZERO ? ctrl.fileSize.toInt() : null,
+          mimeType: ctrl.mimeType.isNotEmpty ? ctrl.mimeType : null,
+          totalChunks: ctrl.totalChunks != 0 ? ctrl.totalChunks : null,
+          chunkSize: ctrl.chunkSize != 0 ? ctrl.chunkSize : null,
+          width: ctrl.width != 0 ? ctrl.width : null,
+          height: ctrl.height != 0 ? ctrl.height : null,
+          caption: ctrl.caption.isNotEmpty ? ctrl.caption : null,
+          nextExpectedChunk: ctrl.nextExpectedChunk != 0 ? ctrl.nextExpectedChunk : null,
+        );
+
+      case VantraPlaintext_Body.mediaChunk:
+        final chunk = pbPlaintext.mediaChunk;
+        return DomainMediaChunk(
+          messageId: pbPlaintext.messageId,
+          sessionId: pbPlaintext.sessionId,
+          sequence: seqInt,
+          timestampMs: pbPlaintext.timestampMs.toInt(),
+          senderId: pbPlaintext.senderId,
+          receiverId: pbPlaintext.receiverId,
+          transferId: chunk.transferId,
+          chunkIndex: chunk.chunkIndex,
+          totalChunks: chunk.totalChunks,
+          data: Uint8List.fromList(chunk.data),
         );
 
       case VantraPlaintext_Body.notSet:

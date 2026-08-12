@@ -52,7 +52,37 @@ message VantraPlaintext {
     TextBody text = 7;
     AckBody ack = 8;
     CapabilitiesExchange capabilities_exchange = 9; // New in V2
+    MediaControl media_control = 10;
+    MediaChunk media_chunk = 11;
   }
+}
+
+message MediaControl {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    OFFER = 1;
+    ACCEPT = 2;
+    REJECT = 3;
+    CANCEL = 4;
+  }
+  Type type = 1;
+  string transfer_id = 2;
+  string file_name = 3;
+  uint64 file_size = 4;
+  string mime_type = 5;
+  uint32 total_chunks = 6;
+  uint32 chunk_size = 7;
+  uint32 width = 8;
+  uint32 height = 9;
+  string caption = 10;
+  uint32 next_expected_chunk = 11;
+}
+
+message MediaChunk {
+  string transfer_id = 1;
+  uint32 chunk_index = 2;
+  uint32 total_chunks = 3;
+  bytes data = 4;
 }
 
 message CapabilitiesExchange {

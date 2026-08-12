@@ -20,7 +20,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration {
@@ -42,6 +42,15 @@ class AppDatabase extends _$AppDatabase {
         if (from < 4) {
           await m.addColumn(messages, messages.retryCount);
           await m.addColumn(messages, messages.lastAttempt);
+        }
+        if (from < 5) {
+          await m.addColumn(messages, messages.mediaPath);
+          await m.addColumn(messages, messages.mimeType);
+          await m.addColumn(messages, messages.fileName);
+          await m.addColumn(messages, messages.fileSize);
+          await m.addColumn(messages, messages.width);
+          await m.addColumn(messages, messages.height);
+          await m.addColumn(messages, messages.transferId);
         }
       },
       beforeOpen: (details) async {

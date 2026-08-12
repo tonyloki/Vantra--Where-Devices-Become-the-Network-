@@ -1,6 +1,10 @@
 // ignore_for_file: avoid_print
 
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -149,6 +153,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Set<String> _activePeerFlushes = {};
   final Map<String, Timer> _ackTimers = {};
   final Map<String, Timer> _backoffTimers = {};
+  final Map<String, Completer<DomainMediaControl>> _mediaCompleters = {};
+  final Map<String, double> _transferProgress = {};
+
+  double getTransferProgress(String transferId) => _transferProgress[transferId] ?? 0.0;
 
   // Connection Request Idempotency Tracking
   final Set<String> _acceptedEndpoints = {};
@@ -351,7 +359,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
           return;
         }
 
-        final localCapabilities = const [VantraCapability.text];
+        final localCapabilities = const [VantraCapability.text, VantraCapability.image];
         final negotiatedCapabilities = localCapabilities
             .where((c) => plaintext.supportedCapabilities.contains(c))
             .toList();
@@ -372,6 +380,129 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
         await _sendAck(event.endpointId, session, plaintext.messageId);
         _flushQueue(peerId);
+      } else if (plaintext is DomainMediaControl) {
+        if (plaintext.type == DomainMediaControlType.offer) {
+          final isImageSupported = activeSession?.enabledCapabilities?.contains(VantraCapability.image) ?? false;
+          if (!isImageSupported) {
+            VantraLogger.log('[VANTRA][MESSAGING] Received media OFFER, but capability not enabled.');
+            if (activeSession != null) {
+              await _sendMediaReject(event.endpointId, session, plaintext.transferId);
+            }
+            return;
+          }
+          if (plaintext.fileSize != null && plaintext.fileSize! > 10 * 1024 * 1024) {
+            VantraLogger.log('[VANTRA][MESSAGING] Media OFFER exceeds size limit: ${plaintext.fileSize}');
+            if (activeSession != null) {
+              await _sendMediaReject(event.endpointId, session, plaintext.transferId);
+            }
+            return;
+          }
+
+          final existingMsg = await repository.getMessageById(plaintext.messageId);
+          if (existingMsg != null) {
+            if (activeSession != null) {
+              await _sendAck(event.endpointId, session, plaintext.messageId);
+            }
+            return;
+          }
+
+          final appDir = await getApplicationDocumentsDirectory();
+          final tempDir = Directory(path.join(appDir.path, 'media', 'temp', plaintext.transferId));
+          int nextExpectedChunk = 0;
+          if (await tempDir.exists()) {
+            while (true) {
+              final chunkFile = File(path.join(tempDir.path, 'chunk_$nextExpectedChunk'));
+              if (await chunkFile.exists()) {
+                nextExpectedChunk++;
+              } else {
+                break;
+              }
+            }
+          } else {
+            await tempDir.create(recursive: true);
+          }
+
+          final incomingMsg = VantraMessage(
+            messageId: plaintext.messageId,
+            senderId: plaintext.senderId,
+            receiverId: plaintext.receiverId,
+            text: plaintext.caption ?? '',
+            timestamp: plaintext.timestampMs,
+            status: MessageStatus.sending, // Render receiving progress bubble
+            type: 'IMAGE',
+            fileName: plaintext.fileName,
+            fileSize: plaintext.fileSize,
+            width: plaintext.width,
+            height: plaintext.height,
+            transferId: plaintext.transferId,
+          );
+          await repository.saveIncomingMessage(incomingMsg);
+
+          if (activeSession != null) {
+            await _sendMediaAccept(event.endpointId, session, plaintext.transferId, nextExpectedChunk);
+          }
+        } else if (plaintext.type == DomainMediaControlType.accept || plaintext.type == DomainMediaControlType.reject) {
+          final completer = _mediaCompleters[plaintext.transferId];
+          if (completer != null && !completer.isCompleted) {
+            completer.complete(plaintext);
+          }
+        }
+      } else if (plaintext is DomainMediaChunk) {
+        final appDir = await getApplicationDocumentsDirectory();
+        final tempDir = Directory(path.join(appDir.path, 'media', 'temp', plaintext.transferId));
+        if (!await tempDir.exists()) {
+          await tempDir.create(recursive: true);
+        }
+        final chunkFile = File(path.join(tempDir.path, 'chunk_${plaintext.chunkIndex}'));
+        await chunkFile.writeAsBytes(plaintext.data);
+
+        _transferProgress[plaintext.transferId] = (plaintext.chunkIndex + 1) / plaintext.totalChunks;
+        state = state.copyWith(); // Rebuild UI state
+
+        bool allReceived = true;
+        for (var i = 0; i < plaintext.totalChunks; i++) {
+          final file = File(path.join(tempDir.path, 'chunk_$i'));
+          if (!await file.exists()) {
+            allReceived = false;
+            break;
+          }
+        }
+
+        if (allReceived) {
+          VantraLogger.log('[VANTRA][MESSAGING] All chunks received for transferId=${plaintext.transferId}. Reassembling...');
+          final incomingDir = Directory(path.join(appDir.path, 'media', 'incoming'));
+          if (!await incomingDir.exists()) {
+            await incomingDir.create(recursive: true);
+          }
+
+          final msg = await repository.getMessageByTransferId(plaintext.transferId);
+          if (msg == null) {
+            VantraLogger.log('[VANTRA][MESSAGING] Error: Message metadata missing for transferId=${plaintext.transferId}');
+            return;
+          }
+
+          final ext = path.extension(msg.fileName ?? '.jpg');
+          final finalPath = path.join(incomingDir.path, '${msg.messageId}$ext');
+
+          final outFile = File(finalPath);
+          final ios = await outFile.open(mode: FileMode.write);
+          try {
+            for (var i = 0; i < plaintext.totalChunks; i++) {
+              final chunkF = File(path.join(tempDir.path, 'chunk_$i'));
+              final data = await chunkF.readAsBytes();
+              await ios.writeFrom(data);
+            }
+          } finally {
+            await ios.close();
+          }
+
+          await tempDir.delete(recursive: true);
+          await repository.updateIncomingMediaDetails(msg.messageId, finalPath, MessageStatus.received);
+
+          if (activeSession != null) {
+            await _sendAck(event.endpointId, session, msg.messageId);
+          }
+        }
       }
     } catch (e, stack) {
       VantraLogger.log('[VANTRA][SECURITY] DECRYPT / INTEGRITY CHECK FAILED for message ${event.messageId}: $e', e, stack);
@@ -551,7 +682,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final negotiatedVersion = end;
     final isV1 = negotiatedVersion == 1;
 
-    final localCapabilities = const [VantraCapability.text];
+    final localCapabilities = const [VantraCapability.text, VantraCapability.image];
     final remoteCapabilities = identity.supportedCapabilities ?? const [VantraCapability.text];
     final negotiatedCapabilities = localCapabilities
         .where((c) => remoteCapabilities.contains(c))
@@ -904,7 +1035,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       protocolVersion: 1, // V1 wire compatibility
       minSupportedVersion: kMinSupportedProtocolVersion,
       maxSupportedVersion: kCurrentProtocolVersion,
-      supportedCapabilities: const [VantraCapability.text],
+      supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
     );
     print('[VANTRA][SECURITY] HANDSHAKE PACKET SENT to $endpointId');
   }
@@ -927,7 +1058,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       receiverId: peerId,
       minSupportedVersion: kMinSupportedProtocolVersion,
       maxSupportedVersion: kCurrentProtocolVersion,
-      supportedCapabilities: const [VantraCapability.text],
+      supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
     );
 
     final bytes = _service.codec.encodePlaintext(domainPlaintext);
@@ -992,6 +1123,157 @@ class MessagingNotifier extends Notifier<MessagingState> {
   ) async {
     final repository = ref.read(messagingRepositoryProvider);
     final localIdentity = ref.read(localIdentityStateProvider);
+
+    if (msg.type == 'IMAGE') {
+      final isImageSupported = session.enabledCapabilities?.contains(VantraCapability.image) ?? false;
+      if (!isImageSupported) {
+        VantraLogger.log('[VANTRA][MESSAGING] Media sharing not supported by peer ${msg.receiverId}');
+        await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+        return false;
+      }
+
+      final file = File(msg.mediaPath!);
+      if (!await file.exists()) {
+        VantraLogger.log('[VANTRA][MESSAGING] Outgoing file missing: ${msg.mediaPath}');
+        await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+        return false;
+      }
+
+      final chunkSize = 16384;
+      final totalChunks = (msg.fileSize! / chunkSize).ceil();
+
+      final completer = Completer<DomainMediaControl>();
+      _mediaCompleters[msg.transferId!] = completer;
+
+      await repository.updateMessageStatus(msg.messageId, MessageStatus.sending);
+
+      final offerMsgId = const Uuid().v4();
+      final offerSeq = secSession.nextSendSequence();
+      
+      final offerDomainMsg = DomainMediaControl(
+        messageId: offerMsgId,
+        sessionId: secSession.sessionId,
+        sequence: offerSeq,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: localIdentity.peerId,
+        receiverId: msg.receiverId,
+        type: DomainMediaControlType.offer,
+        transferId: msg.transferId!,
+        fileName: msg.fileName,
+        fileSize: msg.fileSize,
+        mimeType: msg.mimeType,
+        totalChunks: totalChunks,
+        chunkSize: chunkSize,
+        width: msg.width,
+        height: msg.height,
+        caption: msg.text,
+      );
+
+      final offerBytes = _service.codec.encodePlaintext(offerDomainMsg);
+      final encryptedOffer = await _cryptoService.encryptBytes(
+        secretKey: secSession.sendKey,
+        sessionSalt: secSession.sessionSalt,
+        sequence: offerSeq,
+        messageId: offerMsgId,
+        plaintextBytes: offerBytes,
+      );
+
+      VantraLogger.log('[VANTRA][MESSAGING] Media transfer offering transferId=${msg.transferId}');
+      await _service.sendEncryptedMessage(
+        endpointId: session.endpointId,
+        messageId: offerMsgId,
+        sessionId: secSession.sessionId,
+        sequence: offerSeq,
+        nonce: Uint8List.fromList(encryptedOffer.nonce),
+        ciphertext: Uint8List.fromList(encryptedOffer.ciphertext),
+        mac: Uint8List.fromList(encryptedOffer.mac),
+        protocolVersion: kCurrentProtocolVersion,
+      );
+
+      DomainMediaControl response;
+      try {
+        response = await completer.future.timeout(const Duration(seconds: 15));
+      } catch (e) {
+        VantraLogger.log('[VANTRA][MESSAGING] OFFER timeout or rejected for transferId=${msg.transferId}');
+        _mediaCompleters.remove(msg.transferId);
+        await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+        return false;
+      } finally {
+        _mediaCompleters.remove(msg.transferId);
+      }
+
+      if (response.type == DomainMediaControlType.reject) {
+        VantraLogger.log('[VANTRA][MESSAGING] Receiver rejected media transferId=${msg.transferId}');
+        await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+        return false;
+      }
+
+      final startIndex = response.nextExpectedChunk ?? 0;
+      VantraLogger.log('[VANTRA][MESSAGING] Media transfer ACCEPTED. Starting from chunk index $startIndex of $totalChunks');
+
+      final accessFile = await file.open(mode: FileMode.read);
+      try {
+        for (var i = startIndex; i < totalChunks; i++) {
+          final activeSession = state.sessions[msg.receiverId];
+          if (activeSession == null || activeSession.status != SessionStatus.connected) {
+            throw Exception('Disconnected during chunk stream');
+          }
+
+          await accessFile.setPosition(i * chunkSize);
+          final chunkData = await accessFile.read(chunkSize);
+
+          final chunkMsgId = const Uuid().v4();
+          final chunkSeq = secSession.nextSendSequence();
+
+          final chunkDomainMsg = DomainMediaChunk(
+            messageId: chunkMsgId,
+            sessionId: secSession.sessionId,
+            sequence: chunkSeq,
+            timestampMs: DateTime.now().millisecondsSinceEpoch,
+            senderId: localIdentity.peerId,
+            receiverId: msg.receiverId,
+            transferId: msg.transferId!,
+            chunkIndex: i,
+            totalChunks: totalChunks,
+            data: Uint8List.fromList(chunkData),
+          );
+
+          final chunkBytes = _service.codec.encodePlaintext(chunkDomainMsg);
+          final encryptedChunk = await _cryptoService.encryptBytes(
+            secretKey: secSession.sendKey,
+            sessionSalt: secSession.sessionSalt,
+            sequence: chunkSeq,
+            messageId: chunkMsgId,
+            plaintextBytes: chunkBytes,
+          );
+
+          await _service.sendEncryptedMessage(
+            endpointId: session.endpointId,
+            messageId: chunkMsgId,
+            sessionId: secSession.sessionId,
+            sequence: chunkSeq,
+            nonce: Uint8List.fromList(encryptedChunk.nonce),
+            ciphertext: Uint8List.fromList(encryptedChunk.ciphertext),
+            mac: Uint8List.fromList(encryptedChunk.mac),
+            protocolVersion: kCurrentProtocolVersion,
+          );
+
+          _transferProgress[msg.transferId!] = (i + 1) / totalChunks;
+          state = state.copyWith();
+        }
+      } catch (e) {
+        VantraLogger.log('[VANTRA][MESSAGING] Chunk streaming interrupted for transferId=${msg.transferId}: $e');
+        await repository.updateMessageStatus(msg.messageId, MessageStatus.pending);
+        return false;
+      } finally {
+        await accessFile.close();
+      }
+
+      VantraLogger.log('[VANTRA][MESSAGING] Chunks stream completed for transferId=${msg.transferId}. Waiting for ACK...');
+      await repository.updateMessageStatus(msg.messageId, MessageStatus.sent);
+      _scheduleAckTimeout(msg.messageId, msg.receiverId);
+      return true;
+    }
 
     final seq = secSession.nextSendSequence();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -1205,6 +1487,145 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   @visibleForTesting
   Map<String, SecuritySession> get securitySessions => _securitySessions;
+
+  Future<void> sendImageMessage(String peerId, String filePath, {String? caption}) async {
+    VantraLogger.log('[VANTRA][MESSAGING] sendImageMessage: peerId=$peerId, filePath=$filePath, caption=$caption');
+    final localIdentity = ref.read(localIdentityStateProvider);
+    final repository = ref.read(messagingRepositoryProvider);
+
+    final messageId = const Uuid().v4();
+    final transferId = const Uuid().v4();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+
+    final file = File(filePath);
+    if (!await file.exists()) {
+      VantraLogger.log('[VANTRA][MESSAGING] File does not exist: $filePath');
+      return;
+    }
+
+    final fileSize = await file.length();
+    final ext = path.extension(filePath);
+    
+    final appDir = await getApplicationDocumentsDirectory();
+    final outgoingDir = Directory(path.join(appDir.path, 'media', 'outgoing'));
+    if (!await outgoingDir.exists()) {
+      await outgoingDir.create(recursive: true);
+    }
+    final localPath = path.join(outgoingDir.path, '$messageId$ext');
+    await file.copy(localPath);
+
+    int width = 0;
+    int height = 0;
+    try {
+      final bytes = await File(localPath).readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frameInfo = await codec.getNextFrame();
+      width = frameInfo.image.width;
+      height = frameInfo.image.height;
+    } catch (e) {
+      VantraLogger.log('[VANTRA][MESSAGING] Failed to decode image dimensions: $e');
+    }
+
+    String mimeType = 'image/jpeg';
+    if (ext.toLowerCase() == '.png') {
+      mimeType = 'image/png';
+    } else if (ext.toLowerCase() == '.webp') {
+      mimeType = 'image/webp';
+    }
+
+    final msg = VantraMessage(
+      messageId: messageId,
+      senderId: localIdentity.peerId,
+      receiverId: peerId,
+      text: caption ?? '',
+      timestamp: timestamp,
+      status: MessageStatus.pending,
+      type: 'IMAGE',
+      mediaPath: localPath,
+      mimeType: mimeType,
+      fileName: path.basename(filePath),
+      fileSize: fileSize,
+      width: width,
+      height: height,
+      transferId: transferId,
+    );
+
+    await repository.saveOutgoingMessage(msg);
+    _flushQueue(peerId);
+  }
+
+  Future<void> _sendMediaReject(String endpointId, SecuritySession session, String transferId) async {
+    final msgId = const Uuid().v4();
+    final seq = session.nextSendSequence();
+
+    final rejectDomainMsg = DomainMediaControl(
+      messageId: msgId,
+      sessionId: session.sessionId,
+      sequence: seq,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      senderId: session.peerId,
+      receiverId: session.peerId,
+      type: DomainMediaControlType.reject,
+      transferId: transferId,
+    );
+
+    final bytes = _service.codec.encodePlaintext(rejectDomainMsg);
+    final encrypted = await _cryptoService.encryptBytes(
+      secretKey: session.sendKey,
+      sessionSalt: session.sessionSalt,
+      sequence: seq,
+      messageId: msgId,
+      plaintextBytes: bytes,
+    );
+
+    await _service.sendEncryptedMessage(
+      endpointId: endpointId,
+      messageId: msgId,
+      sessionId: session.sessionId,
+      sequence: seq,
+      nonce: Uint8List.fromList(encrypted.nonce),
+      ciphertext: Uint8List.fromList(encrypted.ciphertext),
+      mac: Uint8List.fromList(encrypted.mac),
+      protocolVersion: kCurrentProtocolVersion,
+    );
+  }
+
+  Future<void> _sendMediaAccept(String endpointId, SecuritySession session, String transferId, int nextExpectedChunk) async {
+    final msgId = const Uuid().v4();
+    final seq = session.nextSendSequence();
+
+    final acceptDomainMsg = DomainMediaControl(
+      messageId: msgId,
+      sessionId: session.sessionId,
+      sequence: seq,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      senderId: session.peerId,
+      receiverId: session.peerId,
+      type: DomainMediaControlType.accept,
+      transferId: transferId,
+      nextExpectedChunk: nextExpectedChunk,
+    );
+
+    final bytes = _service.codec.encodePlaintext(acceptDomainMsg);
+    final encrypted = await _cryptoService.encryptBytes(
+      secretKey: session.sendKey,
+      sessionSalt: session.sessionSalt,
+      sequence: seq,
+      messageId: msgId,
+      plaintextBytes: bytes,
+    );
+
+    await _service.sendEncryptedMessage(
+      endpointId: endpointId,
+      messageId: msgId,
+      sessionId: session.sessionId,
+      sequence: seq,
+      nonce: Uint8List.fromList(encrypted.nonce),
+      ciphertext: Uint8List.fromList(encrypted.ciphertext),
+      mac: Uint8List.fromList(encrypted.mac),
+      protocolVersion: kCurrentProtocolVersion,
+    );
+  }
 
   List<int> _hexDecode(String hex) {
     final result = <int>[];

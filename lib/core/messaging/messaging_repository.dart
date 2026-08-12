@@ -21,10 +21,17 @@ class MessagingRepository {
       receiverId: msg.receiverId,
       messageText: msg.text,
       timestamp: msg.timestamp,
-      type: 'TEXT',
+      type: msg.type,
       status: MessageStatus.pending,
       isRead: const Value(true), // Outgoing messages are inherently read locally
       createdAt: DateTime.now().millisecondsSinceEpoch,
+      mediaPath: Value(msg.mediaPath),
+      mimeType: Value(msg.mimeType),
+      fileName: Value(msg.fileName),
+      fileSize: Value(msg.fileSize),
+      width: Value(msg.width),
+      height: Value(msg.height),
+      transferId: Value(msg.transferId),
     );
     await _db.messageDao.insertMessage(companion);
   }
@@ -46,10 +53,17 @@ class MessagingRepository {
         receiverId: msg.receiverId,
         messageText: msg.text,
         timestamp: msg.timestamp,
-        type: 'TEXT',
+        type: msg.type,
         status: MessageStatus.received,
         isRead: Value(isRead),
         createdAt: DateTime.now().millisecondsSinceEpoch,
+        mediaPath: Value(msg.mediaPath),
+        mimeType: Value(msg.mimeType),
+        fileName: Value(msg.fileName),
+        fileSize: Value(msg.fileSize),
+        width: Value(msg.width),
+        height: Value(msg.height),
+        transferId: Value(msg.transferId),
       );
       await _db.messageDao.insertMessage(companion);
       VantraLogger.log('[VANTRA][PERSISTENCE] PERSISTENCE INSERT SUCCESS: messageId=${msg.messageId}');
@@ -229,6 +243,15 @@ class MessagingRepository {
     return _db.messageDao.incrementRetryCount(messageId, maxAttempts: maxAttempts);
   }
 
+  Future<VantraMessage?> getMessageByTransferId(String transferId) async {
+    final msg = await _db.messageDao.getMessageByTransferId(transferId);
+    return msg != null ? _mapToDomain(msg) : null;
+  }
+
+  Future<bool> updateIncomingMediaDetails(String messageId, String mediaPath, MessageStatus status) {
+    return _db.messageDao.updateIncomingMediaDetails(messageId, mediaPath, status);
+  }
+
   VantraMessage _mapToDomain(Message dbMsg) {
     return VantraMessage(
       messageId: dbMsg.messageId,
@@ -238,6 +261,14 @@ class MessagingRepository {
       timestamp: dbMsg.timestamp,
       status: dbMsg.status,
       retryCount: dbMsg.retryCount,
+      type: dbMsg.type,
+      mediaPath: dbMsg.mediaPath,
+      mimeType: dbMsg.mimeType,
+      fileName: dbMsg.fileName,
+      fileSize: dbMsg.fileSize,
+      width: dbMsg.width,
+      height: dbMsg.height,
+      transferId: dbMsg.transferId,
     );
   }
 }

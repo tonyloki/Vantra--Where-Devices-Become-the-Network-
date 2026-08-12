@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/message.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
@@ -62,9 +64,90 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return '$hour:$minute';
   }
 
+  Future<void> _pickAndPreviewImage() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (pickedFile == null) return;
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        final captionController = TextEditingController();
+        return AlertDialog(
+          backgroundColor: VantraTheme.surface,
+          title: const Text('Send Image', style: TextStyle(color: VantraTheme.textPrimary, fontWeight: FontWeight.bold)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.file(
+                    File(pickedFile.path),
+                    height: 250,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: captionController,
+                  style: const TextStyle(color: VantraTheme.textPrimary),
+                  decoration: const InputDecoration(
+                    hintText: 'Add a caption...',
+                    hintStyle: TextStyle(color: VantraTheme.textMuted),
+                    border: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel', style: TextStyle(color: VantraTheme.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: VantraTheme.primary),
+              onPressed: () {
+                final caption = captionController.text.trim();
+                Navigator.of(ctx).pop();
+                ref.read(messagingStateProvider.notifier).sendImageMessage(
+                  widget.peerId,
+                  pickedFile.path,
+                  caption: caption.isNotEmpty ? caption : null,
+                );
+              },
+              child: const Text('Send', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showFullscreenImage(String path) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.9),
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.of(ctx).pop(),
+        child: InteractiveViewer(
+          child: Center(
+            child: Image.file(File(path)),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildStatusIcon(MessageStatus status) {
     switch (status) {
       case MessageStatus.pending:
+        return const Icon(Icons.access_time_rounded, size: 10, color: Colors.white70);
+      case MessageStatus.sending:
         return const Icon(Icons.access_time_rounded, size: 10, color: Colors.white70);
       case MessageStatus.failed:
         return const Icon(Icons.error_outline_rounded, size: 11, color: VantraTheme.redBlocked);
@@ -335,14 +418,94 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              msg.text,
-                              style: const TextStyle(
-                                color: VantraTheme.textPrimary,
-                                fontSize: 14.5,
-                                height: 1.3,
+                            if (msg.type == 'IMAGE') ...[
+                              GestureDetector(
+                                onTap: msg.mediaPath != null
+                                    ? () => _showFullscreenImage(msg.mediaPath!)
+                                    : null,
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: msg.mediaPath != null
+                                          ? Image.file(
+                                              File(msg.mediaPath!),
+                                              width: 200,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (context, error, stackTrace) => Container(
+                                                width: 200,
+                                                height: 150,
+                                                color: Colors.white10,
+                                                child: const Icon(Icons.broken_image_rounded, color: VantraTheme.textMuted),
+                                              ),
+                                            )
+                                          : Container(
+                                              width: 200,
+                                              height: 150,
+                                              color: Colors.white10,
+                                              child: const Center(
+                                                child: CircularProgressIndicator(color: VantraTheme.primary),
+                                              ),
+                                            ),
+                                    ),
+                                    if (msg.status == MessageStatus.sending ||
+                                        (msg.status == MessageStatus.pending &&
+                                            ref.watch(messagingStateProvider.notifier).getTransferProgress(msg.transferId ?? '') > 0)) ...[
+                                      Consumer(
+                                        builder: (context, ref, child) {
+                                          final progress = ref.watch(messagingStateProvider.notifier).getTransferProgress(msg.transferId ?? '');
+                                          return Container(
+                                            width: 200,
+                                            height: 150,
+                                            decoration: BoxDecoration(
+                                              color: Colors.black54,
+                                              borderRadius: BorderRadius.circular(12),
+                                            ),
+                                            child: Center(
+                                              child: Column(
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: [
+                                                  CircularProgressIndicator(
+                                                    value: progress,
+                                                    color: VantraTheme.primary,
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                  Text(
+                                                    '${(progress * 100).toInt()}%',
+                                                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ],
+                                  ],
+                                ),
                               ),
-                            ),
+                              if (msg.text.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  msg.text,
+                                  style: const TextStyle(
+                                    color: VantraTheme.textPrimary,
+                                    fontSize: 14.5,
+                                    height: 1.3,
+                                  ),
+                                ),
+                              ],
+                            ] else ...[
+                              Text(
+                                msg.text,
+                                style: const TextStyle(
+                                  color: VantraTheme.textPrimary,
+                                  fontSize: 14.5,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 5),
                             Row(
                               mainAxisAlignment: MainAxisAlignment.end,
@@ -398,6 +561,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               child: SafeArea(
                 child: Row(
                   children: [
+                    IconButton(
+                      key: const Key('chat_attach_button'),
+                      icon: const Icon(Icons.add_photo_alternate_rounded, color: VantraTheme.primaryAccent),
+                      onPressed: ((isConnected || isTrusted) && !isBlocked) ? _pickAndPreviewImage : null,
+                    ),
+                    const SizedBox(width: 4),
                     Expanded(
                       child: Container(
                         decoration: BoxDecoration(

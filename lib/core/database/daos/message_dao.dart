@@ -128,4 +128,17 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
       status: Value(isFailed ? MessageStatus.failed : MessageStatus.pending),
     ));
   }
+
+  Future<Message?> getMessageByTransferId(String transferId) {
+    return (select(messages)..where((t) => t.transferId.equals(transferId))).getSingleOrNull();
+  }
+
+  Future<bool> updateIncomingMediaDetails(String messageId, String mediaPath, MessageStatus status) async {
+    final query = update(messages)..where((t) => t.messageId.equals(messageId));
+    final rowsAffected = await query.write(MessagesCompanion(
+      mediaPath: Value(mediaPath),
+      status: Value(status),
+    ));
+    return rowsAffected > 0;
+  }
 }
