@@ -20,7 +20,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration {
@@ -51,6 +51,9 @@ class AppDatabase extends _$AppDatabase {
           await m.addColumn(messages, messages.width);
           await m.addColumn(messages, messages.height);
           await m.addColumn(messages, messages.transferId);
+        }
+        if (from < 6) {
+          await m.addColumn(messages, messages.sha256);
         }
       },
       beforeOpen: (details) async {

@@ -76,6 +76,7 @@ message MediaControl {
   uint32 height = 9;
   string caption = 10;
   uint32 next_expected_chunk = 11;
+  string sha256 = 12;
 }
 
 message MediaChunk {

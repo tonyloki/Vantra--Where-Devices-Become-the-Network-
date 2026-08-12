@@ -264,6 +264,7 @@ class ProtobufCodec implements ProtocolCodec {
           height: mediaCtrl.height ?? 0,
           caption: mediaCtrl.caption ?? '',
           nextExpectedChunk: mediaCtrl.nextExpectedChunk ?? 0,
+          sha256: mediaCtrl.sha256 ?? '',
         );
       case DomainMediaChunk mediaChunk:
         pbPlaintext.mediaChunk = MediaChunk(
@@ -374,6 +375,7 @@ class ProtobufCodec implements ProtocolCodec {
           height: ctrl.height != 0 ? ctrl.height : null,
           caption: ctrl.caption.isNotEmpty ? ctrl.caption : null,
           nextExpectedChunk: ctrl.nextExpectedChunk != 0 ? ctrl.nextExpectedChunk : null,
+          sha256: ctrl.sha256.isNotEmpty ? ctrl.sha256 : null,
         );
 
       case VantraPlaintext_Body.mediaChunk:

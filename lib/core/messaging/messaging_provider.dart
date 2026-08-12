@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart';
@@ -359,7 +360,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
           return;
         }
 
-        final localCapabilities = const [VantraCapability.text, VantraCapability.image];
+        final localCapabilities = const [
+          VantraCapability.text,
+          VantraCapability.image,
+          VantraCapability.file,
+        ];
         final negotiatedCapabilities = localCapabilities
             .where((c) => plaintext.supportedCapabilities.contains(c))
             .toList();
@@ -382,15 +387,23 @@ class MessagingNotifier extends Notifier<MessagingState> {
         _flushQueue(peerId);
       } else if (plaintext is DomainMediaControl) {
         if (plaintext.type == DomainMediaControlType.offer) {
-          final isImageSupported = activeSession?.enabledCapabilities?.contains(VantraCapability.image) ?? false;
-          if (!isImageSupported) {
-            VantraLogger.log('[VANTRA][MESSAGING] Received media OFFER, but capability not enabled.');
+          final mime = plaintext.mimeType;
+          final isImage = mime != null &&
+              (mime.startsWith('image/jpeg') ||
+               mime.startsWith('image/png') ||
+               mime.startsWith('image/webp')) &&
+              (plaintext.width != null && plaintext.width! > 0);
+          final capability = isImage ? VantraCapability.image : VantraCapability.file;
+          final isSupported = activeSession?.enabledCapabilities?.contains(capability) ?? false;
+          if (!isSupported) {
+            VantraLogger.log('[VANTRA][MESSAGING] Received OFFER for $capability, but capability not enabled.');
             if (activeSession != null) {
               await _sendMediaReject(event.endpointId, session, plaintext.transferId);
             }
             return;
           }
-          if (plaintext.fileSize != null && plaintext.fileSize! > 10 * 1024 * 1024) {
+          final sizeLimit = isImage ? 10 * 1024 * 1024 : 200 * 1024 * 1024;
+          if (plaintext.fileSize != null && plaintext.fileSize! > sizeLimit) {
             VantraLogger.log('[VANTRA][MESSAGING] Media OFFER exceeds size limit: ${plaintext.fileSize}');
             if (activeSession != null) {
               await _sendMediaReject(event.endpointId, session, plaintext.transferId);
@@ -406,8 +419,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
             return;
           }
 
+          final type = isImage ? 'IMAGE' : 'FILE';
+          final dirPrefix = isImage ? 'media' : 'files';
+
           final appDir = await getApplicationDocumentsDirectory();
-          final tempDir = Directory(path.join(appDir.path, 'media', 'temp', plaintext.transferId));
+          final tempDir = Directory(path.join(appDir.path, dirPrefix, 'temp', plaintext.transferId));
           int nextExpectedChunk = 0;
           if (await tempDir.exists()) {
             while (true) {
@@ -428,13 +444,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
             receiverId: plaintext.receiverId,
             text: plaintext.caption ?? '',
             timestamp: plaintext.timestampMs,
-            status: MessageStatus.sending, // Render receiving progress bubble
-            type: 'IMAGE',
+            status: MessageStatus.sending,
+            type: type,
             fileName: plaintext.fileName,
             fileSize: plaintext.fileSize,
             width: plaintext.width,
             height: plaintext.height,
             transferId: plaintext.transferId,
+            sha256: plaintext.sha256,
           );
           await repository.saveIncomingMessage(incomingMsg);
 
@@ -448,8 +465,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
           }
         }
       } else if (plaintext is DomainMediaChunk) {
+        final msg = await repository.getMessageByTransferId(plaintext.transferId);
+        final isImage = msg == null || msg.type == 'IMAGE';
+        final dirPrefix = isImage ? 'media' : 'files';
+
         final appDir = await getApplicationDocumentsDirectory();
-        final tempDir = Directory(path.join(appDir.path, 'media', 'temp', plaintext.transferId));
+        final tempDir = Directory(path.join(appDir.path, dirPrefix, 'temp', plaintext.transferId));
         if (!await tempDir.exists()) {
           await tempDir.create(recursive: true);
         }
@@ -457,7 +478,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         await chunkFile.writeAsBytes(plaintext.data);
 
         _transferProgress[plaintext.transferId] = (plaintext.chunkIndex + 1) / plaintext.totalChunks;
-        state = state.copyWith(); // Rebuild UI state
+        state = state.copyWith();
 
         bool allReceived = true;
         for (var i = 0; i < plaintext.totalChunks; i++) {
@@ -470,18 +491,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
         if (allReceived) {
           VantraLogger.log('[VANTRA][MESSAGING] All chunks received for transferId=${plaintext.transferId}. Reassembling...');
-          final incomingDir = Directory(path.join(appDir.path, 'media', 'incoming'));
+          final incomingDir = Directory(path.join(appDir.path, dirPrefix, 'incoming'));
           if (!await incomingDir.exists()) {
             await incomingDir.create(recursive: true);
           }
 
-          final msg = await repository.getMessageByTransferId(plaintext.transferId);
           if (msg == null) {
             VantraLogger.log('[VANTRA][MESSAGING] Error: Message metadata missing for transferId=${plaintext.transferId}');
             return;
           }
 
-          final ext = path.extension(msg.fileName ?? '.jpg');
+          final ext = path.extension(msg.fileName ?? (isImage ? '.jpg' : '.bin'));
           final finalPath = path.join(incomingDir.path, '${msg.messageId}$ext');
 
           final outFile = File(finalPath);
@@ -494,6 +514,27 @@ class MessagingNotifier extends Notifier<MessagingState> {
             }
           } finally {
             await ios.close();
+          }
+
+          // Verify SHA-256 integrity hash if provided
+          if (msg.sha256 != null && msg.sha256!.isNotEmpty) {
+            try {
+              final fileStream = outFile.openRead();
+              final hashVal = await sha256.bind(fileStream).first;
+              final computedHash = hashVal.toString();
+              if (computedHash != msg.sha256) {
+                VantraLogger.log('[VANTRA][MESSAGING] Hash verification failed for transferId=${plaintext.transferId}. Expected: ${msg.sha256}, Computed: $computedHash');
+                await outFile.delete();
+                await tempDir.delete(recursive: true);
+                await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+                return;
+              }
+              VantraLogger.log('[VANTRA][MESSAGING] Hash verified successfully for transferId=${plaintext.transferId}');
+            } catch (hashErr) {
+              VantraLogger.log('[VANTRA][MESSAGING] Error during hash verification: $hashErr');
+              await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+              return;
+            }
           }
 
           await tempDir.delete(recursive: true);
@@ -682,7 +723,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final negotiatedVersion = end;
     final isV1 = negotiatedVersion == 1;
 
-    final localCapabilities = const [VantraCapability.text, VantraCapability.image];
+    final localCapabilities = const [
+      VantraCapability.text,
+      VantraCapability.image,
+      VantraCapability.file,
+    ];
     final remoteCapabilities = identity.supportedCapabilities ?? const [VantraCapability.text];
     final negotiatedCapabilities = localCapabilities
         .where((c) => remoteCapabilities.contains(c))
@@ -1035,7 +1080,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
       protocolVersion: 1, // V1 wire compatibility
       minSupportedVersion: kMinSupportedProtocolVersion,
       maxSupportedVersion: kCurrentProtocolVersion,
-      supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      supportedCapabilities: const [
+        VantraCapability.text,
+        VantraCapability.image,
+        VantraCapability.file,
+      ],
     );
     print('[VANTRA][SECURITY] HANDSHAKE PACKET SENT to $endpointId');
   }
@@ -1058,7 +1107,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
       receiverId: peerId,
       minSupportedVersion: kMinSupportedProtocolVersion,
       maxSupportedVersion: kCurrentProtocolVersion,
-      supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      supportedCapabilities: const [
+        VantraCapability.text,
+        VantraCapability.image,
+        VantraCapability.file,
+      ],
     );
 
     final bytes = _service.codec.encodePlaintext(domainPlaintext);
@@ -1124,10 +1177,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final repository = ref.read(messagingRepositoryProvider);
     final localIdentity = ref.read(localIdentityStateProvider);
 
-    if (msg.type == 'IMAGE') {
-      final isImageSupported = session.enabledCapabilities?.contains(VantraCapability.image) ?? false;
-      if (!isImageSupported) {
-        VantraLogger.log('[VANTRA][MESSAGING] Media sharing not supported by peer ${msg.receiverId}');
+    if (msg.type == 'IMAGE' || msg.type == 'FILE') {
+      final capability = msg.type == 'IMAGE' ? VantraCapability.image : VantraCapability.file;
+      final isSupported = session.enabledCapabilities?.contains(capability) ?? false;
+      if (!isSupported) {
+        VantraLogger.log('[VANTRA][MESSAGING] Sharing type ${msg.type} not supported by peer ${msg.receiverId}');
         await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
         return false;
       }
@@ -1167,6 +1221,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         width: msg.width,
         height: msg.height,
         caption: msg.text,
+        sha256: msg.sha256,
       );
 
       final offerBytes = _service.codec.encodePlaintext(offerDomainMsg);
@@ -1178,7 +1233,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         plaintextBytes: offerBytes,
       );
 
-      VantraLogger.log('[VANTRA][MESSAGING] Media transfer offering transferId=${msg.transferId}');
+      VantraLogger.log('[VANTRA][MESSAGING] Media/File transfer offering transferId=${msg.transferId}');
       await _service.sendEncryptedMessage(
         endpointId: session.endpointId,
         messageId: offerMsgId,
@@ -1203,13 +1258,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
 
       if (response.type == DomainMediaControlType.reject) {
-        VantraLogger.log('[VANTRA][MESSAGING] Receiver rejected media transferId=${msg.transferId}');
+        VantraLogger.log('[VANTRA][MESSAGING] Receiver rejected transferId=${msg.transferId}');
         await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
         return false;
       }
 
       final startIndex = response.nextExpectedChunk ?? 0;
-      VantraLogger.log('[VANTRA][MESSAGING] Media transfer ACCEPTED. Starting from chunk index $startIndex of $totalChunks');
+      VantraLogger.log('[VANTRA][MESSAGING] Transfer ACCEPTED. Starting from chunk index $startIndex of $totalChunks');
 
       final accessFile = await file.open(mode: FileMode.read);
       try {
@@ -1533,6 +1588,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
       mimeType = 'image/webp';
     }
 
+    // Compute complete-file SHA-256 hash using streaming
+    String sha256Hex = '';
+    try {
+      final fileStream = File(localPath).openRead();
+      final hashVal = await sha256.bind(fileStream).first;
+      sha256Hex = hashVal.toString();
+      VantraLogger.log('[VANTRA][MESSAGING] Computed SHA-256 for outgoing image: $sha256Hex');
+    } catch (e) {
+      VantraLogger.log('[VANTRA][MESSAGING] Failed to compute image hash: $e');
+    }
+
     final msg = VantraMessage(
       messageId: messageId,
       senderId: localIdentity.peerId,
@@ -1548,6 +1614,78 @@ class MessagingNotifier extends Notifier<MessagingState> {
       width: width,
       height: height,
       transferId: transferId,
+      sha256: sha256Hex,
+    );
+
+    await repository.saveOutgoingMessage(msg);
+    _flushQueue(peerId);
+  }
+
+  Future<void> sendFileMessage(String peerId, String filePath, {String? caption}) async {
+    VantraLogger.log('[VANTRA][MESSAGING] sendFileMessage: peerId=$peerId, filePath=$filePath, caption=$caption');
+    final localIdentity = ref.read(localIdentityStateProvider);
+    final repository = ref.read(messagingRepositoryProvider);
+
+    final messageId = const Uuid().v4();
+    final transferId = const Uuid().v4();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+
+    final file = File(filePath);
+    if (!await file.exists()) {
+      VantraLogger.log('[VANTRA][MESSAGING] File does not exist: $filePath');
+      return;
+    }
+
+    final fileSize = await file.length();
+    final ext = path.extension(filePath);
+    
+    final appDir = await getApplicationDocumentsDirectory();
+    final outgoingDir = Directory(path.join(appDir.path, 'files', 'outgoing'));
+    if (!await outgoingDir.exists()) {
+      await outgoingDir.create(recursive: true);
+    }
+    final localPath = path.join(outgoingDir.path, '$messageId$ext');
+    await file.copy(localPath);
+
+    // Compute complete-file SHA-256 hash using streaming
+    String sha256Hex = '';
+    try {
+      final fileStream = File(localPath).openRead();
+      final hashVal = await sha256.bind(fileStream).first;
+      sha256Hex = hashVal.toString();
+      VantraLogger.log('[VANTRA][MESSAGING] Computed SHA-256 for outgoing file: $sha256Hex');
+    } catch (e) {
+      VantraLogger.log('[VANTRA][MESSAGING] Failed to compute file hash: $e');
+    }
+
+    // Determine mime-type based on extension
+    String mimeType = 'application/octet-stream';
+    if (ext.toLowerCase() == '.pdf') {
+      mimeType = 'application/pdf';
+    } else if (ext.toLowerCase() == '.txt') {
+      mimeType = 'text/plain';
+    } else if (ext.toLowerCase() == '.zip') {
+      mimeType = 'application/zip';
+    } else if (ext.toLowerCase() == '.json') {
+      mimeType = 'application/json';
+    } else if (ext.toLowerCase() == '.csv') {
+      mimeType = 'text/csv';
+    }
+
+    final msg = VantraMessage(
+      messageId: messageId,
+      senderId: localIdentity.peerId,
+      receiverId: peerId,
+      text: caption ?? '',
+      timestamp: timestamp,
+      status: MessageStatus.pending,
+      type: 'FILE',
+      mediaPath: localPath,
+      mimeType: mimeType,
+      fileName: path.basename(filePath),
+      fileSize: fileSize,
+      transferId: transferId,
+      sha256: sha256Hex,
     );
 
     await repository.saveOutgoingMessage(msg);

@@ -653,6 +653,7 @@ class MediaControl extends $pb.GeneratedMessage {
     $core.int? height,
     $core.String? caption,
     $core.int? nextExpectedChunk,
+    $core.String? sha256,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -666,6 +667,7 @@ class MediaControl extends $pb.GeneratedMessage {
     if (height != null) result.height = height;
     if (caption != null) result.caption = caption;
     if (nextExpectedChunk != null) result.nextExpectedChunk = nextExpectedChunk;
+    if (sha256 != null) result.sha256 = sha256;
     return result;
   }
 
@@ -699,6 +701,7 @@ class MediaControl extends $pb.GeneratedMessage {
     ..aOS(10, _omitFieldNames ? '' : 'caption')
     ..aI(11, _omitFieldNames ? '' : 'nextExpectedChunk',
         fieldType: $pb.PbFieldType.OU3)
+    ..aOS(12, _omitFieldNames ? '' : 'sha256')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -818,6 +821,15 @@ class MediaControl extends $pb.GeneratedMessage {
   $core.bool hasNextExpectedChunk() => $_has(10);
   @$pb.TagNumber(11)
   void clearNextExpectedChunk() => $_clearField(11);
+
+  @$pb.TagNumber(12)
+  $core.String get sha256 => $_getSZ(11);
+  @$pb.TagNumber(12)
+  set sha256($core.String value) => $_setString(11, value);
+  @$pb.TagNumber(12)
+  $core.bool hasSha256() => $_has(11);
+  @$pb.TagNumber(12)
+  void clearSha256() => $_clearField(12);
 }
 
 class MediaChunk extends $pb.GeneratedMessage {

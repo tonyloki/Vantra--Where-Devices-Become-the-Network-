@@ -276,6 +276,7 @@ const MediaControl$json = {
       '5': 13,
       '10': 'nextExpectedChunk'
     },
+    {'1': 'sha256', '3': 12, '4': 1, '5': 9, '10': 'sha256'},
   ],
   '4': [MediaControl_Type$json],
 };
@@ -300,9 +301,9 @@ final $typed_data.Uint8List mediaControlDescriptor = $convert.base64Decode(
     'ltZV90eXBlGAUgASgJUghtaW1lVHlwZRIhCgx0b3RhbF9jaHVua3MYBiABKA1SC3RvdGFsQ2h1'
     'bmtzEh0KCmNodW5rX3NpemUYByABKA1SCWNodW5rU2l6ZRIUCgV3aWR0aBgIIAEoDVIFd2lkdG'
     'gSFgoGaGVpZ2h0GAkgASgNUgZoZWlnaHQSGAoHY2FwdGlvbhgKIAEoCVIHY2FwdGlvbhIuChNu'
-    'ZXh0X2V4cGVjdGVkX2NodW5rGAsgASgNUhFuZXh0RXhwZWN0ZWRDaHVuayJLCgRUeXBlEhQKEF'
-    'RZUEVfVU5TUEVDSUZJRUQQABIJCgVPRkZFUhABEgoKBkFDQ0VQVBACEgoKBlJFSkVDVBADEgoK'
-    'BkNBTkNFTBAE');
+    'ZXh0X2V4cGVjdGVkX2NodW5rGAsgASgNUhFuZXh0RXhwZWN0ZWRDaHVuaxIWCgZzaGEyNTYYDC'
+    'ABKAlSBnNoYTI1NiJLCgRUeXBlEhQKEFRZUEVfVU5TUEVDSUZJRUQQABIJCgVPRkZFUhABEgoK'
+    'BkFDQ0VQVBACEgoKBlJFSkVDVBADEgoKBkNBTkNFTBAE');
 
 @$core.Deprecated('Use mediaChunkDescriptor instead')
 const MediaChunk$json = {

@@ -217,6 +217,15 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _sha256Meta = const VerificationMeta('sha256');
+  @override
+  late final GeneratedColumn<String> sha256 = GeneratedColumn<String>(
+    'sha256',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     localId,
@@ -238,6 +247,7 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
     width,
     height,
     transferId,
+    sha256,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -376,6 +386,12 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         transferId.isAcceptableOrUnknown(data['transfer_id']!, _transferIdMeta),
       );
     }
+    if (data.containsKey('sha256')) {
+      context.handle(
+        _sha256Meta,
+        sha256.isAcceptableOrUnknown(data['sha256']!, _sha256Meta),
+      );
+    }
     return context;
   }
 
@@ -463,6 +479,10 @@ class $MessagesTable extends Messages with TableInfo<$MessagesTable, Message> {
         DriftSqlType.string,
         data['${effectivePrefix}transfer_id'],
       ),
+      sha256: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sha256'],
+      ),
     );
   }
 
@@ -495,6 +515,7 @@ class Message extends DataClass implements Insertable<Message> {
   final int? width;
   final int? height;
   final String? transferId;
+  final String? sha256;
   const Message({
     required this.localId,
     required this.messageId,
@@ -515,6 +536,7 @@ class Message extends DataClass implements Insertable<Message> {
     this.width,
     this.height,
     this.transferId,
+    this.sha256,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -558,6 +580,9 @@ class Message extends DataClass implements Insertable<Message> {
     if (!nullToAbsent || transferId != null) {
       map['transfer_id'] = Variable<String>(transferId);
     }
+    if (!nullToAbsent || sha256 != null) {
+      map['sha256'] = Variable<String>(sha256);
+    }
     return map;
   }
 
@@ -598,6 +623,9 @@ class Message extends DataClass implements Insertable<Message> {
       transferId: transferId == null && nullToAbsent
           ? const Value.absent()
           : Value(transferId),
+      sha256: sha256 == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sha256),
     );
   }
 
@@ -626,6 +654,7 @@ class Message extends DataClass implements Insertable<Message> {
       width: serializer.fromJson<int?>(json['width']),
       height: serializer.fromJson<int?>(json['height']),
       transferId: serializer.fromJson<String?>(json['transferId']),
+      sha256: serializer.fromJson<String?>(json['sha256']),
     );
   }
   @override
@@ -651,6 +680,7 @@ class Message extends DataClass implements Insertable<Message> {
       'width': serializer.toJson<int?>(width),
       'height': serializer.toJson<int?>(height),
       'transferId': serializer.toJson<String?>(transferId),
+      'sha256': serializer.toJson<String?>(sha256),
     };
   }
 
@@ -674,6 +704,7 @@ class Message extends DataClass implements Insertable<Message> {
     Value<int?> width = const Value.absent(),
     Value<int?> height = const Value.absent(),
     Value<String?> transferId = const Value.absent(),
+    Value<String?> sha256 = const Value.absent(),
   }) => Message(
     localId: localId ?? this.localId,
     messageId: messageId ?? this.messageId,
@@ -694,6 +725,7 @@ class Message extends DataClass implements Insertable<Message> {
     width: width.present ? width.value : this.width,
     height: height.present ? height.value : this.height,
     transferId: transferId.present ? transferId.value : this.transferId,
+    sha256: sha256.present ? sha256.value : this.sha256,
   );
   Message copyWithCompanion(MessagesCompanion data) {
     return Message(
@@ -726,6 +758,7 @@ class Message extends DataClass implements Insertable<Message> {
       transferId: data.transferId.present
           ? data.transferId.value
           : this.transferId,
+      sha256: data.sha256.present ? data.sha256.value : this.sha256,
     );
   }
 
@@ -750,7 +783,8 @@ class Message extends DataClass implements Insertable<Message> {
           ..write('fileSize: $fileSize, ')
           ..write('width: $width, ')
           ..write('height: $height, ')
-          ..write('transferId: $transferId')
+          ..write('transferId: $transferId, ')
+          ..write('sha256: $sha256')
           ..write(')'))
         .toString();
   }
@@ -776,6 +810,7 @@ class Message extends DataClass implements Insertable<Message> {
     width,
     height,
     transferId,
+    sha256,
   );
   @override
   bool operator ==(Object other) =>
@@ -799,7 +834,8 @@ class Message extends DataClass implements Insertable<Message> {
           other.fileSize == this.fileSize &&
           other.width == this.width &&
           other.height == this.height &&
-          other.transferId == this.transferId);
+          other.transferId == this.transferId &&
+          other.sha256 == this.sha256);
 }
 
 class MessagesCompanion extends UpdateCompanion<Message> {
@@ -822,6 +858,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
   final Value<int?> width;
   final Value<int?> height;
   final Value<String?> transferId;
+  final Value<String?> sha256;
   const MessagesCompanion({
     this.localId = const Value.absent(),
     this.messageId = const Value.absent(),
@@ -842,6 +879,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.width = const Value.absent(),
     this.height = const Value.absent(),
     this.transferId = const Value.absent(),
+    this.sha256 = const Value.absent(),
   });
   MessagesCompanion.insert({
     this.localId = const Value.absent(),
@@ -863,6 +901,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     this.width = const Value.absent(),
     this.height = const Value.absent(),
     this.transferId = const Value.absent(),
+    this.sha256 = const Value.absent(),
   }) : messageId = Value(messageId),
        senderId = Value(senderId),
        receiverId = Value(receiverId),
@@ -891,6 +930,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Expression<int>? width,
     Expression<int>? height,
     Expression<String>? transferId,
+    Expression<String>? sha256,
   }) {
     return RawValuesInsertable({
       if (localId != null) 'local_id': localId,
@@ -912,6 +952,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       if (width != null) 'width': width,
       if (height != null) 'height': height,
       if (transferId != null) 'transfer_id': transferId,
+      if (sha256 != null) 'sha256': sha256,
     });
   }
 
@@ -935,6 +976,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     Value<int?>? width,
     Value<int?>? height,
     Value<String?>? transferId,
+    Value<String?>? sha256,
   }) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -956,6 +998,7 @@ class MessagesCompanion extends UpdateCompanion<Message> {
       width: width ?? this.width,
       height: height ?? this.height,
       transferId: transferId ?? this.transferId,
+      sha256: sha256 ?? this.sha256,
     );
   }
 
@@ -1021,6 +1064,9 @@ class MessagesCompanion extends UpdateCompanion<Message> {
     if (transferId.present) {
       map['transfer_id'] = Variable<String>(transferId.value);
     }
+    if (sha256.present) {
+      map['sha256'] = Variable<String>(sha256.value);
+    }
     return map;
   }
 
@@ -1045,7 +1091,8 @@ class MessagesCompanion extends UpdateCompanion<Message> {
           ..write('fileSize: $fileSize, ')
           ..write('width: $width, ')
           ..write('height: $height, ')
-          ..write('transferId: $transferId')
+          ..write('transferId: $transferId, ')
+          ..write('sha256: $sha256')
           ..write(')'))
         .toString();
   }
@@ -1781,6 +1828,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<int?> width,
       Value<int?> height,
       Value<String?> transferId,
+      Value<String?> sha256,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
     MessagesCompanion Function({
@@ -1803,6 +1851,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int?> width,
       Value<int?> height,
       Value<String?> transferId,
+      Value<String?> sha256,
     });
 
 class $$MessagesTableFilterComposer
@@ -1907,6 +1956,11 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get transferId => $composableBuilder(
     column: $table.transferId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sha256 => $composableBuilder(
+    column: $table.sha256,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -2014,6 +2068,11 @@ class $$MessagesTableOrderingComposer
     column: $table.transferId,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get sha256 => $composableBuilder(
+    column: $table.sha256,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessagesTableAnnotationComposer
@@ -2091,6 +2150,9 @@ class $$MessagesTableAnnotationComposer
     column: $table.transferId,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get sha256 =>
+      $composableBuilder(column: $table.sha256, builder: (column) => column);
 }
 
 class $$MessagesTableTableManager
@@ -2140,6 +2202,7 @@ class $$MessagesTableTableManager
                 Value<int?> width = const Value.absent(),
                 Value<int?> height = const Value.absent(),
                 Value<String?> transferId = const Value.absent(),
+                Value<String?> sha256 = const Value.absent(),
               }) => MessagesCompanion(
                 localId: localId,
                 messageId: messageId,
@@ -2160,6 +2223,7 @@ class $$MessagesTableTableManager
                 width: width,
                 height: height,
                 transferId: transferId,
+                sha256: sha256,
               ),
           createCompanionCallback:
               ({
@@ -2182,6 +2246,7 @@ class $$MessagesTableTableManager
                 Value<int?> width = const Value.absent(),
                 Value<int?> height = const Value.absent(),
                 Value<String?> transferId = const Value.absent(),
+                Value<String?> sha256 = const Value.absent(),
               }) => MessagesCompanion.insert(
                 localId: localId,
                 messageId: messageId,
@@ -2202,6 +2267,7 @@ class $$MessagesTableTableManager
                 width: width,
                 height: height,
                 transferId: transferId,
+                sha256: sha256,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

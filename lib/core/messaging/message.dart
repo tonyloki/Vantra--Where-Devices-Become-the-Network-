@@ -16,6 +16,7 @@ class VantraMessage {
   final int? width;
   final int? height;
   final String? transferId;
+  final String? sha256;
 
   const VantraMessage({
     required this.messageId,
@@ -33,6 +34,7 @@ class VantraMessage {
     this.width,
     this.height,
     this.transferId,
+    this.sha256,
   });
 
   Map<String, dynamic> toJson() => {
@@ -49,6 +51,7 @@ class VantraMessage {
     'width': width,
     'height': height,
     'transferId': transferId,
+    'sha256': sha256,
   };
 
   factory VantraMessage.fromJson(Map<String, dynamic> json) {
@@ -68,6 +71,7 @@ class VantraMessage {
       width: json['width'] as int?,
       height: json['height'] as int?,
       transferId: json['transferId'] as String?,
+      sha256: json['sha256'] as String?,
     );
   }
 
@@ -87,6 +91,7 @@ class VantraMessage {
     int? width,
     int? height,
     String? transferId,
+    String? sha256,
   }) {
     return VantraMessage(
       messageId: messageId ?? this.messageId,
@@ -104,6 +109,7 @@ class VantraMessage {
       width: width ?? this.width,
       height: height ?? this.height,
       transferId: transferId ?? this.transferId,
+      sha256: sha256 ?? this.sha256,
     );
   }
 }

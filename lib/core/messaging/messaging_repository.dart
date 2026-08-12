@@ -32,6 +32,7 @@ class MessagingRepository {
       width: Value(msg.width),
       height: Value(msg.height),
       transferId: Value(msg.transferId),
+      sha256: Value(msg.sha256),
     );
     await _db.messageDao.insertMessage(companion);
   }
@@ -64,6 +65,7 @@ class MessagingRepository {
         width: Value(msg.width),
         height: Value(msg.height),
         transferId: Value(msg.transferId),
+        sha256: Value(msg.sha256),
       );
       await _db.messageDao.insertMessage(companion);
       VantraLogger.log('[VANTRA][PERSISTENCE] PERSISTENCE INSERT SUCCESS: messageId=${msg.messageId}');
@@ -115,13 +117,20 @@ class MessagingRepository {
         final unreadCount = await _db.messageDao.getUnreadCount(localPeerId, peer.peerId);
         final activeSession = activeSessions[peer.peerId];
 
+        String previewText = lastMsg.messageText;
+        if (lastMsg.type == 'IMAGE') {
+          previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📷 Photo';
+        } else if (lastMsg.type == 'FILE') {
+          previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📁 File: ${lastMsg.fileName ?? "Attachment"}';
+        }
+
         summaries.add(ConversationSummary(
           peerId: peer.peerId,
           displayName: peer.displayName,
           nickname: peer.nickname,
           fingerprint: peer.fingerprint,
           trustState: peer.trustState,
-          lastMessageText: lastMsg.messageText,
+          lastMessageText: previewText,
           lastMessageTimestamp: lastMsg.timestamp,
           lastMessageStatus: lastMsg.status,
           isOutgoing: lastMsg.senderId == localPeerId,
@@ -269,6 +278,7 @@ class MessagingRepository {
       width: dbMsg.width,
       height: dbMsg.height,
       transferId: dbMsg.transferId,
+      sha256: dbMsg.sha256,
     );
   }
 }

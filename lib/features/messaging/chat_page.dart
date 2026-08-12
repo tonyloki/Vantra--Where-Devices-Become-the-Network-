@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/message.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
@@ -117,6 +120,96 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 ref.read(messagingStateProvider.notifier).sendImageMessage(
                   widget.peerId,
                   pickedFile.path,
+                  caption: caption.isNotEmpty ? caption : null,
+                );
+              },
+              child: const Text('Send', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _pickAndPreviewFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    final picked = result.files.first;
+    if (picked.path == null) {
+      VantraLogger.log('[VANTRA][UI] File path is null for picked file: ${picked.name}');
+      return;
+    }
+
+    final sizeLimit = 200 * 1024 * 1024;
+    if (picked.size > sizeLimit) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('File exceeds 200 MB safety limit.'),
+          backgroundColor: VantraTheme.redBlocked,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        final captionController = TextEditingController();
+        return AlertDialog(
+          backgroundColor: VantraTheme.surface,
+          title: const Text('Send File', style: TextStyle(color: VantraTheme.textPrimary, fontWeight: FontWeight.bold)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.insert_drive_file_rounded, size: 64, color: VantraTheme.primary),
+                const SizedBox(height: 12),
+                Text(
+                  picked.name,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: VantraTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  picked.size / 1024 > 1024
+                      ? '${(picked.size / (1024 * 1024)).toStringAsFixed(1)} MB'
+                      : '${(picked.size / 1024).toStringAsFixed(1)} KB',
+                  style: const TextStyle(color: VantraTheme.textMuted, fontSize: 12),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: captionController,
+                  style: const TextStyle(color: VantraTheme.textPrimary),
+                  decoration: const InputDecoration(
+                    hintText: 'Add a caption...',
+                    hintStyle: TextStyle(color: VantraTheme.textMuted),
+                    border: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel', style: TextStyle(color: VantraTheme.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: VantraTheme.primary),
+              onPressed: () {
+                final caption = captionController.text.trim();
+                Navigator.of(ctx).pop();
+                ref.read(messagingStateProvider.notifier).sendFileMessage(
+                  widget.peerId,
+                  picked.path!,
                   caption: caption.isNotEmpty ? caption : null,
                 );
               },
@@ -496,6 +589,144 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                   ),
                                 ),
                               ],
+                            ] else if (msg.type == 'FILE') ...[
+                              GestureDetector(
+                                onTap: msg.mediaPath != null
+                                    ? () {
+                                        showModalBottomSheet(
+                                          context: context,
+                                          backgroundColor: VantraTheme.surface,
+                                          shape: const RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                                          ),
+                                          builder: (context) {
+                                            return SafeArea(
+                                              child: Column(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  ListTile(
+                                                    leading: const Icon(Icons.open_in_new_rounded, color: VantraTheme.primaryAccent),
+                                                    title: const Text('Open File', style: TextStyle(color: VantraTheme.textPrimary)),
+                                                    onTap: () {
+                                                      Navigator.of(context).pop();
+                                                      OpenFilex.open(msg.mediaPath!);
+                                                    },
+                                                  ),
+                                                  ListTile(
+                                                    leading: const Icon(Icons.share_rounded, color: VantraTheme.primaryAccent),
+                                                    title: const Text('Share / Export', style: TextStyle(color: VantraTheme.textPrimary)),
+                                                    onTap: () {
+                                                      Navigator.of(context).pop();
+                                                      Share.shareXFiles([XFile(msg.mediaPath!)], text: msg.fileName);
+                                                    },
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        );
+                                      }
+                                    : null,
+                                child: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white10,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(
+                                            Icons.insert_drive_file_rounded,
+                                            color: isMe ? Colors.white : VantraTheme.primary,
+                                            size: 36,
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  msg.fileName ?? 'Unknown file',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    color: isMe ? Colors.white : VantraTheme.textPrimary,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  (msg.fileSize ?? 0) / 1024 > 1024
+                                                      ? '${((msg.fileSize ?? 0) / (1024 * 1024)).toStringAsFixed(1)} MB'
+                                                      : '${((msg.fileSize ?? 0) / 1024).toStringAsFixed(1)} KB',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: isMe ? Colors.white70 : VantraTheme.textSecondary,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      if (msg.status == MessageStatus.sending ||
+                                          (msg.status == MessageStatus.pending &&
+                                              ref.watch(messagingStateProvider.notifier).getTransferProgress(msg.transferId ?? '') > 0)) ...[
+                                        const SizedBox(height: 8),
+                                        Consumer(
+                                          builder: (context, ref, child) {
+                                            final progress = ref.watch(messagingStateProvider.notifier).getTransferProgress(msg.transferId ?? '');
+                                            return Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                LinearProgressIndicator(
+                                                  value: progress,
+                                                  color: isMe ? Colors.white : VantraTheme.primary,
+                                                  backgroundColor: Colors.white12,
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Row(
+                                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                  children: [
+                                                    Text(
+                                                      '${(progress * 100).toInt()}%',
+                                                      style: TextStyle(
+                                                        color: isMe ? Colors.white70 : VantraTheme.textSecondary,
+                                                        fontSize: 10,
+                                                      ),
+                                                    ),
+                                                    Text(
+                                                      msg.status == MessageStatus.sending ? 'Transferring...' : 'Pending...',
+                                                      style: TextStyle(
+                                                        color: isMe ? Colors.white70 : VantraTheme.textSecondary,
+                                                        fontSize: 10,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ],
+                                            );
+                                          },
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (msg.text.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  msg.text,
+                                  style: const TextStyle(
+                                    color: VantraTheme.textPrimary,
+                                    fontSize: 14.5,
+                                    height: 1.3,
+                                  ),
+                                ),
+                              ],
                             ] else ...[
                               Text(
                                 msg.text,
@@ -565,6 +796,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       key: const Key('chat_attach_button'),
                       icon: const Icon(Icons.add_photo_alternate_rounded, color: VantraTheme.primaryAccent),
                       onPressed: ((isConnected || isTrusted) && !isBlocked) ? _pickAndPreviewImage : null,
+                    ),
+                    IconButton(
+                      key: const Key('chat_attach_file_button'),
+                      icon: const Icon(Icons.attach_file_rounded, color: VantraTheme.primaryAccent),
+                      onPressed: ((isConnected || isTrusted) && !isBlocked) ? _pickAndPreviewFile : null,
                     ),
                     const SizedBox(width: 4),
                     Expanded(
