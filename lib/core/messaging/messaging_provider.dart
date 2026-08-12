@@ -630,6 +630,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     print('[VANTRA][SECURITY] SIGNATURE VERIFICATION: result=SUCCESS');
     print('[VANTRA][SECURITY] STATE: IDENTITY_VERIFIED');
+    print('[VANTRA][CONNECTION] IDENTITY_RECEIVED: peerId=${identity.peerId}, endpointId=${identity.endpointId}');
 
     // BLOCKING SECURITY INVARIANT CHECK
     final repo = ref.read(messagingRepositoryProvider);
@@ -704,6 +705,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     _lastConnectAttempt.remove(identity.peerId);
 
     print('[VANTRA][CRYPTO] SESSION READY endpointId=${identity.endpointId} sessionId=${derivedKeys.sessionId} securityState=SECURE');
+    print('[VANTRA][CONNECTION] SESSION_READY: peerId=${identity.peerId}, endpointId=${identity.endpointId}, sessionId=${derivedKeys.sessionId}');
 
     // Version range negotiation
     final localMin = kMinSupportedProtocolVersion;
@@ -835,6 +837,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
   }
 
   void _handleConnectionUpdate(ConnectionUpdate update) {
+    print('[VANTRA][CONNECTION] CONNECTION_STATUS_CHANGED: endpointId=${update.endpointId}, status=${update.status.name}');
     // Unconditional standard prints for diagnostic logging
     print('[VANTRA][SECURITY] CONNECTION UPDATE: endpointId=${update.endpointId}, status=${update.status.name}');
 
@@ -843,6 +846,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final candidatePeerId = index != -1 ? update.endpointName.substring(index + 1) : null;
 
     if (update.status == ConnectionStatus.connected) {
+      print('[VANTRA][CONNECTION] CONNECTION_CONNECTED: endpointId=${update.endpointId}');
       _acceptedEndpoints.remove(update.endpointId);
       _rejectedEndpoints.remove(update.endpointId);
       print('[VANTRA][NEARBY] CONNECTION_ESTABLISHED endpoint=${update.endpointId}');
@@ -858,17 +862,27 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final isFake = transport.runtimeType.toString().contains('Fake');
       if (isFake) {
         print('[VANTRA][SECURITY] STATE: CONNECTED (endpointId=${update.endpointId}). Initiating handshake immediately (test environment).');
+        print('[VANTRA][CONNECTION] HANDSHAKE_STARTED: endpointId=${update.endpointId}');
         _initiateSecureHandshake(update.endpointId);
       } else {
         print('[VANTRA][SECURITY] STATE: CONNECTED (endpointId=${update.endpointId}). Handshake will start in 500ms.');
+        print('[VANTRA][CONNECTION] HANDSHAKE_SCHEDULED: endpointId=${update.endpointId}');
         Future.delayed(const Duration(milliseconds: 500), () {
           print('[VANTRA][SECURITY] Handshake delay complete for ${update.endpointId}. Initiating secure handshake.');
+          print('[VANTRA][CONNECTION] HANDSHAKE_STARTED: endpointId=${update.endpointId}');
           _initiateSecureHandshake(update.endpointId);
         });
       }
     } else if (update.status == ConnectionStatus.connecting) {
+      print('[VANTRA][CONNECTION] REQUEST_RECEIVED: endpointId=${update.endpointId}, peerName=$candidateName, direction=${update.isIncoming ? "incoming" : "outgoing"}');
       print('[VANTRA][SECURITY] STATE: CONNECTING (endpointId=${update.endpointId}, isIncoming=${update.isIncoming}, token=${update.authenticationToken})');
       print('[VANTRA][NEARBY] GLOBAL_REQUEST_RECEIVED endpoint=${update.endpointId}');
+
+      if (update.isIncoming == false) {
+        print('[VANTRA][CONNECTION] Outgoing request auto-accepting in background: endpointId=${update.endpointId}');
+        acceptConnectionRequest(update.endpointId);
+        return;
+      }
 
       if (candidatePeerId != null && candidatePeerId.isNotEmpty) {
         print('[VANTRA][NEARBY] ENDPOINT_RESOLVED endpointId=${update.endpointId} peerId=$candidatePeerId');
@@ -918,6 +932,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
     } else if (update.status == ConnectionStatus.disconnected ||
         update.status == ConnectionStatus.rejected ||
         update.status == ConnectionStatus.error) {
+      if (update.status == ConnectionStatus.disconnected) {
+        print('[VANTRA][CONNECTION] CONNECTION_DISCONNECTED: endpointId=${update.endpointId}');
+      } else if (update.status == ConnectionStatus.rejected) {
+        print('[VANTRA][CONNECTION] CONNECTION_REJECTED: endpointId=${update.endpointId}');
+      } else if (update.status == ConnectionStatus.error) {
+        print('[VANTRA][CONNECTION] CONNECTION_ERROR: endpointId=${update.endpointId}, error=${update.errorMessage}');
+      }
       print('[VANTRA][SECURITY] STATE: DISCONNECTED/REJECTED/ERROR (endpointId=${update.endpointId}, status=${update.status.name})');
       _acceptedEndpoints.remove(update.endpointId);
       _rejectedEndpoints.remove(update.endpointId);
@@ -976,6 +997,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
   }
 
   Future<void> acceptConnectionRequest(String endpointId) async {
+    print('[VANTRA][CONNECTION] REQUEST_ACCEPT_CLICKED: endpointId=$endpointId');
     print('[VANTRA][NEARBY] ACCEPT_PRESSED endpoint=$endpointId');
     if (_acceptedEndpoints.contains(endpointId)) {
       print('[VANTRA][NEARBY] Already accepted endpoint $endpointId, skipping duplicate accept call');
@@ -983,21 +1005,28 @@ class MessagingNotifier extends Notifier<MessagingState> {
     }
     _acceptedEndpoints.add(endpointId);
     
-    // Clear activeConnectionRequest from state so overlay dismisses immediately
-    state = state.copyWith(clearActiveConnectionRequest: true);
+    // Transition to accepting status but do NOT clear activeConnectionRequest yet
+    state = state.copyWith(connectionStatus: ConnectionStatus.accepting);
 
+    print('[VANTRA][CONNECTION] ACCEPT_CALL_START: endpointId=$endpointId');
     try {
       final transport = ref.read(transportProvider);
       await transport.acceptConnection(endpointId);
+      print('[VANTRA][CONNECTION] ACCEPT_CALL_SUCCESS: endpointId=$endpointId');
     } catch (e) {
+      print('[VANTRA][CONNECTION] ACCEPT_CALL_ERROR: endpointId=$endpointId, error=$e');
       print('[VANTRA][NEARBY] Error calling acceptConnection on transport: $e');
     }
   }
 
   Future<void> rejectConnectionRequest(String endpointId) async {
+    print('[VANTRA][CONNECTION] REQUEST_REJECT_CLICKED: endpointId=$endpointId');
     print('[VANTRA][NEARBY] REJECT_PRESSED endpoint=$endpointId');
-    if (_rejectedEndpoints.contains(endpointId) || _acceptedEndpoints.contains(endpointId)) {
-      print('[VANTRA][NEARBY] Already processed endpoint $endpointId, skipping reject call');
+    if (_rejectedEndpoints.contains(endpointId) ||
+        _acceptedEndpoints.contains(endpointId) ||
+        state.connectionStatus == ConnectionStatus.accepting ||
+        state.connectionStatus == ConnectionStatus.connected) {
+      print('[VANTRA][NEARBY] Already accepted, accepting, connected, or processed endpoint $endpointId, skipping reject call');
       return;
     }
     _rejectedEndpoints.add(endpointId);
@@ -1005,9 +1034,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
     // Clear activeConnectionRequest from state so overlay dismisses immediately
     state = state.copyWith(clearActiveConnectionRequest: true);
 
+    print('[VANTRA][CONNECTION] REJECT_CALL_START: endpointId=$endpointId');
     try {
       final transport = ref.read(transportProvider);
       await transport.rejectConnection(endpointId);
+      print('[VANTRA][CONNECTION] REJECT_CALL_SUCCESS: endpointId=$endpointId');
     } catch (e) {
       print('[VANTRA][NEARBY] Error calling rejectConnection on transport: $e');
     }
@@ -1039,6 +1070,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
   }
 
   Future<void> _initiateSecureHandshake(String endpointId) async {
+    print('[VANTRA][CONNECTION] HANDSHAKE_STARTED: endpointId=$endpointId');
     print('[VANTRA][SECURITY] INITIATING HANDSHAKE: outbound to $endpointId');
     print('[VANTRA][NEARBY] HANDSHAKE_START endpoint=$endpointId');
     final localNotifier = ref.read(localIdentityStateProvider.notifier);
@@ -1087,6 +1119,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       ],
     );
     print('[VANTRA][SECURITY] HANDSHAKE PACKET SENT to $endpointId');
+    print('[VANTRA][CONNECTION] HANDSHAKE_SENT: endpointId=$endpointId');
   }
 
   Future<void> _sendCapabilitiesExchange(String peerId) async {

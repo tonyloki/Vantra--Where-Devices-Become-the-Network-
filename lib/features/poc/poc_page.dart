@@ -217,7 +217,8 @@ class _PocPageState extends ConsumerState<PocPage> {
   Future<void> _connectTo(String endpointId) async {
     try {
       _log('Initiating connection request to $endpointId');
-      await ref.read(transportProvider).connect(_localDeviceName, endpointId);
+      final localIdentity = ref.read(localIdentityStateProvider);
+      await ref.read(transportProvider).connect('$_localDeviceName:${localIdentity.peerId}', endpointId);
     } catch (e) {
       _log('Connection request failed: $e');
     }

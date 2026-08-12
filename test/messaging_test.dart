@@ -333,13 +333,24 @@ void main() {
       // Accept connection
       await notifier.acceptConnectionRequest('EP_INCOMING_1');
       state = container.read(messagingStateProvider);
-      expect(state.activeConnectionRequest, isNull); // Cleared immediately for overlay dismissal
+      expect(state.activeConnectionRequest, isNotNull); // Retained for accepting status overlay
+      expect(state.connectionStatus, ConnectionStatus.accepting);
       expect(fakeTransport.acceptConnectionCount, 1);
       expect(fakeTransport.acceptedEndpoints, contains('EP_INCOMING_1'));
 
       // Duplicate accept call should not trigger transport acceptConnection again
       await notifier.acceptConnectionRequest('EP_INCOMING_1');
       expect(fakeTransport.acceptConnectionCount, 1);
+
+      // Trigger connection result connected to clear it
+      fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+        endpointId: 'EP_INCOMING_1',
+        status: ConnectionStatus.connected,
+        endpointName: 'RemoteDeviceAlpha',
+      ));
+      await Future.delayed(const Duration(milliseconds: 20));
+      state = container.read(messagingStateProvider);
+      expect(state.activeConnectionRequest, isNull); // Now cleared on connected
 
       // Reject after accept should be safely ignored
       await notifier.rejectConnectionRequest('EP_INCOMING_1');
@@ -1366,6 +1377,106 @@ void main() {
       } finally {
         await tempDir.delete(recursive: true);
       }
+    });
+
+    test('Test N - Initiator auto-accepts outgoing request in background', () async {
+      container.read(messagingStateProvider);
+
+      final peerId = const Uuid().v4();
+
+      // Reset fake transport count
+      fakeTransport.acceptConnectionCount = 0;
+
+      // Trigger outgoing connection request (connecting, isIncoming: false)
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_OUTGOING_AUTO',
+        status: ConnectionStatus.connecting,
+        endpointName: 'AutoPeer:$peerId',
+        isIncoming: false,
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify that initiator auto-accepted: acceptConnectionCount should be 1
+      expect(fakeTransport.acceptConnectionCount, 1);
+      
+      // Verify no manual pairing overlay was shown for outgoing request
+      final request = container.read(messagingStateProvider).activeConnectionRequest;
+      expect(request, isNull);
+    });
+
+    test('Test O - Responder transitions to accepting and then clears request on connected', () async {
+      container.read(messagingStateProvider);
+
+      final peerId = const Uuid().v4();
+
+      // Trigger incoming connection request (connecting, isIncoming: true)
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_INCOMING_ACCEPTING',
+        status: ConnectionStatus.connecting,
+        endpointName: 'IncomingPeer:$peerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify activeConnectionRequest is populated on responder
+      final requestBefore = container.read(messagingStateProvider).activeConnectionRequest;
+      expect(requestBefore, isNotNull);
+      expect(requestBefore!.endpointId, 'EP_INCOMING_ACCEPTING');
+
+      // Accept request
+      final notifier = container.read(messagingStateProvider.notifier);
+      await notifier.acceptConnectionRequest('EP_INCOMING_ACCEPTING');
+
+      // Verify state transitions to ConnectionStatus.accepting
+      expect(container.read(messagingStateProvider).connectionStatus, ConnectionStatus.accepting);
+      // Verify request is NOT cleared yet during accepting status
+      expect(container.read(messagingStateProvider).activeConnectionRequest, isNotNull);
+
+      // Trigger connection result connected
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_INCOMING_ACCEPTING',
+        status: ConnectionStatus.connected,
+        endpointName: 'IncomingPeer:$peerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify connectionStatus is now connected and request is cleared
+      expect(container.read(messagingStateProvider).connectionStatus, ConnectionStatus.connected);
+      expect(container.read(messagingStateProvider).activeConnectionRequest, isNull);
+    });
+
+    test('Test P - Responder clears request and reports failure/rejected status when connection fails', () async {
+      container.read(messagingStateProvider);
+
+      final peerId = const Uuid().v4();
+
+      // Trigger incoming request
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_INCOMING_FAILED',
+        status: ConnectionStatus.connecting,
+        endpointName: 'FailedPeer:$peerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Accept request
+      final notifier = container.read(messagingStateProvider.notifier);
+      await notifier.acceptConnectionRequest('EP_INCOMING_FAILED');
+
+      // Verify accepting status
+      expect(container.read(messagingStateProvider).connectionStatus, ConnectionStatus.accepting);
+
+      // Trigger connection result failed (rejected)
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_INCOMING_FAILED',
+        status: ConnectionStatus.rejected,
+        endpointName: 'FailedPeer:$peerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify status is rejected and request is cleared
+      expect(container.read(messagingStateProvider).connectionStatus, ConnectionStatus.rejected);
+      expect(container.read(messagingStateProvider).activeConnectionRequest, isNull);
     });
   });
 }

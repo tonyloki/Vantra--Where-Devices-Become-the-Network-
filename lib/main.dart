@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vantra/core/identity/local_identity_provider.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/networking/nearby_connection_service.dart';
+import 'package:vantra/core/networking/transport.dart';
 import 'package:vantra/core/themes/vantra_theme.dart';
 import 'package:vantra/core/utils/logger.dart';
 
@@ -180,38 +181,54 @@ class GlobalConnectionListener extends ConsumerWidget {
                               ),
                             ],
                             const SizedBox(height: 24),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () {
-                                      ref.read(messagingStateProvider.notifier).rejectConnectionRequest(request.endpointId);
-                                    },
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: VantraTheme.redBlocked,
-                                      side: const BorderSide(color: VantraTheme.redBlocked),
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                            if (state.connectionStatus == ConnectionStatus.accepting)
+                              const Column(
+                                children: [
+                                  CircularProgressIndicator(color: VantraTheme.primary),
+                                  SizedBox(height: 12),
+                                  Text(
+                                    'Establishing connection...',
+                                    style: TextStyle(
+                                      color: VantraTheme.textSecondary,
+                                      fontSize: 14,
+                                      decoration: TextDecoration.none,
                                     ),
-                                    child: const Text('REJECT'),
                                   ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () {
-                                      ref.read(messagingStateProvider.notifier).acceptConnectionRequest(request.endpointId);
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: VantraTheme.greenVerified,
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                ],
+                              )
+                            else
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton(
+                                      onPressed: () {
+                                        ref.read(messagingStateProvider.notifier).rejectConnectionRequest(request.endpointId);
+                                      },
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: VantraTheme.redBlocked,
+                                        side: const BorderSide(color: VantraTheme.redBlocked),
+                                        padding: const EdgeInsets.symmetric(vertical: 12),
+                                      ),
+                                      child: const Text('REJECT'),
                                     ),
-                                    child: const Text('ACCEPT'),
                                   ),
-                                ),
-                              ],
-                            ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: ElevatedButton(
+                                      onPressed: () {
+                                        ref.read(messagingStateProvider.notifier).acceptConnectionRequest(request.endpointId);
+                                      },
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: VantraTheme.greenVerified,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(vertical: 12),
+                                      ),
+                                      child: const Text('ACCEPT'),
+                                    ),
+                                  ),
+                                ],
+                              ),
                           ],
                         ),
                       ),

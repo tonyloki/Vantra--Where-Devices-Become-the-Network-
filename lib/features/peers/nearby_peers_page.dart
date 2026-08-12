@@ -190,12 +190,15 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                                   child: CircularProgressIndicator(strokeWidth: 2, color: VantraTheme.primary),
                                 )
                               : OutlinedButton(
-                                  onPressed: () => discoveryService.connect(
-                                    peer.endpointId,
-                                    localName: localIdentity.displayName.isNotEmpty
+                                  onPressed: () {
+                                    final displayName = localIdentity.displayName.isNotEmpty
                                         ? localIdentity.displayName
-                                        : 'VantraDevice',
-                                  ),
+                                        : 'VantraDevice';
+                                    discoveryService.connect(
+                                      peer.endpointId,
+                                      localName: '$displayName:${localIdentity.peerId}',
+                                    );
+                                  },
                                   style: OutlinedButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                                   ),

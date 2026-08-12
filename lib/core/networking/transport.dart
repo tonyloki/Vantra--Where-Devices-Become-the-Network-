@@ -9,6 +9,7 @@ enum ConnectionStatus {
   discovering,
   advertising,
   connecting,
+  accepting,
   connected,
   disconnected,
   rejected,
