@@ -2307,5 +2307,251 @@ void main() {
       expect(dbMsgs[0].status, MessageStatus.delivered);
       expect(dbMsgs[1].status, MessageStatus.delivered);
     });
+
+    test('Stale Disconnect Safeguard - EP_OLD disconnecting after EP_NEW is secure', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(
+        peerId,
+        'StaleDisconnectPeer',
+        publicKey: publicKeyHex,
+        fingerprint: fingerprint,
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      // 1. Setup connection on EP_NEW
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_NEW',
+        status: ConnectionStatus.connecting,
+        endpointName: 'StaleDisconnectPeer:$peerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+      await container.read(messagingStateProvider.notifier).acceptConnectionRequest('EP_NEW');
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_NEW',
+        status: ConnectionStatus.connected,
+        endpointName: 'StaleDisconnectPeer:$peerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(
+        peerId,
+        'StaleDisconnectPeer',
+        protocolVersion: 2,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text],
+        identityKeyPair: idKeyPair,
+      );
+      fakeTransport.triggerIncomingPayload('EP_NEW', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final notifier = container.read(messagingStateProvider.notifier);
+      final secSession = notifier.securitySessions[peerId]!;
+
+      // Send CapabilitiesExchange from remote to finalize the EP_NEW connection
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text],
+      );
+
+      final capBytes = codec.encodePlaintext(capExchange);
+      final encryptedCap = await cryptoService.encryptBytes(
+        secretKey: secSession.receiveKey,
+        sessionSalt: secSession.sessionSalt,
+        sequence: 1,
+        messageId: capExchange.messageId,
+        plaintextBytes: capBytes,
+      );
+
+      fakeTransport.triggerIncomingPayload('EP_NEW', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify that the session is connected on EP_NEW
+      final activeSession = container.read(messagingStateProvider).sessions[peerId];
+      expect(activeSession?.status, SessionStatus.connected);
+      expect(activeSession?.endpointId, 'EP_NEW');
+
+      // Now, simulate state mapping for EP_OLD in endpointToPeerId to simulate a leftover or simultaneous attempt
+      // but without overwriting the active sessions' target endpoint EP_NEW.
+      // We trigger a disconnect callback for EP_OLD.
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_OLD',
+        status: ConnectionStatus.disconnected,
+        endpointName: 'EP_OLD',
+      ));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify that the active session on EP_NEW is NOT downgraded or cleared
+      final activeSessionAfterOldDisconnect = container.read(messagingStateProvider).sessions[peerId];
+      expect(activeSessionAfterOldDisconnect?.status, SessionStatus.connected);
+      expect(activeSessionAfterOldDisconnect?.endpointId, 'EP_NEW');
+      expect(notifier.securitySessions[peerId], isNotNull);
+      expect(container.read(messagingStateProvider).activeEndpointId, 'EP_NEW');
+    });
+
+    test('Android 16 Asymmetric State Recovery - encrypted inbound message works and promotes status', () async {
+      container.read(messagingStateProvider);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(
+        peerId,
+        'AsymmetricPeer',
+        publicKey: publicKeyHex,
+        fingerprint: fingerprint,
+        trustState: PeerTrustState.trusted,
+        protocolVersion: 2,
+      );
+
+      // Connect and handshake but simulate a state where the PeerSession got wiped/disconnected (asymmetric state)
+      // while preserving endpointToPeerId and securitySessions.
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_ASYNC',
+        status: ConnectionStatus.connecting,
+        endpointName: 'AsymmetricPeer:$peerId',
+        isIncoming: true,
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+      await container.read(messagingStateProvider.notifier).acceptConnectionRequest('EP_ASYNC');
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_ASYNC',
+        status: ConnectionStatus.connected,
+        endpointName: 'AsymmetricPeer:$peerId',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(
+        peerId,
+        'AsymmetricPeer',
+        protocolVersion: 2,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text],
+        identityKeyPair: idKeyPair,
+      );
+      fakeTransport.triggerIncomingPayload('EP_ASYNC', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final notifier = container.read(messagingStateProvider.notifier);
+      final secSession = notifier.securitySessions[peerId]!;
+
+      // Now, simulate ChatPage reporting offline (e.g. PeerSession status is disconnected or activeSession is null)
+      // but securitySessions and endpointToPeerId are intact.
+      // We manually clear the peer session in the state to simulate this.
+      notifier.state = notifier.state.copyWith(
+        sessions: Map<String, PeerSession>.from(notifier.state.sessions)..remove(peerId),
+      );
+
+      // Verify that ChatPage would see it as offline (null or not connected)
+      expect(container.read(messagingStateProvider).sessions[peerId], isNull);
+
+      // Now remote sends an encrypted text message
+      final textMsg = DomainTextMessage(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        content: 'Asymmetric message',
+      );
+
+      final textBytes = codec.encodePlaintext(textMsg);
+      final encryptedText = await cryptoService.encryptBytes(
+        secretKey: secSession.receiveKey,
+        sessionSalt: secSession.sessionSalt,
+        sequence: 1,
+        messageId: textMsg.messageId,
+        plaintextBytes: textBytes,
+      );
+
+      // Trigger incoming encrypted message payload
+      fakeTransport.triggerIncomingPayload('EP_ASYNC', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: textMsg.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedText.nonce),
+        ciphertext: Uint8List.fromList(encryptedText.ciphertext),
+        mac: Uint8List.fromList(encryptedText.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify that message is successfully decrypted and saved to DB
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      expect(dbMsgs.length, 1);
+      expect(dbMsgs[0].text, 'Asymmetric message');
+
+      // Now remote sends CapabilitiesExchange
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text],
+      );
+
+      final capBytes = codec.encodePlaintext(capExchange);
+      final encryptedCap = await cryptoService.encryptBytes(
+        secretKey: secSession.receiveKey,
+        sessionSalt: secSession.sessionSalt,
+        sequence: 2,
+        messageId: capExchange.messageId,
+        plaintextBytes: capBytes,
+      );
+
+      fakeTransport.triggerIncomingPayload('EP_ASYNC', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Verify that the PeerSession is fully recovered and status is connected on EP_ASYNC
+      final recoveredSession = container.read(messagingStateProvider).sessions[peerId];
+      expect(recoveredSession?.status, SessionStatus.connected);
+      expect(recoveredSession?.endpointId, 'EP_ASYNC');
+      expect(container.read(messagingStateProvider).activeEndpointId, 'EP_ASYNC');
+    });
   });
 }

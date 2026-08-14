@@ -391,35 +391,16 @@ class MessagingNotifier extends Notifier<MessagingState> {
       } else if (plaintext is DomainCapabilitiesExchange) {
         print('[VANTRA][SESSION][HANDSHAKE] stage=CAPABILITIES_RECEIVED peerId=$peerId endpoint=${event.endpointId}');
         print('[VANTRA][SECURITY] Received CapabilitiesExchange from ${event.endpointId}');
+        
+        final secSession = _securitySessions[peerId];
+        if (secSession == null) {
+          VantraLogger.log('[VANTRA][SECURITY] Dropping capabilities: No active security session for peer $peerId');
+          return;
+        }
+
         final activeSession = state.sessions[peerId];
-        if (activeSession == null) return;
 
-        if (activeSession.status == SessionStatus.connected) {
-          // Already negotiated. Just reply with ACK to clear remote queue.
-          await _sendAck(event.endpointId, session, plaintext.messageId);
-          return;
-        }
-
-        // Downgrade protection and spoof check
-        if (plaintext.minSupportedVersion != activeSession.remoteMinVersion ||
-            plaintext.maxSupportedVersion != activeSession.remoteMaxVersion) {
-          print('[VANTRA][SECURITY] Version range mismatch! Handshake advertised [${activeSession.remoteMinVersion}..${activeSession.remoteMaxVersion}], exchange claimed [${plaintext.minSupportedVersion}..${plaintext.maxSupportedVersion}]. Terminating connection.');
-          final transport = ref.read(transportProvider);
-          await transport.disconnect(event.endpointId);
-          return;
-        }
-
-        final remoteCaps = activeSession.remoteCapabilities ?? const [];
-        final listsMatch = plaintext.supportedCapabilities.length == remoteCaps.length &&
-            plaintext.supportedCapabilities.every((c) => remoteCaps.contains(c));
-
-        if (!listsMatch) {
-          print('[VANTRA][SECURITY] Capability advertisement mismatch! Terminating connection.');
-          final transport = ref.read(transportProvider);
-          await transport.disconnect(event.endpointId);
-          return;
-        }
-
+        // Enforce SessionStatus.connected and keep state synchronized with the authoritative secure session
         final localCapabilities = const [
           VantraCapability.text,
           VantraCapability.image,
@@ -429,9 +410,52 @@ class MessagingNotifier extends Notifier<MessagingState> {
             .where((c) => plaintext.supportedCapabilities.contains(c))
             .toList();
 
-        final readySession = activeSession.copyWith(
+        final baseSession = activeSession ?? PeerSession(
+          peerId: peerId,
+          displayName: secSession.peerId, // best effort fallback
+          endpointId: event.endpointId,
           status: SessionStatus.connected,
+          publicKey: secSession.remoteIdentityPublicKey,
+          fingerprint: secSession.remoteFingerprint,
+          isSecure: true,
+        );
+
+        if (activeSession != null) {
+          if (activeSession.status == SessionStatus.connected && activeSession.endpointId == event.endpointId) {
+            // Already negotiated. Just reply with ACK to clear remote queue.
+            await _sendAck(event.endpointId, secSession, plaintext.messageId);
+            return;
+          }
+
+          // Downgrade protection and spoof check
+          if (plaintext.minSupportedVersion != activeSession.remoteMinVersion ||
+              plaintext.maxSupportedVersion != activeSession.remoteMaxVersion) {
+            print('[VANTRA][SECURITY] Version range mismatch! Handshake advertised [${activeSession.remoteMinVersion}..${activeSession.remoteMaxVersion}], exchange claimed [${plaintext.minSupportedVersion}..${plaintext.maxSupportedVersion}]. Terminating connection.');
+            final transport = ref.read(transportProvider);
+            await transport.disconnect(event.endpointId);
+            return;
+          }
+
+          final remoteCaps = activeSession.remoteCapabilities ?? const [];
+          final listsMatch = plaintext.supportedCapabilities.length == remoteCaps.length &&
+              plaintext.supportedCapabilities.every((c) => remoteCaps.contains(c));
+
+          if (!listsMatch) {
+            print('[VANTRA][SECURITY] Capability advertisement mismatch! Terminating connection.');
+            final transport = ref.read(transportProvider);
+            await transport.disconnect(event.endpointId);
+            return;
+          }
+        }
+
+        final readySession = baseSession.copyWith(
+          status: SessionStatus.connected,
+          endpointId: event.endpointId,
+          isSecure: true,
           enabledCapabilities: negotiatedCapabilities,
+          remoteMinVersion: plaintext.minSupportedVersion,
+          remoteMaxVersion: plaintext.maxSupportedVersion,
+          remoteCapabilities: plaintext.supportedCapabilities,
         );
 
         state = state.copyWith(
@@ -439,13 +463,19 @@ class MessagingNotifier extends Notifier<MessagingState> {
             ...state.sessions,
             peerId: readySession,
           },
+          endpointToPeerId: {
+            ...state.endpointToPeerId,
+            event.endpointId: peerId,
+          },
+          activeEndpointId: event.endpointId,
+          connectionStatus: ConnectionStatus.connected,
         );
 
         print('[VANTRA][SESSION][HANDSHAKE] stage=PEER_READY peerId=$peerId endpoint=${event.endpointId}');
         print('[VANTRA][SESSION][SECURE] Capability negotiation complete. Peer $peerId is now ready for communication.');
         print('[VANTRA][SECURITY] CAPABILITY_NEGOTIATION_SUCCESS for peer $peerId. Enabled capabilities: $negotiatedCapabilities');
 
-        await _sendAck(event.endpointId, session, plaintext.messageId);
+        await _sendAck(event.endpointId, secSession, plaintext.messageId);
         _flushQueue(peerId);
       } else if (plaintext is DomainMediaControl) {
         if (plaintext.type == DomainMediaControlType.offer) {
@@ -989,9 +1019,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
         final pId = state.endpointToPeerId[update.endpointId];
         if (pId != null) {
           final sess = state.sessions[pId];
-          print('[VANTRA][PIPELINE] ENDPOINT_STATE endpoint=${update.endpointId} peerId=$pId activeEndpoint=${state.activeEndpointId} sessionEndpoint=${sess?.endpointId}');
-          if (sess != null && sess.endpointId != update.endpointId) {
-            print('[VANTRA][PIPELINE] Ignoring stale handshake timeout for endpoint ${update.endpointId} because active session is on endpoint ${sess.endpointId}');
+          final currentSecSession = _securitySessions[pId];
+          print('[VANTRA][PIPELINE] ENDPOINT_STATE endpoint=${update.endpointId} peerId=$pId activeEndpoint=${state.activeEndpointId} sessionEndpoint=${sess?.endpointId} secSessionEndpoint=${currentSecSession?.endpointId}');
+          if ((sess != null && sess.endpointId != update.endpointId) ||
+              (currentSecSession != null && currentSecSession.endpointId != update.endpointId)) {
+            print('[VANTRA][PIPELINE] Ignoring stale handshake timeout for endpoint ${update.endpointId} because active session is on endpoint ${sess?.endpointId ?? currentSecSession?.endpointId}');
             return;
           }
           _activeConnectLocks.remove(pId);
@@ -1210,10 +1242,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
         final currentSecSession = _securitySessions[peerId];
         final currentPeerSession = state.sessions[peerId];
 
-        print('[VANTRA][PIPELINE] ENDPOINT_STATE endpoint=${update.endpointId} peerId=$peerId activeEndpoint=${state.activeEndpointId} sessionEndpoint=${currentPeerSession?.endpointId}');
+        print('[VANTRA][PIPELINE] ENDPOINT_STATE endpoint=${update.endpointId} peerId=$peerId activeEndpoint=${state.activeEndpointId} sessionEndpoint=${currentPeerSession?.endpointId} secSessionEndpoint=${currentSecSession?.endpointId}');
 
-        if (currentPeerSession != null && currentPeerSession.endpointId != update.endpointId) {
-          print('[VANTRA][PIPELINE] Ignoring stale disconnect callback: endpoint=${update.endpointId} mismatch activeEndpoint=${currentPeerSession.endpointId}. DO NOT invalidate EP_NEW.');
+        final bool isStale = (currentPeerSession != null && currentPeerSession.endpointId != update.endpointId) ||
+                              (currentSecSession != null && currentSecSession.endpointId != update.endpointId);
+
+        if (isStale) {
+          print('[VANTRA][PIPELINE] Ignoring stale disconnect callback: endpoint=${update.endpointId} mismatch activeEndpoint=${currentPeerSession?.endpointId} or secSessionEndpoint=${currentSecSession?.endpointId}. DO NOT invalidate EP_NEW.');
         } else {
           print('[VANTRA][SESSION] SESSION_INVALIDATED peerId=$peerId reason=Connection status: ${update.status.name}');
           print('[VANTRA][PIPELINE] STATE_INVALIDATION source=_handleConnectionUpdate endpoint=${update.endpointId} peerId=$peerId reason=Connection status ${update.status.name}');
@@ -1239,11 +1274,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final newEndpointToPeerId = Map<String, String>.from(state.endpointToPeerId);
       newEndpointToPeerId.remove(update.endpointId);
 
+      final bool isCurrentEndpoint = (state.activeEndpointId == update.endpointId);
       state = state.copyWith(
-        connectionStatus: update.status,
-        clearActiveEndpoint: true,
+        connectionStatus: isCurrentEndpoint ? update.status : state.connectionStatus,
+        clearActiveEndpoint: isCurrentEndpoint,
         endpointToPeerId: newEndpointToPeerId,
-        clearActiveConnectionRequest: true,
+        clearActiveConnectionRequest: isCurrentEndpoint,
       );
     } else {
       state = state.copyWith(
