@@ -140,8 +140,10 @@ class MessagingService {
     VantraLogger.log('[VANTRA][PROTO] WIRE ENCODE SUCCESS messageId=$messageId wireByteLength=${bytes.length}');
 
     VantraLogger.log('[VANTRA][TRANSPORT] SEND INVOKED endpointId=$endpointId messageId=$messageId byteLength=${bytes.length}');
+    print('[VANTRA][MESSAGE] TRANSPORT_SEND messageId=$messageId endpoint=$endpointId');
     try {
       await _transport.send(endpointId, bytes);
+      print('[VANTRA][MESSAGE] TRANSPORT_SEND_SUCCESS messageId=$messageId');
       VantraLogger.log('[VANTRA][TRANSPORT] SEND SUCCESS endpointId=$endpointId messageId=$messageId');
     } catch (e) {
       VantraLogger.log('[VANTRA][TRANSPORT] SEND FAILED endpointId=$endpointId messageId=$messageId errorType=${e.runtimeType}');
@@ -150,6 +152,7 @@ class MessagingService {
   }
 
   void _onPayloadReceived(PayloadReceivedEvent event) {
+    print('[VANTRA][MESSAGE] PAYLOAD_RECEIVED endpoint=${event.endpointId}');
     VantraLogger.log('[VANTRA][MESSAGE] Wire payload received from ${event.endpointId} (${event.bytes.length} bytes)');
     VantraLogger.log('[VANTRA][PROTO] WIRE DECODE START byteLength=${event.bytes.length}');
     DomainWireEnvelope envelope;
@@ -157,8 +160,10 @@ class MessagingService {
       envelope = codec.decodeWireEnvelope(event.bytes);
       if (envelope is DomainEncryptedEnvelope) {
         VantraLogger.log('[VANTRA][PROTO] WIRE DECODE SUCCESS payloadType=ENCRYPTED_MESSAGE messageId=${envelope.messageId} sequence=${envelope.sequence}');
+        print('[VANTRA][MESSAGE] ENVELOPE_DECODED messageId=${envelope.messageId}');
       } else {
         VantraLogger.log('[VANTRA][PROTO] WIRE DECODE SUCCESS payloadType=${envelope.runtimeType} messageId=none sequence=0');
+        print('[VANTRA][MESSAGE] ENVELOPE_DECODED payloadType=${envelope.runtimeType}');
       }
     } catch (e) {
       VantraLogger.log('[VANTRA][PROTO] WIRE DECODE FAILED errorType=${e.runtimeType}');
@@ -183,6 +188,7 @@ class MessagingService {
           ));
 
         case DomainEncryptedEnvelope enc:
+          print('[VANTRA][MESSAGE] ENVELOPE_DECODED messageId=${enc.messageId}');
           VantraLogger.log('[VANTRA][SECURITY] ENCRYPTED_TEXT protobuf packet received for message ${enc.messageId}');
           _encryptedMessageController.add(EncryptedMessageEvent(
             endpointId: event.endpointId,

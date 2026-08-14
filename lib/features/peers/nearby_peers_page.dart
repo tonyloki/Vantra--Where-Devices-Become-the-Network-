@@ -138,7 +138,7 @@ class _NearbyPeersPageState extends ConsumerState<NearbyPeersPage> {
                   separatorBuilder: (context, index) => const Divider(height: 1, indent: 72, color: Colors.white10),
                   itemBuilder: (context, index) {
                     final peer = peers[index];
-                    final resolvedPeerId = messagingState.endpointToPeerId[peer.endpointId];
+                    final resolvedPeerId = peer.resolvedPeerId ?? messagingState.endpointToPeerId[peer.endpointId];
                     final session = resolvedPeerId != null ? messagingState.sessions[resolvedPeerId] : null;
                     final isConnected = session?.status == SessionStatus.connected;
                     final isConnecting = peer.isConnecting || session?.status == SessionStatus.connecting || session?.status == SessionStatus.handshaking;

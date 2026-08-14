@@ -279,6 +279,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final isSecure = session?.isSecure == true;
     final isConnectedSecure = isConnected && isSecure;
 
+    print('[VANTRA][CHAT] STATE peerId=${widget.peerId} transportConnected=$isConnected sessionExists=${session != null} sessionSecure=$isSecure peerOnline=${session?.status == SessionStatus.connected} isTrusted=$isTrusted isBlocked=$isBlocked endpoint=${session?.endpointId}');
+
     if (isBlocked && _wasBlocked != true) {
       VantraLogger.log('[VANTRA][CHAT] SEND BLOCKED reason=INPUT_DISABLED');
     } else if (!isBlocked && !isConnectedSecure && (_wasConnectedSecure != false || _wasBlocked == true)) {

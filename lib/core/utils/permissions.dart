@@ -33,15 +33,16 @@ class VantraPermissions {
     final List<Permission> permissionsToRequest = [];
 
     if (sdkVersion >= 33) {
-      // Android 13+ requires nearby wifi devices and bluetooth scan/connect/advertise
+      // Android 13+ requires nearby wifi devices, bluetooth scan/connect/advertise, and location for WiFi/BLE discovery
       permissionsToRequest.addAll([
         Permission.nearbyWifiDevices,
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.bluetoothAdvertise,
+        Permission.locationWhenInUse,
       ]);
     } else if (sdkVersion >= 31) {
-      // Android 12 requires bluetooth scan/connect/advertise and location (recommended for Nearby API)
+      // Android 12 requires bluetooth scan/connect/advertise and location
       permissionsToRequest.addAll([
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
@@ -49,12 +50,23 @@ class VantraPermissions {
         Permission.locationWhenInUse,
       ]);
     } else {
-      // Android 11 and below only require location (Bluetooth is a normal permission)
+      // Android 11 and below only require location (Bluetooth is an install-time permission)
       permissionsToRequest.add(Permission.locationWhenInUse);
     }
 
     VantraLogger.log('Requesting permissions: ${permissionsToRequest.map((p) => p.toString()).join(", ")}');
     final statuses = await permissionsToRequest.request();
+
+    // Log explicit individual permission capability statuses
+    if (sdkVersion >= 31) {
+      VantraLogger.log('Permission Status -> Bluetooth Scan: ${statuses[Permission.bluetoothScan]?.name ?? "N/A"}');
+      VantraLogger.log('Permission Status -> Bluetooth Connect: ${statuses[Permission.bluetoothConnect]?.name ?? "N/A"}');
+      VantraLogger.log('Permission Status -> Bluetooth Advertise: ${statuses[Permission.bluetoothAdvertise]?.name ?? "N/A"}');
+    }
+    if (sdkVersion >= 33) {
+      VantraLogger.log('Permission Status -> Nearby Wi-Fi Devices: ${statuses[Permission.nearbyWifiDevices]?.name ?? "N/A"}');
+    }
+    VantraLogger.log('Permission Status -> Location: ${statuses[Permission.locationWhenInUse]?.name ?? "N/A"}');
 
     final allGranted = statuses.values.every((status) => status.isGranted);
     VantraLogger.log('All requested permissions granted: $allGranted');

@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -77,6 +79,7 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
     state = state.copyWith(status: NearbyServiceStatus.initializing, clearError: true);
 
     try {
+      print('[VANTRA][NEARBY] serviceId=me.vantra.vantra strategy=P2P_CLUSTER');
       final permissionsGranted = await VantraPermissions.requestNearbyPermissions();
       if (!permissionsGranted) {
         VantraLogger.log('[VANTRA][LIFECYCLE] Permissions denied for Nearby Connections');
@@ -86,9 +89,8 @@ class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with Widg
 
       final gpsEnabled = await VantraPermissions.isLocationServiceEnabled();
       if (!gpsEnabled) {
-        VantraLogger.log('[VANTRA][LIFECYCLE] Location Services (GPS) are disabled');
-        state = state.copyWith(status: NearbyServiceStatus.locationDisabled);
-        return;
+        VantraLogger.log('[VANTRA][LIFECYCLE] WARNING: Location Services (GPS) are disabled in device settings.');
+        print('[VANTRA][NEARBY] WARNING: Location Services (GPS) are disabled. Nearby discovery may be degraded on some Android versions.');
       }
 
       final localIdentity = ref.read(localIdentityStateProvider);

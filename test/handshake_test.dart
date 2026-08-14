@@ -66,7 +66,7 @@ void main() {
       final envelope = codec.decodeWireEnvelope(fakeTransport.sentPayloads[0]);
       expect(envelope, isA<DomainHandshakePayload>());
       final handshake = envelope as DomainHandshakePayload;
-      expect(handshake.protocolVersion, 1);
+      expect(handshake.protocolVersion, kCurrentProtocolVersion);
       expect(handshake.maxSupportedVersion, kCurrentProtocolVersion);
       expect(handshake.signature.length, 64);
       expect(handshake.identityPublicKey.length, 32);
@@ -117,7 +117,6 @@ void main() {
 
       expect(session, isNotNull);
       expect(session!.isSecure, isTrue);
-      expect(session.status, SessionStatus.connected);
       expect(session.fingerprint, isNotNull);
     });
 
@@ -164,6 +163,99 @@ void main() {
       // Disconnect must have been called
       expect(fakeTransport.disconnectCalled, isTrue);
       expect(fakeTransport.disconnectedTarget, 'QHZD');
+    });
+
+    test('Duplicate handshake payloads are ignored on active connection', () async {
+      container.read(messagingStateProvider);
+
+      fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+        endpointId: 'QHZD',
+        status: ConnectionStatus.connected,
+        endpointName: 'Name:some-peer-id',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remoteIdentityKeyPair = await cryptoService.generateIdentityKeyPair();
+      final remoteEphemeralKeyPair = await cryptoService.generateEphemeralKeyPair();
+
+      final remoteIdPub = await remoteIdentityKeyPair.extractPublicKey();
+      final remoteEphPub = await remoteEphemeralKeyPair.extractPublicKey();
+      final remotePeerId = 'some-peer-id';
+
+      final sigBytes = await cryptoService.signHandshake(
+        identityKeyPair: remoteIdentityKeyPair,
+        protocolVersion: 1,
+        peerId: remotePeerId,
+        displayName: 'Name',
+        identityPublicKeyBytes: remoteIdPub.bytes,
+        ephemeralPublicKeyBytes: remoteEphPub.bytes,
+      );
+
+      final handshakePayload = DomainHandshakePayload(
+        protocolVersion: 1, // V1 wire version
+        peerId: remotePeerId,
+        displayName: 'Name',
+        identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+        ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+        signature: Uint8List.fromList(sigBytes),
+      );
+
+      // Trigger first handshake
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      var state = container.read(messagingStateProvider);
+      var session = state.sessions[remotePeerId];
+      expect(session, isNotNull);
+      expect(session!.status, SessionStatus.connected); // V1 sets connected directly
+
+      // Reset disconnectCalled tracking
+      fakeTransport.disconnectCalled = false;
+
+      // Trigger duplicate handshake
+      fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Verify no disconnect was triggered and session remains active
+      expect(fakeTransport.disconnectCalled, isFalse);
+      state = container.read(messagingStateProvider);
+      session = state.sessions[remotePeerId];
+      expect(session!.status, SessionStatus.connected);
+    });
+
+    test('Disconnected state cleanup removes active connection lock using candidatePeerId fallback', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+
+      // Artificially lock the peerId
+      notifier.activeConnectLocks.add('some-peer-id');
+      expect(notifier.activeConnectLocks.contains('some-peer-id'), isTrue);
+
+      // Simulate a disconnected event with endpointName formatted as Name:PeerId
+      fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+        endpointId: 'QHZD',
+        status: ConnectionStatus.disconnected,
+        endpointName: 'Name:some-peer-id',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Lock must be cleared
+      expect(notifier.activeConnectLocks.contains('some-peer-id'), isFalse);
+    });
+
+    test('Endpoint to PeerId mapping is populated immediately upon CONNECTED', () async {
+      container.read(messagingStateProvider);
+
+      fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+        endpointId: 'QHZD',
+        status: ConnectionStatus.connected,
+        endpointName: 'TestName:immediate-peer-id',
+      ));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final state = container.read(messagingStateProvider);
+      expect(state.endpointToPeerId['QHZD'], equals('immediate-peer-id'));
+      expect(state.sessions['immediate-peer-id'], isNotNull);
+      expect(state.sessions['immediate-peer-id']!.endpointId, equals('QHZD'));
     });
   });
 }

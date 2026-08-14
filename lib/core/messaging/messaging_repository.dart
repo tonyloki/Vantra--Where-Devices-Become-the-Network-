@@ -77,6 +77,7 @@ class MessagingRepository {
 
   /// Updates message transmission status
   Future<bool> updateMessageStatus(String messageId, MessageStatus status) {
+    print('[VANTRA][MESSAGE] DELIVERY_STATE messageId=$messageId state=${status.name}');
     return _db.messageDao.updateMessageStatus(messageId, status);
   }
 
@@ -109,35 +110,56 @@ class MessagingRepository {
       final summaries = <ConversationSummary>[];
 
       for (final peer in peerList) {
-        // Skip blocked peers from normal conversation list if desired or display them with blocked indicator
         final conv = await _db.messageDao.getConversation(localPeerId, peer.peerId);
-        if (conv.isEmpty) continue;
-
-        final lastMsg = conv.last;
-        final unreadCount = await _db.messageDao.getUnreadCount(localPeerId, peer.peerId);
         final activeSession = activeSessions[peer.peerId];
+        final isTrusted = peer.trustState == PeerTrustState.trusted;
+        final isOnline = activeSession?.status == SessionStatus.connected;
 
-        String previewText = lastMsg.messageText;
-        if (lastMsg.type == 'IMAGE') {
-          previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📷 Photo';
-        } else if (lastMsg.type == 'FILE') {
-          previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📁 File: ${lastMsg.fileName ?? "Attachment"}';
+        if (conv.isEmpty && !isTrusted && !isOnline) {
+          continue;
         }
 
-        summaries.add(ConversationSummary(
-          peerId: peer.peerId,
-          displayName: peer.displayName,
-          nickname: peer.nickname,
-          fingerprint: peer.fingerprint,
-          trustState: peer.trustState,
-          lastMessageText: previewText,
-          lastMessageTimestamp: lastMsg.timestamp,
-          lastMessageStatus: lastMsg.status,
-          isOutgoing: lastMsg.senderId == localPeerId,
-          unreadCount: unreadCount,
-          isOnline: activeSession?.status == SessionStatus.connected,
-          isSecure: activeSession?.isSecure == true,
-        ));
+        if (conv.isEmpty) {
+          summaries.add(ConversationSummary(
+            peerId: peer.peerId,
+            displayName: peer.displayName,
+            nickname: peer.nickname,
+            fingerprint: peer.fingerprint,
+            trustState: peer.trustState,
+            lastMessageText: 'Start chatting',
+            lastMessageTimestamp: peer.updatedAt,
+            lastMessageStatus: MessageStatus.received,
+            isOutgoing: false,
+            unreadCount: 0,
+            isOnline: isOnline,
+            isSecure: activeSession?.isSecure == true,
+          ));
+        } else {
+          final lastMsg = conv.last;
+          final unreadCount = await _db.messageDao.getUnreadCount(localPeerId, peer.peerId);
+
+          String previewText = lastMsg.messageText;
+          if (lastMsg.type == 'IMAGE') {
+            previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📷 Photo';
+          } else if (lastMsg.type == 'FILE') {
+            previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📁 File: ${lastMsg.fileName ?? "Attachment"}';
+          }
+
+          summaries.add(ConversationSummary(
+            peerId: peer.peerId,
+            displayName: peer.displayName,
+            nickname: peer.nickname,
+            fingerprint: peer.fingerprint,
+            trustState: peer.trustState,
+            lastMessageText: previewText,
+            lastMessageTimestamp: lastMsg.timestamp,
+            lastMessageStatus: lastMsg.status,
+            isOutgoing: lastMsg.senderId == localPeerId,
+            unreadCount: unreadCount,
+            isOnline: isOnline,
+            isSecure: activeSession?.isSecure == true,
+          ));
+        }
       }
 
       // Sort summaries by latest message timestamp descending
