@@ -1,0 +1,7 @@
+version: "2.0"
+project:
+  name: "vantra"
+  rules:
+    - "Do not alter the project scope or core architecture unless explicitly requested."
+    - "Always check the existing roadmap file before starting a new subtask."
+    - "Minimize full-codebase context scanning; only analyze files explicitly mentioned."

@@ -23,14 +23,23 @@ import 'features/poc/poc_page.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  runApp(
-    ProviderScope(
-      overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-      ],
-      child: const VantraApp(),
-    ),
-  );
+  runZoned(() {
+    runApp(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+        ],
+        child: const VantraApp(),
+      ),
+    );
+  }, zoneSpecification: ZoneSpecification(
+    print: (self, parent, zone, line) {
+      parent.print(zone, line);
+      if (line.contains('[VANTRA]')) {
+        VantraLogger.printAndLog(line);
+      }
+    },
+  ));
 }
 
 final GoRouter _router = GoRouter(

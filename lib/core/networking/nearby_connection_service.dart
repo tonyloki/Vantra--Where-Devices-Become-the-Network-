@@ -54,12 +54,37 @@ final nearbyConnectionServiceProvider = NotifierProvider<NearbyConnectionNotifie
 
 class NearbyConnectionNotifier extends Notifier<NearbyConnectionState> with WidgetsBindingObserver {
   bool _isInitializing = false;
+  final List<String> _diagnosticLogs = [];
+  final StreamController<List<String>> _logsStreamController = StreamController<List<String>>.broadcast();
+
+  Stream<List<String>> get diagnosticLogsStream => _logsStreamController.stream;
+  List<String> get diagnosticLogs => List.unmodifiable(_diagnosticLogs);
+
+  void appendDiagnosticLog(String message) {
+    _diagnosticLogs.add(message);
+    if (_diagnosticLogs.length > 500) {
+      _diagnosticLogs.removeAt(0);
+    }
+    _logsStreamController.add(_diagnosticLogs);
+  }
+
+  void clearDiagnosticLogs() {
+    _diagnosticLogs.clear();
+    _logsStreamController.add(_diagnosticLogs);
+  }
 
   @override
   NearbyConnectionState build() {
     WidgetsBinding.instance.addObserver(this);
+    
+    VantraLogger.onLog = appendDiagnosticLog;
+
     ref.onDispose(() {
       WidgetsBinding.instance.removeObserver(this);
+      if (VantraLogger.onLog == appendDiagnosticLog) {
+        VantraLogger.onLog = null;
+      }
+      _logsStreamController.close();
     });
     return const NearbyConnectionState(status: NearbyServiceStatus.initializing);
   }

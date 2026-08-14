@@ -22,12 +22,13 @@ class _PocPageState extends ConsumerState<PocPage> {
   bool _permissionsGranted = false;
   bool _locationServiceEnabled = false;
 
-  final List<String> _logs = [];
+  List<String> _logs = [];
   final List<String> _receivedTelemetry = [];
 
   StreamSubscription? _peersSub;
   StreamSubscription? _connSub;
   StreamSubscription? _payloadSub;
+  StreamSubscription? _logsSub;
 
   List<DiscoveredPeer> _discoveredPeers = [];
   final ProtobufCodec _codec = const ProtobufCodec();
@@ -44,6 +45,7 @@ class _PocPageState extends ConsumerState<PocPage> {
     _peersSub?.cancel();
     _connSub?.cancel();
     _payloadSub?.cancel();
+    _logsSub?.cancel();
     super.dispose();
   }
 
@@ -59,6 +61,16 @@ class _PocPageState extends ConsumerState<PocPage> {
 
   void _subscribeToTelemetry() {
     final transport = ref.read(transportProvider);
+    final nearbyService = ref.read(nearbyConnectionServiceProvider.notifier);
+
+    _logs = List.from(nearbyService.diagnosticLogs);
+    _logsSub = nearbyService.diagnosticLogsStream.listen((logs) {
+      if (mounted) {
+        setState(() {
+          _logs = logs;
+        });
+      }
+    });
 
     _peersSub = transport.discoveredPeersStream.listen((peers) {
       if (mounted) {
@@ -98,14 +110,9 @@ class _PocPageState extends ConsumerState<PocPage> {
   }
 
   void _log(String msg) {
-    if (mounted) {
-      setState(() {
-        _logs.add('[${DateTime.now().toIso8601String().substring(11, 19)}] $msg');
-        if (_logs.length > 100) {
-          _logs.removeAt(0);
-        }
-      });
-    }
+    ref.read(nearbyConnectionServiceProvider.notifier).appendDiagnosticLog(
+      '[${DateTime.now().toIso8601String().substring(11, 19)}] $msg',
+    );
   }
 
   String _formatConnectionStatus(ConnectionStatus status, String? activeId, String? activeName) {
@@ -146,8 +153,8 @@ class _PocPageState extends ConsumerState<PocPage> {
             icon: const Icon(Icons.delete_sweep),
             tooltip: 'Clear Console',
             onPressed: () {
+              ref.read(nearbyConnectionServiceProvider.notifier).clearDiagnosticLogs();
               setState(() {
-                _logs.clear();
                 _receivedTelemetry.clear();
               });
             },
