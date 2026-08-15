@@ -2887,5 +2887,1188 @@ void main() {
 
       expect(notifier.hasActiveSecureTransport(peerId), isFalse);
     });
+
+    test('TEST 1 - One image message is created and persisted. Queue flush sends it exactly once.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path, caption: 'Hello Image');
+
+      int waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+      expect(fakeTransport.sentPayloads.length, 1);
+
+      final offerWire = fakeTransport.sentPayloads[0];
+      final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+      final decryptedOffer = await cryptoService.decryptBytes(
+        secretKey: secSession.sendKey,
+        nonce: offerEnvelope.nonce,
+        ciphertext: offerEnvelope.ciphertext,
+        mac: offerEnvelope.mac,
+        messageId: offerEnvelope.messageId,
+      );
+      final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+      expect(offerPlaintext.type, DomainMediaControlType.offer);
+
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      final imageMsg = dbMsgs.firstWhere((m) => m.type == 'IMAGE');
+      expect(offerEnvelope.messageId, imageMsg.messageId);
+
+      // Reply with ACCEPT
+      final acceptMsgId = const Uuid().v4();
+      final acceptDomain = DomainMediaControl(
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        type: DomainMediaControlType.accept,
+        transferId: offerPlaintext.transferId,
+        nextExpectedChunk: 0,
+      );
+      final encryptedAccept = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: acceptMsgId, plaintextBytes: codec.encodePlaintext(acceptDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedAccept.nonce),
+        ciphertext: Uint8List.fromList(encryptedAccept.ciphertext),
+        mac: Uint8List.fromList(encryptedAccept.mac),
+      )));
+
+      waitLimit = 20;
+      while (fakeTransport.sentPayloads.length < 3 && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+      expect(fakeTransport.sentPayloads.length, 3);
+
+      final sentMsg = await repo.getMessageById(imageMsg.messageId);
+      expect(sentMsg?.status, MessageStatus.sent);
+
+      // Send ACK for imageMsg.messageId
+      final ackMsgId = const Uuid().v4();
+      final ackDomain = DomainAckMessage(
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        originalMessageId: imageMsg.messageId,
+        status: DomainDeliveryStatus.delivered,
+      );
+      final encryptedAck = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 3, messageId: ackMsgId, plaintextBytes: codec.encodePlaintext(ackDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        nonce: Uint8List.fromList(encryptedAck.nonce),
+        ciphertext: Uint8List.fromList(encryptedAck.ciphertext),
+        mac: Uint8List.fromList(encryptedAck.mac),
+      )));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      final deliveredMsg = await repo.getMessageById(imageMsg.messageId);
+      expect(deliveredMsg?.status, MessageStatus.delivered);
+
+      fakeTransport.sentPayloads.clear();
+      await notifier.flushQueue(peerId, 'manual_test');
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(fakeTransport.sentPayloads.length, 0); // No double transmission!
+    });
+
+    test('TEST 2 - Calling _flushQueue() twice concurrently does not send the same message twice.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path);
+      // Concurrently invoke flushQueue again
+      await notifier.flushQueue(peerId, 'concurrent_test');
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      int offerCount = 0;
+      DomainMediaControl? offerPlaintext;
+      for (final wire in fakeTransport.sentPayloads) {
+        try {
+          final decoded = codec.decodeWireEnvelope(wire) as DomainEncryptedEnvelope;
+          final decrypted = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: decoded.nonce, ciphertext: decoded.ciphertext, mac: decoded.mac, messageId: decoded.messageId);
+          final plaintext = codec.decodePlaintext(decrypted);
+          if (plaintext is DomainMediaControl && plaintext.type == DomainMediaControlType.offer) {
+            offerCount++;
+            offerPlaintext = plaintext;
+          }
+        } catch (_) {}
+      }
+      expect(offerCount, 1);
+
+      if (offerPlaintext != null) {
+        final rejectMsgId = const Uuid().v4();
+        final rejectDomain = DomainMediaControl(
+          messageId: rejectMsgId,
+          sessionId: secSession.sessionId,
+          sequence: 2,
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          senderId: peerId,
+          receiverId: localId.peerId,
+          type: DomainMediaControlType.reject,
+          transferId: offerPlaintext.transferId,
+        );
+        final encryptedReject = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: rejectMsgId, plaintextBytes: codec.encodePlaintext(rejectDomain));
+        fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+          protocolVersion: 2,
+          messageId: rejectMsgId,
+          sessionId: secSession.sessionId,
+          sequence: 2,
+          nonce: Uint8List.fromList(encryptedReject.nonce),
+          ciphertext: Uint8List.fromList(encryptedReject.ciphertext),
+          mac: Uint8List.fromList(encryptedReject.mac),
+        )));
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    });
+
+    test('TEST 3 - Successful transport updates the persistent message state so the queue does not select it again.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path);
+
+      int waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final offerWire = fakeTransport.sentPayloads[0];
+      final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+
+      // ACCEPT
+      final acceptMsgId = const Uuid().v4();
+      final acceptDomain = DomainMediaControl(
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        type: DomainMediaControlType.accept,
+        transferId: offerPlaintext.transferId,
+        nextExpectedChunk: 0,
+      );
+      final encryptedAccept = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: acceptMsgId, plaintextBytes: codec.encodePlaintext(acceptDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedAccept.nonce),
+        ciphertext: Uint8List.fromList(encryptedAccept.ciphertext),
+        mac: Uint8List.fromList(encryptedAccept.mac),
+      )));
+
+      waitLimit = 20;
+      while (fakeTransport.sentPayloads.length < 3 && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      final imageMsg = dbMsgs.firstWhere((m) => m.type == 'IMAGE');
+      final currentMsg = await repo.getMessageById(imageMsg.messageId);
+      expect(currentMsg?.status, MessageStatus.sent);
+
+      fakeTransport.sentPayloads.clear();
+      await notifier.flushQueue(peerId, 'manual_test');
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(fakeTransport.sentPayloads.length, 0);
+    });
+
+    test('TEST 4 - ChatPage rebuild does not resend a previously sent image.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path);
+
+      int waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final offerWire = fakeTransport.sentPayloads[0];
+      final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+
+      // ACCEPT
+      final acceptMsgId = const Uuid().v4();
+      final acceptDomain = DomainMediaControl(
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        type: DomainMediaControlType.accept,
+        transferId: offerPlaintext.transferId,
+        nextExpectedChunk: 0,
+      );
+      final encryptedAccept = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: acceptMsgId, plaintextBytes: codec.encodePlaintext(acceptDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedAccept.nonce),
+        ciphertext: Uint8List.fromList(encryptedAccept.ciphertext),
+        mac: Uint8List.fromList(encryptedAccept.mac),
+      )));
+
+      waitLimit = 20;
+      while (fakeTransport.sentPayloads.length < 3 && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      final imageMsg = dbMsgs.firstWhere((m) => m.type == 'IMAGE');
+
+      // ACK
+      final ackMsgId = const Uuid().v4();
+      final ackDomain = DomainAckMessage(
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        originalMessageId: imageMsg.messageId,
+        status: DomainDeliveryStatus.delivered,
+      );
+      final encryptedAck = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 3, messageId: ackMsgId, plaintextBytes: codec.encodePlaintext(ackDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        nonce: Uint8List.fromList(encryptedAck.nonce),
+        ciphertext: Uint8List.fromList(encryptedAck.ciphertext),
+        mac: Uint8List.fromList(encryptedAck.mac),
+      )));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      final deliveredMsg = await repo.getMessageById(imageMsg.messageId);
+      expect(deliveredMsg?.status, MessageStatus.delivered);
+
+      fakeTransport.sentPayloads.clear();
+      notifier.state = notifier.state.copyWith();
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(fakeTransport.sentPayloads.length, 0);
+    });
+
+    test('TEST 5 - Navigation away/back does not resend the image.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path);
+
+      int waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final offerWire = fakeTransport.sentPayloads[0];
+      final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+
+      // ACCEPT
+      final acceptMsgId = const Uuid().v4();
+      final acceptDomain = DomainMediaControl(
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        type: DomainMediaControlType.accept,
+        transferId: offerPlaintext.transferId,
+        nextExpectedChunk: 0,
+      );
+      final encryptedAccept = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: acceptMsgId, plaintextBytes: codec.encodePlaintext(acceptDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedAccept.nonce),
+        ciphertext: Uint8List.fromList(encryptedAccept.ciphertext),
+        mac: Uint8List.fromList(encryptedAccept.mac),
+      )));
+
+      waitLimit = 20;
+      while (fakeTransport.sentPayloads.length < 3 && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      final imageMsg = dbMsgs.firstWhere((m) => m.type == 'IMAGE');
+
+      // ACK
+      final ackMsgId = const Uuid().v4();
+      final ackDomain = DomainAckMessage(
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        originalMessageId: imageMsg.messageId,
+        status: DomainDeliveryStatus.delivered,
+      );
+      final encryptedAck = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 3, messageId: ackMsgId, plaintextBytes: codec.encodePlaintext(ackDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        nonce: Uint8List.fromList(encryptedAck.nonce),
+        ciphertext: Uint8List.fromList(encryptedAck.ciphertext),
+        mac: Uint8List.fromList(encryptedAck.mac),
+      )));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      final deliveredMsg = await repo.getMessageById(imageMsg.messageId);
+      expect(deliveredMsg?.status, MessageStatus.delivered);
+
+      fakeTransport.sentPayloads.clear();
+      notifier.setActiveConversation(null);
+      await Future.delayed(const Duration(milliseconds: 20));
+      notifier.setActiveConversation(peerId);
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(fakeTransport.sentPayloads.length, 0);
+    });
+
+    test('TEST 6 - ACK for image correctly updates the matching messageId.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path);
+
+      int waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final offerWire = fakeTransport.sentPayloads[0];
+      final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+
+      // ACCEPT
+      final acceptMsgId = const Uuid().v4();
+      final acceptDomain = DomainMediaControl(
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        type: DomainMediaControlType.accept,
+        transferId: offerPlaintext.transferId,
+        nextExpectedChunk: 0,
+      );
+      final encryptedAccept = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: acceptMsgId, plaintextBytes: codec.encodePlaintext(acceptDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedAccept.nonce),
+        ciphertext: Uint8List.fromList(encryptedAccept.ciphertext),
+        mac: Uint8List.fromList(encryptedAccept.mac),
+      )));
+
+      waitLimit = 20;
+      while (fakeTransport.sentPayloads.length < 3 && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      final imageMsg = dbMsgs.firstWhere((m) => m.type == 'IMAGE');
+
+      // Send ACK for imageMsg.messageId
+      final ackMsgId = const Uuid().v4();
+      final ackDomain = DomainAckMessage(
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        originalMessageId: imageMsg.messageId,
+        status: DomainDeliveryStatus.delivered,
+      );
+      final encryptedAck = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 3, messageId: ackMsgId, plaintextBytes: codec.encodePlaintext(ackDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        nonce: Uint8List.fromList(encryptedAck.nonce),
+        ciphertext: Uint8List.fromList(encryptedAck.ciphertext),
+        mac: Uint8List.fromList(encryptedAck.mac),
+      )));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      final deliveredMsg = await repo.getMessageById(imageMsg.messageId);
+      expect(deliveredMsg?.status, MessageStatus.delivered);
+    });
+
+    test('TEST 7 - Reconnect does not resend an already SENT/DELIVERED image.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path);
+
+      int waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final offerWire = fakeTransport.sentPayloads[0];
+      final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+
+      // ACCEPT
+      final acceptMsgId = const Uuid().v4();
+      final acceptDomain = DomainMediaControl(
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        type: DomainMediaControlType.accept,
+        transferId: offerPlaintext.transferId,
+        nextExpectedChunk: 0,
+      );
+      final encryptedAccept = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: acceptMsgId, plaintextBytes: codec.encodePlaintext(acceptDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: acceptMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedAccept.nonce),
+        ciphertext: Uint8List.fromList(encryptedAccept.ciphertext),
+        mac: Uint8List.fromList(encryptedAccept.mac),
+      )));
+
+      waitLimit = 20;
+      while (fakeTransport.sentPayloads.length < 3 && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      final imageMsg = dbMsgs.firstWhere((m) => m.type == 'IMAGE');
+
+      // ACK
+      final ackMsgId = const Uuid().v4();
+      final ackDomain = DomainAckMessage(
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        originalMessageId: imageMsg.messageId,
+        status: DomainDeliveryStatus.delivered,
+      );
+      final encryptedAck = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 3, messageId: ackMsgId, plaintextBytes: codec.encodePlaintext(ackDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: ackMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 3,
+        nonce: Uint8List.fromList(encryptedAck.nonce),
+        ciphertext: Uint8List.fromList(encryptedAck.ciphertext),
+        mac: Uint8List.fromList(encryptedAck.mac),
+      )));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      final deliveredMsg = await repo.getMessageById(imageMsg.messageId);
+      expect(deliveredMsg?.status, MessageStatus.delivered);
+
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.disconnected, endpointName: 'EP_V2'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload2 = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload2));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession2 = notifier.securitySessions[peerId]!;
+      final capExchange2 = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession2.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap2 = await cryptoService.encryptBytes(secretKey: secSession2.receiveKey, sessionSalt: secSession2.sessionSalt, sequence: 1, messageId: capExchange2.messageId, plaintextBytes: codec.encodePlaintext(capExchange2));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange2.messageId,
+        sessionId: secSession2.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap2.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap2.ciphertext),
+        mac: Uint8List.fromList(encryptedCap2.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      fakeTransport.sentPayloads.clear();
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(fakeTransport.sentPayloads.length, 0);
+    });
+
+    test('TEST 8 - Three consecutive image messages each send exactly once.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      
+      for (int m = 1; m <= 3; m++) {
+        final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+        await tempFile.writeAsBytes(fileData);
+
+        fakeTransport.sentPayloads.clear();
+        await notifier.sendImageMessage(peerId, tempFile.path, caption: 'Image $m');
+
+        int waitLimit = 20;
+        while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+          await Future.delayed(const Duration(milliseconds: 20));
+        }
+
+        final offerWire = fakeTransport.sentPayloads[0];
+        final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+        final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+        final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+
+        // ACCEPT
+        final acceptMsgId = const Uuid().v4();
+        final acceptDomain = DomainMediaControl(
+          messageId: acceptMsgId,
+          sessionId: secSession.sessionId,
+          sequence: (m * 4),
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          senderId: peerId,
+          receiverId: localId.peerId,
+          type: DomainMediaControlType.accept,
+          transferId: offerPlaintext.transferId,
+          nextExpectedChunk: 0,
+        );
+        final encryptedAccept = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: (m * 4), messageId: acceptMsgId, plaintextBytes: codec.encodePlaintext(acceptDomain));
+        fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+          protocolVersion: 2,
+          messageId: acceptMsgId,
+          sessionId: secSession.sessionId,
+          sequence: (m * 4),
+          nonce: Uint8List.fromList(encryptedAccept.nonce),
+          ciphertext: Uint8List.fromList(encryptedAccept.ciphertext),
+          mac: Uint8List.fromList(encryptedAccept.mac),
+        )));
+
+        waitLimit = 20;
+        while (fakeTransport.sentPayloads.length < 3 && waitLimit-- > 0) {
+          await Future.delayed(const Duration(milliseconds: 20));
+        }
+
+        final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+        final imageMsg = dbMsgs.firstWhere((msg) => msg.text == 'Image $m');
+
+        // ACK
+        final ackMsgId = const Uuid().v4();
+        final ackDomain = DomainAckMessage(
+          messageId: ackMsgId,
+          sessionId: secSession.sessionId,
+          sequence: (m * 4) + 1,
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          senderId: peerId,
+          receiverId: localId.peerId,
+          originalMessageId: imageMsg.messageId,
+          status: DomainDeliveryStatus.delivered,
+        );
+        final encryptedAck = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: (m * 4) + 1, messageId: ackMsgId, plaintextBytes: codec.encodePlaintext(ackDomain));
+        fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+          protocolVersion: 2,
+          messageId: ackMsgId,
+          sessionId: secSession.sessionId,
+          sequence: (m * 4) + 1,
+          nonce: Uint8List.fromList(encryptedAck.nonce),
+          ciphertext: Uint8List.fromList(encryptedAck.ciphertext),
+          mac: Uint8List.fromList(encryptedAck.mac),
+        )));
+
+        await Future.delayed(const Duration(milliseconds: 50));
+        final deliveredMsg = await repo.getMessageById(imageMsg.messageId);
+        expect(deliveredMsg?.status, MessageStatus.delivered);
+      }
+    });
+
+    test('TEST 9 - If transport genuinely fails, retry is still possible.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path);
+
+      int waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final offerWire = fakeTransport.sentPayloads[0];
+      final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+
+      // Reject it
+      final rejectMsgId = const Uuid().v4();
+      final rejectDomain = DomainMediaControl(
+        messageId: rejectMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        type: DomainMediaControlType.reject,
+        transferId: offerPlaintext.transferId,
+      );
+      final encryptedReject = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: rejectMsgId, plaintextBytes: codec.encodePlaintext(rejectDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: rejectMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedReject.nonce),
+        ciphertext: Uint8List.fromList(encryptedReject.ciphertext),
+        mac: Uint8List.fromList(encryptedReject.mac),
+      )));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      final imageMsg = dbMsgs.firstWhere((m) => m.type == 'IMAGE');
+      final failedMsg = await repo.getMessageById(imageMsg.messageId);
+      expect(failedMsg?.status, MessageStatus.failed);
+
+      fakeTransport.sentPayloads.clear();
+      await notifier.retryMessage(imageMsg.messageId, peerId);
+
+      waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+      expect(fakeTransport.sentPayloads.length, 1);
+    });
+
+    test('TEST 10 - Same messageId can never have two concurrent outbound send operations.', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final localId = container.read(localIdentityStateProvider);
+
+      final peerId = const Uuid().v4();
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'Friend', publicKey: publicKeyHex, fingerprint: fingerprint, trustState: PeerTrustState.trusted, protocolVersion: 2);
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(endpointId: 'EP_V2', status: ConnectionStatus.connected, endpointName: 'Friend:$peerId'));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final remotePayload = await createRemoteHandshake(peerId, 'Friend', protocolVersion: 2, minSupportedVersion: 2, maxSupportedVersion: 2, supportedCapabilities: const [VantraCapability.text, VantraCapability.image], identityKeyPair: idKeyPair);
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(remotePayload));
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final secSession = notifier.securitySessions[peerId]!;
+      final capExchange = DomainCapabilitiesExchange(
+        messageId: const Uuid().v4(),
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        minSupportedVersion: 2,
+        maxSupportedVersion: 2,
+        supportedCapabilities: const [VantraCapability.text, VantraCapability.image],
+      );
+      final encryptedCap = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 1, messageId: capExchange.messageId, plaintextBytes: codec.encodePlaintext(capExchange));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: capExchange.messageId,
+        sessionId: secSession.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encryptedCap.nonce),
+        ciphertext: Uint8List.fromList(encryptedCap.ciphertext),
+        mac: Uint8List.fromList(encryptedCap.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+      fakeTransport.sentPayloads.clear();
+
+      final fileData = Uint8List(20 * 1024);
+      final tempFile = File(path.join(testTempDir.path, '${const Uuid().v4()}.jpg'));
+      await tempFile.writeAsBytes(fileData);
+
+      await notifier.sendImageMessage(peerId, tempFile.path);
+
+      int waitLimit = 20;
+      while (fakeTransport.sentPayloads.isEmpty && waitLimit-- > 0) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+
+      final offerWire = fakeTransport.sentPayloads[0];
+      final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
+      final decryptedOffer = await cryptoService.decryptBytes(
+        secretKey: secSession.sendKey,
+        nonce: offerEnvelope.nonce,
+        ciphertext: offerEnvelope.ciphertext,
+        mac: offerEnvelope.mac,
+        messageId: offerEnvelope.messageId,
+      );
+      final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
+
+      final dbMsgs = await repo.getConversation(localId.peerId, peerId);
+      final imageMsg = dbMsgs.firstWhere((m) => m.type == 'IMAGE');
+
+      final activeSession = notifier.state.sessions[peerId]!;
+      final success = await notifier.sendSingleMessage(secSession, activeSession, imageMsg);
+      expect(success, isFalse);
+
+      // Clean up background completer by rejecting it
+      final rejectMsgId = const Uuid().v4();
+      final rejectDomain = DomainMediaControl(
+        messageId: rejectMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        type: DomainMediaControlType.reject,
+        transferId: offerPlaintext.transferId,
+      );
+      final encryptedReject = await cryptoService.encryptBytes(secretKey: secSession.receiveKey, sessionSalt: secSession.sessionSalt, sequence: 2, messageId: rejectMsgId, plaintextBytes: codec.encodePlaintext(rejectDomain));
+      fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: rejectMsgId,
+        sessionId: secSession.sessionId,
+        sequence: 2,
+        nonce: Uint8List.fromList(encryptedReject.nonce),
+        ciphertext: Uint8List.fromList(encryptedReject.ciphertext),
+        mac: Uint8List.fromList(encryptedReject.mac),
+      )));
+      await Future.delayed(const Duration(milliseconds: 50));
+    });
   });
 }

@@ -76,8 +76,15 @@ class MessagingRepository {
   }
 
   /// Updates message transmission status
-  Future<bool> updateMessageStatus(String messageId, MessageStatus status) {
+  Future<bool> updateMessageStatus(String messageId, MessageStatus status) async {
     print('[VANTRA][MESSAGE] DELIVERY_STATE messageId=$messageId state=${status.name}');
+    final dbMsg = await _db.messageDao.getMessageById(messageId);
+    if (dbMsg != null && (dbMsg.type == 'IMAGE' || dbMsg.type == 'FILE')) {
+      print('[VANTRA][MEDIA][STATUS_UPDATE]\n'
+            'messageId=$messageId\n'
+            'oldStatus=${dbMsg.status.name}\n'
+            'newStatus=${status.name}');
+    }
     return _db.messageDao.updateMessageStatus(messageId, status);
   }
 
@@ -279,7 +286,14 @@ class MessagingRepository {
     return msg != null ? _mapToDomain(msg) : null;
   }
 
-  Future<bool> updateIncomingMediaDetails(String messageId, String mediaPath, MessageStatus status) {
+  Future<bool> updateIncomingMediaDetails(String messageId, String mediaPath, MessageStatus status) async {
+    final dbMsg = await _db.messageDao.getMessageById(messageId);
+    if (dbMsg != null) {
+      print('[VANTRA][MEDIA][STATUS_UPDATE]\n'
+            'messageId=$messageId\n'
+            'oldStatus=${dbMsg.status.name}\n'
+            'newStatus=${status.name}');
+    }
     return _db.messageDao.updateIncomingMediaDetails(messageId, mediaPath, status);
   }
 
