@@ -468,6 +468,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
             .where((c) => plaintext.supportedCapabilities.contains(c))
             .toList();
 
+        print('[VANTRA][SECURITY] Negotiated capabilities for peer $peerId: '
+            'localCapabilities=${localCapabilities.map((c) => c.name).toList()}, '
+            'remoteCapabilities=${plaintext.supportedCapabilities.map((c) => c.name).toList()}, '
+            'negotiatedCapabilities=${negotiatedCapabilities.map((c) => c.name).toList()}');
+
         final baseSession = activeSession ?? PeerSession(
           peerId: peerId,
           displayName: secSession.peerId, // best effort fallback
@@ -479,7 +484,16 @@ class MessagingNotifier extends Notifier<MessagingState> {
         );
 
         if (activeSession != null) {
-          if (activeSession.status == SessionStatus.connected && activeSession.endpointId == event.endpointId) {
+          print('[VANTRA][SECURITY] Checking early return: '
+              'activeSession.status=${activeSession.status.name}, '
+              'activeSession.endpointId=${activeSession.endpointId}, '
+              'activeSession.enabledCapabilities=${activeSession.enabledCapabilities?.map((c) => c.name).toList()}, '
+              'event.endpointId=${event.endpointId}');
+
+          if (activeSession.status == SessionStatus.connected &&
+              activeSession.enabledCapabilities != null &&
+              activeSession.endpointId == event.endpointId) {
+            print('[VANTRA][SECURITY] CapabilitiesExchange early return: already connected with capabilities! Discarding capabilities payload.');
             // Already negotiated. Just reply with ACK to clear remote queue.
             await _sendAck(event.endpointId, secSession, plaintext.messageId);
             return;
@@ -1735,7 +1749,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final capability = msg.type == 'IMAGE' ? VantraCapability.image : VantraCapability.file;
       final isSupported = session.enabledCapabilities?.contains(capability) ?? false;
       if (!isSupported) {
-        VantraLogger.log('[VANTRA][MESSAGING] Sharing type ${msg.type} not supported by peer ${msg.receiverId}');
+        VantraLogger.log('[VANTRA][MESSAGING] Sharing type ${msg.type} not supported by peer ${msg.receiverId}. '
+            'session.status=${session.status.name}, '
+            'session.isSecure=${session.isSecure}, '
+            'session.enabledCapabilities=${session.enabledCapabilities?.map((c) => c.name).toList()}');
         await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
         _inflightSends.remove(msg.messageId);
         return false;
