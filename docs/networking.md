@@ -2,8 +2,8 @@
 
 ## Phase Status
 
-*   **Current Phase:** Phase 9
-*   **Status:** Production Connection Lifecycle, Global Peer Discovery & App background suspension completed.
+*   **Current Phase:** Phase 14
+*   **Status:** Production lifecycle, app background suspension, V2 capability exchange, and chunked media transfer completed.
 
 ## Implemented
 - Nearby Connections API integration via `NearbyTransport` (P2P_POINT_TO_POINT strategy).

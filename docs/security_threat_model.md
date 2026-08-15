@@ -1,6 +1,6 @@
 # VANTRA — Security Threat Model
 
-This document outlines the security threats analyzed for VANTRA's peer-to-peer (P2P) communication architecture and specifies how Phase 4 mitigations protect the system.
+This document outlines the security threats analyzed for VANTRA's peer-to-peer (P2P) communication architecture and specifies how Phase 14 mitigations protect the system.
 
 ---
 
@@ -69,6 +69,10 @@ This document outlines the security threats analyzed for VANTRA's peer-to-peer (
 *   **Description:** The system's random number generator becomes predictable.
 *   **Phase 4 Mitigation:** Protected. The `cryptography` package utilizes native platform CSPRNGs. If platform entropy fails, the package throws an exception, refusing to generate keys.
 
-### 15. Protocol Downgrade Attack
-*   **Description:** An attacker sends plaintext Phase 3 packets to bypass cryptographic checks.
-*   **Phase 4 Mitigation:** Fully protected. VANTRA secure peers enforce strict protocol version checks. There is no automatic fallback from the secure protocol to plaintext. Any plaintext or unsupported version payload received is rejected, and the connection is closed.
+### 15. Protocol Downgrade Attack (MITM Version Spoofing)
+*   **Description:** An attacker intercepts the handshake and claims the peer only supports version 1 to force a downgrade to a lower security protocol.
+*   **Phase 14 Mitigation:** Fully protected.
+    *   *No Fallback from Secure to Plaintext*: There is no automatic fallback from the secure protocol to plaintext. Any plaintext message or unsupported version payload received is rejected, and the connection is closed.
+    *   *Version Negotiation Invariant*: Version ranges are validated. A V2 device will calculate a negotiated version of `2` when connecting to another V2 device.
+    *   *Downgrade Protection (Spoofing Detection)*: Once a V2 device establishes a peer relationship with another V2 device, it persists the peer's capability details. If the same peer subsequently attempts a connection claim representing itself as V1, the system flags the version downgrade discrepancy as a potential spoofing attempt, aborts the connection request, and refuses to derive session keys.
+

@@ -1,7 +1,9 @@
 # VANTRA — Security Architecture
 
-## Phase Status*   **Current Phase:** Phase 10
-*   **Status:** Auto-reconnection identity mismatch invariants and cryptographic signature checking completed.
+## Phase Status
+
+*   **Current Phase:** Phase 14
+*   **Status:** Auto-reconnection identity mismatch verification, V2 capabilities exchange negotiation, and chunked media transfer encryption invariants completed.
 
 ---
 
@@ -123,9 +125,29 @@ Replay protection is enforced cryptographically per-session using sequence verif
 
 ---
 
-## 6. Key Storage & Database Security Scope
+## 6. Version Negotiation & Capabilities Exchange Security
+
+Protocol V2 introduces version range checks and capability verification to protect against active manipulation:
+*   **Version Range Validation**: The min and max versions advertised in the handshake are verified. Any attempt by a remote peer to violate the version protocol rules (e.g. attempting to downgrade a previously verified V2 relationship to V1) is detected, connection setup is aborted, and the transport link is immediately closed.
+*   **Capabilities Exchange Integrity**: The `CapabilitiesExchange` payload is sent encrypted using the derived session keys.
+    *   Receipt and calculation of `enabledCapabilities` occur asynchronously.
+    *   Both devices must process `CapabilitiesExchange` and set `enabledCapabilities` before the session is authorized to transition to `SessionStatus.connected`.
+    *   Non-handshake packets (like ACKs or recovery messages) are blocked from promoting the session status to `connected` without capabilities, preventing bypass of capability constraints.
+
+---
+
+## 7. Media and File Chunk Encryption Security
+
+Arbitrary file and image transfers utilize the exact same secure channel and cryptographic bounds as text messages:
+*   **Segmented Encryption**: Rather than encrypting the file in its entirety and sending a single giant packet, VANTRA divides the file into 16 KB segments. Each segment is packed as a `MediaChunk` message and encrypted separately as a `VantraPlaintext` envelope.
+*   **Counter-Based Nonces**: Every individual chunk is encrypted with a unique counter-based nonce derived from the current session's sequence counter. This guarantees that key-nonce reuse is impossible, preventing multi-chunk keystream extraction.
+*   **Integrity Hash (SHA-256)**: During the initial `OFFER` exchange, the sender transmits the SHA-256 integrity hash of the complete file. Once all chunks are decrypted and reassembled on the receiver's end, the receiver computes the SHA-256 hash of the final file. The file is only committed to final storage and exposed to the user if the reassembled file's hash matches the `sha256` value in the `OFFER`. If a mismatch is detected, the files are deleted immediately.
+
+---
+
+## 8. Key Storage & Database Security Scope
 
 *   **Long-Term Keys:** Stored in Android Keystore via `flutter_secure_storage`.
 *   **Session Keys:** Kept strictly in memory. They are destroyed immediately when a peer disconnects or when the application process terminates.
 *   **Defensive Recovery:** If secure storage is corrupted or unreadable, VANTRA generates a fresh Ed25519 identity keypair automatically to prevent app crashes.
-*   **SQLite Plaintext-at-Rest:** Database security is out of scope for Phase 7. Messages are persisted in plaintext SQLite databases in the application sandbox. Plaintext-at-rest protection (e.g. SQLCipher) is explicitly deferred to later phases.
+*   **SQLite Plaintext-at-Rest:** Database security is out of scope for V2. Messages and files are persisted in plaintext SQLite databases in the application sandbox. Plaintext-at-rest protection (e.g. SQLCipher) is explicitly deferred to later phases.
