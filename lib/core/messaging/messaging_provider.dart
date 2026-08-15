@@ -164,6 +164,20 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   double getTransferProgress(String transferId) => _transferProgress[transferId] ?? 0.0;
 
+  bool hasActiveSecureTransport(String peerId) {
+    final session = state.sessions[peerId];
+    final secSession = _securitySessions[peerId];
+
+    if (session == null || secSession == null) return false;
+    if (!session.isSecure) return false;
+    if (state.activeEndpointId == null) return false;
+    if (state.connectionStatus != ConnectionStatus.connected) return false;
+    if (session.endpointId != state.activeEndpointId) return false;
+    if (secSession.endpointId != state.activeEndpointId) return false;
+
+    return true;
+  }
+
   // Connection Request Idempotency Tracking
   final Set<String> _acceptedEndpoints = {};
   final Set<String> _rejectedEndpoints = {};
@@ -304,7 +318,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         print('[VANTRA][SESSION] sendCounter=${session.sendSequence}');
         print('[VANTRA][SESSION] receiveCounter=${session.receiveSequence}');
         print('[VANTRA][SESSION] endpoint=${session.endpointId}');
-        print('[VANTRA][SESSION] keyAvailable=${session.receiveKey != null}');
+        print('[VANTRA][SESSION] keyAvailable=true');
         decryptedBytes = await _cryptoService.decryptBytes(
           secretKey: session.receiveKey,
           nonce: event.nonce,
@@ -331,6 +345,27 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
       session.updateReceiveSequence(plaintext.sequence);
       print('[VANTRA][PIPELINE] MESSAGE_RECEIVED endpoint=${event.endpointId} peerId=$peerId');
+
+      final currentSession = state.sessions[peerId];
+      if (plaintext is! DomainCapabilitiesExchange &&
+          currentSession != null &&
+          session.endpointId == event.endpointId &&
+          currentSession.endpointId == event.endpointId &&
+          (currentSession.status != SessionStatus.connected || !currentSession.isSecure)) {
+        print('[VANTRA][SESSION][RECOVERY]\n'
+              'Valid encrypted message received for peer $peerId on endpoint ${event.endpointId}.\n'
+              'Restoring session status to connected.');
+        _stateUpdateSource = '_handleIncomingEncryptedMessage_recovery';
+        state = state.copyWith(
+          sessions: {
+            ...state.sessions,
+            peerId: currentSession.copyWith(
+              status: SessionStatus.connected,
+              isSecure: true,
+            ),
+          },
+        );
+      }
 
       final repository = ref.read(messagingRepositoryProvider);
 
@@ -1260,6 +1295,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
           _backoffTimers.remove(peerId);
           print('[VANTRA][PIPELINE] STATE_INVALIDATION source=_handleConnectionUpdate_backoff endpoint=${update.endpointId} peerId=$peerId reason=Connection update disconnected - cleared backoff timer');
           if (currentPeerSession != null) {
+            _stateUpdateSource = '_handleConnectionUpdate';
             state = state.copyWith(
               sessions: {
                 ...state.sessions,
@@ -1275,6 +1311,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       newEndpointToPeerId.remove(update.endpointId);
 
       final bool isCurrentEndpoint = (state.activeEndpointId == update.endpointId);
+      _stateUpdateSource = '_handleConnectionUpdate';
       state = state.copyWith(
         connectionStatus: isCurrentEndpoint ? update.status : state.connectionStatus,
         clearActiveEndpoint: isCurrentEndpoint,
@@ -1282,6 +1319,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         clearActiveConnectionRequest: isCurrentEndpoint,
       );
     } else {
+      _stateUpdateSource = '_handleConnectionUpdate';
       state = state.copyWith(
         connectionStatus: update.status,
       );
@@ -1507,7 +1545,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         if (pending.isEmpty) break;
 
         final msg = pending.first;
-        final isConnected = session?.status == SessionStatus.connected;
+        final isConnected = session?.status == SessionStatus.connected || hasActiveSecureTransport(peerId);
         final isSecure = session?.isSecure == true;
         final secSessionExists = secSession != null;
 
@@ -1731,7 +1769,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       print('[VANTRA][SESSION] sendCounter=${secSession.sendSequence}');
       print('[VANTRA][SESSION] receiveCounter=${secSession.receiveSequence}');
       print('[VANTRA][SESSION] endpoint=${session.endpointId}');
-      print('[VANTRA][SESSION] keyAvailable=${secSession.sendKey != null}');
+      print('[VANTRA][SESSION] keyAvailable=true');
       final encrypted = await _cryptoService.encryptBytes(
         secretKey: secSession.sendKey,
         sessionSalt: secSession.sessionSalt,
@@ -2146,6 +2184,66 @@ class MessagingNotifier extends Notifier<MessagingState> {
       mac: Uint8List.fromList(encrypted.mac),
       protocolVersion: kCurrentProtocolVersion,
     );
+  }
+
+  String _stateUpdateSource = 'unknown';
+
+  @override
+  set state(MessagingState value) {
+    final oldState = super.state;
+    super.state = value;
+    final source = _stateUpdateSource != 'unknown' ? _stateUpdateSource : _getCallingMethodName();
+    _logStateTransition(oldState, value, source);
+    _stateUpdateSource = 'unknown';
+  }
+
+  String _getCallingMethodName() {
+    final trace = StackTrace.current.toString();
+    final lines = trace.split('\n');
+    for (final line in lines) {
+      if (line.contains('state=') || line.contains('_getCallingMethodName') || line.contains('_logStateTransition')) {
+        continue;
+      }
+      final match = RegExp(r'MessagingNotifier\.([a-zA-Z0-9_]+)').firstMatch(line);
+      if (match != null) {
+        return match.group(1) ?? 'unknown';
+      }
+    }
+    return 'unknown';
+  }
+
+  void _logStateTransition(MessagingState oldState, MessagingState newState, String source) {
+    final allPeerIds = {...oldState.sessions.keys, ...newState.sessions.keys};
+    for (final peerId in allPeerIds) {
+      final oldSession = oldState.sessions[peerId];
+      final newSession = newState.sessions[peerId];
+
+      final oldTransport = oldSession?.status == SessionStatus.connected ||
+          (oldSession != null && oldSession.isSecure && oldState.activeEndpointId == oldSession.endpointId);
+      final newTransport = newSession?.status == SessionStatus.connected ||
+          (newSession != null && newSession.isSecure && newState.activeEndpointId == newSession.endpointId);
+
+      final oldOnline = oldSession?.status == SessionStatus.connected;
+      final newOnline = newSession?.status == SessionStatus.connected;
+
+      if (oldTransport != newTransport || 
+          oldOnline != newOnline || 
+          oldSession?.endpointId != newSession?.endpointId ||
+          oldSession?.status != newSession?.status) {
+        
+        print('[VANTRA][STATE][WRITE]');
+        print('source=$source');
+        print('peerId=$peerId');
+        print('endpoint=${newSession?.endpointId ?? oldSession?.endpointId ?? "none"}');
+        print('oldTransport=$oldTransport');
+        print('newTransport=$newTransport');
+        print('oldOnline=$oldOnline');
+        print('newOnline=$newOnline');
+        print('sessionEndpoint=${newSession?.endpointId ?? oldSession?.endpointId ?? "none"}');
+        print('activeEndpoint=${newState.activeEndpointId ?? "none"}');
+        print('connectionCallbackStatus=${newState.connectionStatus.name}');
+      }
+    }
   }
 
   List<int> _hexDecode(String hex) {

@@ -21,6 +21,7 @@ import 'package:vantra/core/database/app_database.dart';
 import 'package:vantra/core/messaging/messaging_repository.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:vantra/core/security/security_session.dart';
 import 'test_fakes.dart';
 import 'package:vantra/core/networking/nearby_connection_service.dart';
 import 'package:vantra/core/peers/peer_provider.dart';
@@ -2552,6 +2553,339 @@ void main() {
       expect(recoveredSession?.status, SessionStatus.connected);
       expect(recoveredSession?.endpointId, 'EP_ASYNC');
       expect(container.read(messagingStateProvider).activeEndpointId, 'EP_ASYNC');
+    });
+
+    test('TEST A & TEST E - Secure active session overrides handshaking UI state and peerOnline=false does not imply transportConnected=false', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final peerId = const Uuid().v4();
+
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'TestPeer', publicKey: publicKeyHex, fingerprint: fingerprint);
+
+      final localKeyPair = await cryptoService.generateEphemeralKeyPair();
+      final remoteKeyPair = await cryptoService.generateEphemeralKeyPair();
+      final remotePub = await remoteKeyPair.extractPublicKey();
+      final derivedKeys = await cryptoService.deriveSessionKeys(
+        localEphemeralKeyPair: localKeyPair,
+        remoteEphemeralPublicKeyBytes: remotePub.bytes,
+      );
+
+      final secSession = SecuritySession(
+        peerId: peerId,
+        endpointId: 'EP1',
+        sessionId: derivedKeys.sessionId,
+        sendKey: derivedKeys.sendKey,
+        receiveKey: derivedKeys.receiveKey,
+        sessionSalt: derivedKeys.sessionSalt,
+        remoteIdentityPublicKey: publicKeyHex,
+        remoteFingerprint: fingerprint,
+      );
+      notifier.securitySessions[peerId] = secSession;
+
+      final session = PeerSession(
+        peerId: peerId,
+        displayName: 'TestPeer',
+        endpointId: 'EP1',
+        status: SessionStatus.handshaking,
+        isSecure: true,
+        publicKey: publicKeyHex,
+        fingerprint: fingerprint,
+      );
+
+      notifier.state = notifier.state.copyWith(
+        sessions: {
+          ...notifier.state.sessions,
+          peerId: session,
+        },
+        activeEndpointId: 'EP1',
+        connectionStatus: ConnectionStatus.connected,
+      );
+
+      // Verify transportConnected helper is true
+      expect(notifier.hasActiveSecureTransport(peerId), isTrue);
+
+      // Verify peerOnline is false (due to handshaking status)
+      expect(notifier.state.sessions[peerId]?.status == SessionStatus.connected, isFalse);
+    });
+
+    test('TEST B - Stale EP_OLD disconnect cannot invalidate EP_NEW', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final peerId = const Uuid().v4();
+
+      final activeSession = PeerSession(
+        peerId: peerId,
+        displayName: 'ActivePeer',
+        endpointId: 'EP_NEW',
+        status: SessionStatus.connected,
+        isSecure: true,
+      );
+
+      final secSession = SecuritySession(
+        peerId: peerId,
+        endpointId: 'EP_NEW',
+        sessionId: 'session-new',
+        sendKey: SecretKey(List<int>.filled(32, 1)),
+        receiveKey: SecretKey(List<int>.filled(32, 1)),
+        sessionSalt: Uint8List(16),
+        remoteIdentityPublicKey: 'dummy-pub',
+        remoteFingerprint: 'dummy-fp',
+      );
+
+      notifier.securitySessions[peerId] = secSession;
+      notifier.state = notifier.state.copyWith(
+        sessions: {
+          ...notifier.state.sessions,
+          peerId: activeSession,
+        },
+        endpointToPeerId: {
+          'EP_NEW': peerId,
+          'EP_OLD': peerId,
+        },
+        activeEndpointId: 'EP_NEW',
+        connectionStatus: ConnectionStatus.connected,
+      );
+
+      // Trigger a disconnect update for EP_OLD
+      fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+        endpointId: 'EP_OLD',
+        endpointName: 'ActivePeer',
+        status: ConnectionStatus.disconnected,
+      ));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final currentSession = container.read(messagingStateProvider).sessions[peerId];
+      expect(currentSession?.status, SessionStatus.connected);
+      expect(currentSession?.isSecure, isTrue);
+      expect(currentSession?.endpointId, 'EP_NEW');
+      expect(container.read(messagingStateProvider).activeEndpointId, 'EP_NEW');
+    });
+
+    test('TEST C - Valid encrypted inbound message recovers state', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final peerId = const Uuid().v4();
+      final localId = container.read(localIdentityStateProvider);
+
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'RecoveryPeer', publicKey: publicKeyHex, fingerprint: fingerprint);
+
+      final localKeyPair = await cryptoService.generateEphemeralKeyPair();
+      final remoteKeyPair = await cryptoService.generateEphemeralKeyPair();
+      final remotePub = await remoteKeyPair.extractPublicKey();
+      final derivedKeys = await cryptoService.deriveSessionKeys(
+        localEphemeralKeyPair: localKeyPair,
+        remoteEphemeralPublicKeyBytes: remotePub.bytes,
+      );
+
+      final secSession = SecuritySession(
+        peerId: peerId,
+        endpointId: 'EP1',
+        sessionId: derivedKeys.sessionId,
+        sendKey: derivedKeys.sendKey,
+        receiveKey: derivedKeys.receiveKey,
+        sessionSalt: derivedKeys.sessionSalt,
+        remoteIdentityPublicKey: publicKeyHex,
+        remoteFingerprint: fingerprint,
+      );
+      notifier.securitySessions[peerId] = secSession;
+
+      final session = PeerSession(
+        peerId: peerId,
+        displayName: 'RecoveryPeer',
+        endpointId: 'EP1',
+        status: SessionStatus.handshaking,
+        isSecure: true,
+        publicKey: publicKeyHex,
+        fingerprint: fingerprint,
+      );
+      notifier.state = notifier.state.copyWith(
+        sessions: {
+          ...notifier.state.sessions,
+          peerId: session,
+        },
+        endpointToPeerId: {
+          'EP1': peerId,
+        },
+        activeEndpointId: 'EP1',
+        connectionStatus: ConnectionStatus.connected,
+      );
+
+      final inboundMsg = DomainTextMessage(
+        messageId: const Uuid().v4(),
+        sessionId: derivedKeys.sessionId,
+        sequence: 1,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: peerId,
+        receiverId: localId.peerId,
+        content: 'Hello, I am recovering',
+      );
+      final plainBytes = codec.encodePlaintext(inboundMsg);
+      final encrypted = await cryptoService.encryptBytes(
+        secretKey: derivedKeys.receiveKey,
+        sessionSalt: derivedKeys.sessionSalt,
+        sequence: 1,
+        messageId: inboundMsg.messageId,
+        plaintextBytes: plainBytes,
+      );
+
+      fakeTransport.triggerIncomingPayload('EP1', codec.encodeWireEnvelope(DomainEncryptedEnvelope(
+        protocolVersion: 2,
+        messageId: inboundMsg.messageId,
+        sessionId: derivedKeys.sessionId,
+        sequence: 1,
+        nonce: Uint8List.fromList(encrypted.nonce),
+        ciphertext: Uint8List.fromList(encrypted.ciphertext),
+        mac: Uint8List.fromList(encrypted.mac),
+      )));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final recoveredSession = container.read(messagingStateProvider).sessions[peerId];
+      expect(recoveredSession?.status, SessionStatus.connected);
+      expect(recoveredSession?.isSecure, isTrue);
+    });
+
+    test('TEST D - Valid secure active session permits outbound sending', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final repo = container.read(messagingRepositoryProvider);
+      final peerId = const Uuid().v4();
+
+      final idKeyPair = await cryptoService.generateIdentityKeyPair();
+      final idPub = await idKeyPair.extractPublicKey();
+      final publicKeyHex = idPub.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final fingerprint = await cryptoService.computeFingerprint(idPub.bytes);
+
+      await repo.upsertPeer(peerId, 'SendPeer', publicKey: publicKeyHex, fingerprint: fingerprint);
+
+      final localKeyPair = await cryptoService.generateEphemeralKeyPair();
+      final remoteKeyPair = await cryptoService.generateEphemeralKeyPair();
+      final remotePub = await remoteKeyPair.extractPublicKey();
+      final derivedKeys = await cryptoService.deriveSessionKeys(
+        localEphemeralKeyPair: localKeyPair,
+        remoteEphemeralPublicKeyBytes: remotePub.bytes,
+      );
+
+      final secSession = SecuritySession(
+        peerId: peerId,
+        endpointId: 'EP1',
+        sessionId: derivedKeys.sessionId,
+        sendKey: derivedKeys.sendKey,
+        receiveKey: derivedKeys.receiveKey,
+        sessionSalt: derivedKeys.sessionSalt,
+        remoteIdentityPublicKey: publicKeyHex,
+        remoteFingerprint: fingerprint,
+      );
+      notifier.securitySessions[peerId] = secSession;
+
+      final session = PeerSession(
+        peerId: peerId,
+        displayName: 'SendPeer',
+        endpointId: 'EP1',
+        status: SessionStatus.handshaking,
+        isSecure: true,
+        publicKey: publicKeyHex,
+        fingerprint: fingerprint,
+      );
+      notifier.state = notifier.state.copyWith(
+        sessions: {
+          ...notifier.state.sessions,
+          peerId: session,
+        },
+        endpointToPeerId: {
+          'EP1': peerId,
+        },
+        activeEndpointId: 'EP1',
+        connectionStatus: ConnectionStatus.connected,
+      );
+
+      await notifier.sendTextMessage(peerId, 'Sending during handshake');
+
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      final dbMsgs = await repo.getConversation(container.read(localIdentityStateProvider).peerId, peerId);
+      expect(dbMsgs.length, 1);
+      expect(dbMsgs[0].text, 'Sending during handshake');
+      expect(dbMsgs[0].status, MessageStatus.sent);
+    });
+
+    test('TEST F - Stale secure session without active transport must NOT be accepted', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final peerId = const Uuid().v4();
+
+      final session = PeerSession(
+        peerId: peerId,
+        displayName: 'StalePeer',
+        endpointId: 'EP1',
+        status: SessionStatus.handshaking,
+        isSecure: true,
+      );
+      final secSession = SecuritySession(
+        peerId: peerId,
+        endpointId: 'EP1',
+        sessionId: 'stale-session',
+        sendKey: SecretKey(List<int>.filled(32, 1)),
+        receiveKey: SecretKey(List<int>.filled(32, 1)),
+        sessionSalt: Uint8List(16),
+        remoteIdentityPublicKey: 'dummy-pub',
+        remoteFingerprint: 'dummy-fp',
+      );
+
+      notifier.securitySessions[peerId] = secSession;
+      notifier.state = notifier.state.copyWith(
+        sessions: {
+          ...notifier.state.sessions,
+          peerId: session,
+        },
+        activeEndpointId: null,
+        connectionStatus: ConnectionStatus.disconnected,
+      );
+
+      expect(notifier.hasActiveSecureTransport(peerId), isFalse);
+    });
+
+    test('TEST G - EP_OLD secure session must not authorize EP_NEW sending', () async {
+      final notifier = container.read(messagingStateProvider.notifier);
+      final peerId = const Uuid().v4();
+
+      final session = PeerSession(
+        peerId: peerId,
+        displayName: 'MismatchedPeer',
+        endpointId: 'EP_OLD',
+        status: SessionStatus.handshaking,
+        isSecure: true,
+      );
+      final secSession = SecuritySession(
+        peerId: peerId,
+        endpointId: 'EP_OLD',
+        sessionId: 'mismatched-session',
+        sendKey: SecretKey(List<int>.filled(32, 1)),
+        receiveKey: SecretKey(List<int>.filled(32, 1)),
+        sessionSalt: Uint8List(16),
+        remoteIdentityPublicKey: 'dummy-pub',
+        remoteFingerprint: 'dummy-fp',
+      );
+
+      notifier.securitySessions[peerId] = secSession;
+      notifier.state = notifier.state.copyWith(
+        sessions: {
+          ...notifier.state.sessions,
+          peerId: session,
+        },
+        activeEndpointId: 'EP_NEW',
+        connectionStatus: ConnectionStatus.connected,
+      );
+
+      expect(notifier.hasActiveSecureTransport(peerId), isFalse);
     });
   });
 }

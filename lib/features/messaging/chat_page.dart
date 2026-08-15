@@ -273,13 +273,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
     final peerProfile = peerProfileAsync.value;
     final displayName = peerProfile?.effectiveName ?? session?.displayName ?? 'Peer ${widget.peerId.length >= 6 ? widget.peerId.substring(0, 6) : widget.peerId}';
-    final isConnected = session?.status == SessionStatus.connected;
+    final messagingNotifier = ref.read(messagingStateProvider.notifier);
+    final isConnected = session?.status == SessionStatus.connected ||
+        messagingNotifier.hasActiveSecureTransport(widget.peerId);
     final isBlocked = peerProfile?.isBlocked ?? false;
     final isTrusted = peerProfile?.isTrusted ?? (session?.trustState == PeerTrustState.trusted);
     final isSecure = session?.isSecure == true;
     final isConnectedSecure = isConnected && isSecure;
 
-    print('[VANTRA][CHAT] STATE peerId=${widget.peerId} transportConnected=$isConnected sessionExists=${session != null} sessionSecure=$isSecure peerOnline=${session?.status == SessionStatus.connected} isTrusted=$isTrusted isBlocked=$isBlocked endpoint=${session?.endpointId}');
+    print('[VANTRA][STATE][READ]\n'
+          'ChatPage peerId=${widget.peerId}\n'
+          'transportConnected=$isConnected\n'
+          'peerOnline=${session?.status == SessionStatus.connected}\n'
+          'sessionExists=${session != null}\n'
+          'sessionSecure=$isSecure\n'
+          'endpoint=${session?.endpointId ?? "none"}');
 
     if (isBlocked && _wasBlocked != true) {
       VantraLogger.log('[VANTRA][CHAT] SEND BLOCKED reason=INPUT_DISABLED');
