@@ -536,6 +536,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                               File(msg.mediaPath!),
                                               width: 200,
                                               fit: BoxFit.cover,
+                                              cacheWidth: 400,
                                               errorBuilder: (context, error, stackTrace) => Container(
                                                 width: 200,
                                                 height: 150,

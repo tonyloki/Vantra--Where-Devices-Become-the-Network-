@@ -1813,7 +1813,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         return false;
       }
 
-      final chunkSize = 16384;
+      final chunkSize = 131072;
       final totalChunks = (msg.fileSize! / chunkSize).ceil();
 
       print('[VANTRA][MEDIA][SEND_ATTEMPT]\n'
@@ -1987,6 +1987,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
           _transferProgress[msg.transferId!] = (i + 1) / totalChunks;
           state = state.copyWith();
+          await Future.delayed(const Duration(milliseconds: 5));
         }
       } catch (e) {
         VantraLogger.log('[VANTRA][MESSAGING] Chunk streaming interrupted for transferId=${msg.transferId}: $e');

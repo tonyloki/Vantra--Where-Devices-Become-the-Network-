@@ -924,7 +924,7 @@ void main() {
         expect(offerPlaintext, isNotNull);
         expect(offerPlaintext!.type, DomainMediaControlType.offer);
         expect(offerPlaintext.caption, 'Check this image!');
-        expect(offerPlaintext.totalChunks, 4); // 50 KB / 16 KB = 4 chunks
+        expect(offerPlaintext.totalChunks, 1); // 50 KB / 128 KB = 1 chunk
         
         // Reply with ACCEPT
         final acceptMsgId = const Uuid().v4();
@@ -961,15 +961,15 @@ void main() {
         
         fakeTransport.triggerIncomingPayload('EP_V2', codec.encodeWireEnvelope(acceptEnvelope));
         
-        // Await the sender completing chunk transmission (wait for 8 total sent payloads)
+        // Await the sender completing chunk transmission (wait for 5 total sent payloads)
         int waitAttempts = 0;
-        while (fakeTransport.sentPayloads.length < 8 && waitAttempts < 40) {
+        while (fakeTransport.sentPayloads.length < 5 && waitAttempts < 40) {
           await Future.delayed(const Duration(milliseconds: 50));
           waitAttempts++;
         }
         
-        // Verify all 4 chunks are sent along with Handshake, CapabilitiesExchange, ACK, and OFFER
-        expect(fakeTransport.sentPayloads.length, 8);
+        // Verify 1 chunk is sent along with Handshake, CapabilitiesExchange, ACK, and OFFER
+        expect(fakeTransport.sentPayloads.length, 5);
         
       } finally {
         if (await tempFile.exists()) {
@@ -2975,10 +2975,12 @@ void main() {
       )));
 
       waitLimit = 20;
-      while (fakeTransport.sentPayloads.length < 3 && waitLimit-- > 0) {
+      while (fakeTransport.sentPayloads.length < 2 && waitLimit-- > 0) {
         await Future.delayed(const Duration(milliseconds: 20));
       }
-      expect(fakeTransport.sentPayloads.length, 3);
+      expect(fakeTransport.sentPayloads.length, 2);
+
+      await Future.delayed(const Duration(milliseconds: 50));
 
       final sentMsg = await repo.getMessageById(imageMsg.messageId);
       expect(sentMsg?.status, MessageStatus.sent);
