@@ -2,8 +2,8 @@
 
 ## Phase Status
 
-*   **Current Phase:** Phase 14
-*   **Status:** Capabilities-based V2 version negotiation, connection recovery protection, chunked E2E encrypted media transfer (OFFER/ACCEPT protocol), and SQLite file reassembly engine completed.
+*   **Current Phase:** Production Hardening
+*   **Status:** Capabilities-based V2 version negotiation, connection recovery protection, chunked E2E encrypted media transfer (OFFER/ACCEPT protocol), and SQLite file reassembly engine completed. Production hardening audit issues BUG-01 to BUG-14 fully resolved and verified.
 
 ---
 
@@ -185,7 +185,7 @@ message MediaChunk {
 
 ## 2. Sequence, Replay & Session Validation
 
-*   **Monotonic Counter Validation:** Incoming packets must have a `sequence` number strictly greater than the last successfully processed sequence number.
+*   **Sliding Window Replay Protection:** Incoming packets must pass a 64-packet sliding window check: the sequence number must be greater than `receiveSequence - 64`, and it must not have been previously received (no duplicates).
 *   **Retransmission Invariant:** Retransmissions of a pending message (e.g. if the original ACK was lost) must use the **same logical messageId** but must be encrypted using a **new sequence number and nonce** under the current active session. This allows the packet to pass replay protection, and then trigger duplicate-message handling.
 
 ---

@@ -2,8 +2,8 @@
 
 ## Phase Status
 
-*   **Current Phase:** Phase 14
-*   **Status:** Auto-reconnection identity mismatch verification, V2 capabilities exchange negotiation, and chunked media transfer encryption invariants completed.
+*   **Current Phase:** Production Hardening
+*   **Status:** Auto-reconnection identity mismatch verification, V2 capabilities exchange negotiation, and chunked media transfer encryption invariants completed. Production hardening audit issues BUG-01 to BUG-14 fully resolved and verified.
 
 ---
 
@@ -117,8 +117,8 @@ Replay protection is enforced cryptographically per-session using sequence verif
 *   **Sequence Integration:** The sequence number is included inside the decrypted `VantraPlaintext` protobuf payload (authenticated and encrypted) so it cannot be altered by an attacker.
 *   **Verification Rules:**
     *   The decrypted `sessionId` must match the current active session.
-    *   The decrypted `sequence` must be strictly greater than the last successfully processed `receiveSequence`.
-    *   If `sequence <= receiveSequence` or the `sessionId` is invalid, the packet is discarded immediately as stale or replayed.
+    *   The decrypted `sequence` must pass a 64-packet sliding window check: `sequence > receiveSequence - 64` and the sequence number must not be a duplicate (already received).
+    *   If the sequence is stale or duplicate, or the `sessionId` is invalid, the packet is discarded immediately as stale or replayed.
 *   **ACK Exemption:** To support retransmissions when the original ACK was lost in transit:
     *   Retransmitted messages carry the **same messageId** but a **new sequence number and nonce** under the current session.
     *   This bypasses replay protection checks, allowing the duplicate message check to locate the duplicate message ID in SQLite, discard the duplicate payload to avoid duplicates, and immediately re-transmit the encrypted ACK to clear the sender's queue.

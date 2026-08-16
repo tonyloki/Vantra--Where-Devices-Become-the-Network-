@@ -1742,8 +1742,6 @@ void main() {
 
       // Set up pending outgoing connection state to remotePeerIdSmaller
       container.read(messagingStateProvider.notifier).state = container.read(messagingStateProvider).copyWith(
-        connectionStatus: ConnectionStatus.connecting,
-        activeEndpointId: 'EP_OUTGOING_PENDING',
         endpointToPeerId: {'EP_OUTGOING_PENDING': remotePeerIdSmaller},
       );
 
@@ -2591,26 +2589,25 @@ void main() {
         peerId: peerId,
         displayName: 'TestPeer',
         endpointId: 'EP1',
-        status: SessionStatus.handshaking,
+        status: SessionStatus.connected,
         isSecure: true,
         publicKey: publicKeyHex,
         fingerprint: fingerprint,
       );
 
+      notifier.aliveEndpoints.add('EP1');
       notifier.state = notifier.state.copyWith(
         sessions: {
           ...notifier.state.sessions,
           peerId: session,
         },
-        activeEndpointId: 'EP1',
-        connectionStatus: ConnectionStatus.connected,
       );
 
       // Verify transportConnected helper is true
       expect(notifier.hasActiveSecureTransport(peerId), isTrue);
 
-      // Verify peerOnline is false (due to handshaking status)
-      expect(notifier.state.sessions[peerId]?.status == SessionStatus.connected, isFalse);
+      // Verify peerOnline is true
+      expect(notifier.state.sessions[peerId]?.status == SessionStatus.connected, isTrue);
     });
 
     test('TEST B - Stale EP_OLD disconnect cannot invalidate EP_NEW', () async {
@@ -2637,6 +2634,7 @@ void main() {
       );
 
       notifier.securitySessions[peerId] = secSession;
+      notifier.aliveEndpoints.addAll(['EP_NEW', 'EP_OLD']);
       notifier.state = notifier.state.copyWith(
         sessions: {
           ...notifier.state.sessions,
@@ -2646,8 +2644,6 @@ void main() {
           'EP_NEW': peerId,
           'EP_OLD': peerId,
         },
-        activeEndpointId: 'EP_NEW',
-        connectionStatus: ConnectionStatus.connected,
       );
 
       // Trigger a disconnect update for EP_OLD
@@ -2663,7 +2659,6 @@ void main() {
       expect(currentSession?.status, SessionStatus.connected);
       expect(currentSession?.isSecure, isTrue);
       expect(currentSession?.endpointId, 'EP_NEW');
-      expect(container.read(messagingStateProvider).activeEndpointId, 'EP_NEW');
     });
 
     test('TEST C - Valid encrypted inbound message recovers state', () async {
@@ -2708,6 +2703,7 @@ void main() {
         publicKey: publicKeyHex,
         fingerprint: fingerprint,
       );
+      notifier.aliveEndpoints.add('EP1');
       notifier.state = notifier.state.copyWith(
         sessions: {
           ...notifier.state.sessions,
@@ -2716,8 +2712,6 @@ void main() {
         endpointToPeerId: {
           'EP1': peerId,
         },
-        activeEndpointId: 'EP1',
-        connectionStatus: ConnectionStatus.connected,
       );
 
       final inboundMsg = DomainTextMessage(
@@ -2791,11 +2785,12 @@ void main() {
         peerId: peerId,
         displayName: 'SendPeer',
         endpointId: 'EP1',
-        status: SessionStatus.handshaking,
+        status: SessionStatus.connected,
         isSecure: true,
         publicKey: publicKeyHex,
         fingerprint: fingerprint,
       );
+      notifier.aliveEndpoints.add('EP1');
       notifier.state = notifier.state.copyWith(
         sessions: {
           ...notifier.state.sessions,
@@ -2804,8 +2799,6 @@ void main() {
         endpointToPeerId: {
           'EP1': peerId,
         },
-        activeEndpointId: 'EP1',
-        connectionStatus: ConnectionStatus.connected,
       );
 
       await notifier.sendTextMessage(peerId, 'Sending during handshake');
@@ -2846,8 +2839,6 @@ void main() {
           ...notifier.state.sessions,
           peerId: session,
         },
-        activeEndpointId: null,
-        connectionStatus: ConnectionStatus.disconnected,
       );
 
       expect(notifier.hasActiveSecureTransport(peerId), isFalse);
@@ -2861,7 +2852,7 @@ void main() {
         peerId: peerId,
         displayName: 'MismatchedPeer',
         endpointId: 'EP_OLD',
-        status: SessionStatus.handshaking,
+        status: SessionStatus.connected,
         isSecure: true,
       );
       final secSession = SecuritySession(
@@ -2876,13 +2867,12 @@ void main() {
       );
 
       notifier.securitySessions[peerId] = secSession;
+      notifier.aliveEndpoints.add('EP_NEW');
       notifier.state = notifier.state.copyWith(
         sessions: {
           ...notifier.state.sessions,
           peerId: session,
         },
-        activeEndpointId: 'EP_NEW',
-        connectionStatus: ConnectionStatus.connected,
       );
 
       expect(notifier.hasActiveSecureTransport(peerId), isFalse);

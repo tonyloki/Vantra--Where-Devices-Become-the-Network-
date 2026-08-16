@@ -107,26 +107,31 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
   }
 
   Future<void> recoverSentMessages() async {
-    await (update(messages)..where((t) => t.status.equals(MessageStatus.sent.name)))
+    await (update(messages)
+          ..where((t) =>
+              t.status.equals(MessageStatus.sent.name) |
+              t.status.equals(MessageStatus.sending.name)))
         .write(const MessagesCompanion(
       status: Value(MessageStatus.pending),
     ));
   }
 
   Future<void> incrementRetryCount(String messageId, {int maxAttempts = 5}) async {
-    final msg = await getMessageById(messageId);
-    if (msg == null) return;
-
-    final newRetryCount = msg.retryCount + 1;
     final now = DateTime.now().millisecondsSinceEpoch;
-    final isFailed = newRetryCount >= maxAttempts;
-
-    await (update(messages)..where((t) => t.messageId.equals(messageId)))
-        .write(MessagesCompanion(
-      retryCount: Value(newRetryCount),
-      lastAttempt: Value(now),
-      status: Value(isFailed ? MessageStatus.failed : MessageStatus.pending),
-    ));
+    await customUpdate(
+      'UPDATE messages SET '
+      '  retry_count = retry_count + 1, '
+      '  last_attempt = ?, '
+      '  status = CASE WHEN retry_count + 1 >= ? THEN ? ELSE status END '
+      'WHERE message_id = ?',
+      variables: [
+        Variable.withInt(now),
+        Variable.withInt(maxAttempts),
+        Variable.withString(MessageStatus.failed.name),
+        Variable.withString(messageId),
+      ],
+      updates: {messages},
+    );
   }
 
   Future<Message?> getMessageByTransferId(String transferId) {

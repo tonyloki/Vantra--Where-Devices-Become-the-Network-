@@ -23,12 +23,18 @@ class CanonicalEncoder {
 
     // 3. peerId (length-prefixed string)
     final peerIdBytes = utf8.encode(peerId);
+    if (peerIdBytes.length > 65535) {
+      throw ArgumentError('peerId exceeds maximum length of 65535 bytes');
+    }
     final peerIdLen = ByteData(2)..setUint16(0, peerIdBytes.length, Endian.big);
     builder.add(peerIdLen.buffer.asUint8List());
     builder.add(peerIdBytes);
 
     // 4. displayName (length-prefixed string)
     final displayNameBytes = utf8.encode(displayName);
+    if (displayNameBytes.length > 65535) {
+      throw ArgumentError('displayName exceeds maximum length of 65535 bytes');
+    }
     final displayNameLen = ByteData(2)..setUint16(0, displayNameBytes.length, Endian.big);
     builder.add(displayNameLen.buffer.asUint8List());
     builder.add(displayNameBytes);

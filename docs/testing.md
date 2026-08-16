@@ -2,23 +2,26 @@
 
 ## Phase Status
 
-*   **Current Phase:** Phase 14
-*   **Status:** Comprehensive automated testing suite (113 tests) and manual multi-device image/file verification guidelines completed.
+*   **Current Phase:** Production Hardening
+*   **Status:** Comprehensive automated testing suite (154 tests) and manual multi-device image/file verification guidelines completed.
 
 ---
 
 ## Automated Verification Suite
 
-Vantra includes **113 automated unit, widget, and integration tests** to guarantee cryptographic security, protocol accuracy, and UI correctness:
-- **`test/crypto_test.dart`**: Verifies X25519 DH key agreements, Ed25519 identity verification, and ChaCha20-Poly1305 AEAD integrity.
-- **`test/db_test.dart` & `test/repository_test.dart`**: Verifies Drift persistence layer, message queues, read states, and duplicate message prevention.
+Vantra includes **154 automated unit, widget, and integration tests** to guarantee cryptographic security, protocol accuracy, and UI correctness:
+- **`test/crypto_test.dart`**: Verifies X25519 DH key agreements, Ed25519 identity verification, ChaCha20-Poly1305 AEAD ciphers, 64-packet sliding window replay protection, and transcript length verification.
+- **`test/database_test.dart` & `test/repository_test.dart`**: Verifies Drift persistence layer, bilaterally ordered message chats, message queues, read states, atomic retry increments, startup recovery (retaining delivered state), and duplicate message prevention.
+- **`test/conversations_test.dart`**: Verifies optimized conversation summaries reactively using raw SQL queries and stream combineLatest3 mapping.
+- **`test/peer_discovery_test.dart`**: Verifies colon-delimited displayName and peerId advertising name parsing.
 - **`test/trust_block_test.dart`**: Verifies security blocking invariants, distrusted peer connection rejections, and signature checking.
-- **`test/messaging_test.dart`**: Complete integration tests covering:
+- **`test/multi_peer_test.dart` & `test/messaging_test.dart`**: Complete multi-peer routing and media integration tests covering:
   - V2 version negotiation and compatibility fallbacks.
   - Asynchronous capability exchanges and connection recovery checks.
   - Image chunking, E2E encrypted transmission, and receiver reassembly.
   - Resumable chunk transfer negotiation (ACCEPT chunk resumption indexes).
-  - SHA-256 integrity hash verification and failure drop routines.
+  - SHA-256 integrity hash verification, 500 MB size limit checks, and failure drop routines.
+  - Temporary directory chunk file cleanups on all reject/timeout/disconnect paths, and multi-peer directory isolation.
 - **`test/widget_test.dart` & `test/chat_widget_test.dart`**: Verifies animated splash loaders, conversations empty states, chat bubbles, unread counts, text composers, and location warnings.
 
 ---

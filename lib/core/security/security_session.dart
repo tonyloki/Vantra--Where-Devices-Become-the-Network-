@@ -11,6 +11,7 @@ class SecuritySession {
   final String remoteFingerprint;
   int sendSequence;
   int receiveSequence;
+  final Set<int> _receivedSequences = {};
 
   SecuritySession({
     required this.peerId,
@@ -32,21 +33,26 @@ class SecuritySession {
     return current;
   }
 
-  /// Verifies inbound sequence monotonicity
+  /// Verifies inbound sequence using a 64-packet sliding window replay protection
   bool isValidInboundSequence(int seq, String incomingSessionId) {
     if (incomingSessionId != sessionId) {
       return false;
     }
-    if (seq <= receiveSequence) {
+    if (seq <= receiveSequence - 64) {
+      return false;
+    }
+    if (seq == receiveSequence || _receivedSequences.contains(seq)) {
       return false;
     }
     return true;
   }
 
-  /// Updates receive sequence counter after successful decryption
+  /// Updates receive sequence counter and trims sliding window cache
   void updateReceiveSequence(int seq) {
+    _receivedSequences.add(seq);
     if (seq > receiveSequence) {
       receiveSequence = seq;
     }
+    _receivedSequences.removeWhere((s) => s <= receiveSequence - 64);
   }
 }

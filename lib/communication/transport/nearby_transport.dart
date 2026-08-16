@@ -167,7 +167,7 @@ class NearbyTransport implements Transport {
           VantraLogger.log('NearbyTransport: Endpoint found $id ($name)');
           print('[VANTRA][NEARBY][D] endpoint found id=$id');
           print('[VANTRA][NEARBY] DISCOVERED endpoint=$id name=$name');
-          final index = name.indexOf(':');
+          final index = name.lastIndexOf(':');
           final parsedPeerId = index != -1 ? name.substring(index + 1) : 'unknown';
           print('[VANTRA][PIPELINE] DISCOVERY_FOUND endpoint=$id peerId=$parsedPeerId');
           if (!_discoveredPeers.any((p) => p.id == id)) {

@@ -98,7 +98,7 @@ class PeerDiscoveryService {
   }
 
   Future<void> connect(String endpointId, {String localName = 'VantraDevice'}) async {
-    final localIndex = localName.indexOf(':');
+    final localIndex = localName.lastIndexOf(':');
     final localPeerId = localIndex != -1 ? localName.substring(localIndex + 1) : '';
     final remotePeer = _discoveredMap[endpointId];
     final remotePeerId = remotePeer?.resolvedPeerId;
@@ -126,7 +126,7 @@ class PeerDiscoveryService {
 
     for (final raw in rawPeers) {
       currentEndpoints.add(raw.id);
-      final index = raw.name.indexOf(':');
+      final index = raw.name.lastIndexOf(':');
       final name = index != -1 ? raw.name.substring(0, index) : raw.name;
       final peerId = index != -1 ? raw.name.substring(index + 1) : null;
 

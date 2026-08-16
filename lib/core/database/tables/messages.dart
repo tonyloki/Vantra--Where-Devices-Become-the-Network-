@@ -8,7 +8,7 @@ class MessageStatusConverter extends TypeConverter<MessageStatus, String> {
   MessageStatus fromSql(String fromDb) {
     return MessageStatus.values.firstWhere(
       (e) => e.name == fromDb,
-      orElse: () => MessageStatus.pending,
+      orElse: () => MessageStatus.received,
     );
   }
 

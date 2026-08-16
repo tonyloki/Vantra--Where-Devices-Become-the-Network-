@@ -155,9 +155,8 @@ class MessagingService {
     print('[VANTRA][MESSAGE] PAYLOAD_RECEIVED endpoint=${event.endpointId}');
     VantraLogger.log('[VANTRA][MESSAGE] Wire payload received from ${event.endpointId} (${event.bytes.length} bytes)');
     VantraLogger.log('[VANTRA][PROTO] WIRE DECODE START byteLength=${event.bytes.length}');
-    DomainWireEnvelope envelope;
     try {
-      envelope = codec.decodeWireEnvelope(event.bytes);
+      final envelope = codec.decodeWireEnvelope(event.bytes);
       if (envelope is DomainEncryptedEnvelope) {
         VantraLogger.log('[VANTRA][PROTO] WIRE DECODE SUCCESS payloadType=ENCRYPTED_MESSAGE messageId=${envelope.messageId} sequence=${envelope.sequence}');
         print('[VANTRA][MESSAGE] ENVELOPE_DECODED messageId=${envelope.messageId}');
@@ -165,11 +164,6 @@ class MessagingService {
         VantraLogger.log('[VANTRA][PROTO] WIRE DECODE SUCCESS payloadType=${envelope.runtimeType} messageId=none sequence=0');
         print('[VANTRA][MESSAGE] ENVELOPE_DECODED payloadType=${envelope.runtimeType}');
       }
-    } catch (e) {
-      VantraLogger.log('[VANTRA][PROTO] WIRE DECODE FAILED errorType=${e.runtimeType}');
-      rethrow;
-    }
-    try {
 
       switch (envelope) {
         case DomainHandshakePayload handshake:

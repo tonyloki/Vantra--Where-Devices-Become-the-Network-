@@ -186,5 +186,99 @@ void main() {
         throwsException,
       );
     });
+
+    test('recoverSentMessages recovers SENT and SENDING but keeps DELIVERED unchanged', () async {
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      await db.messageDao.insertMessage(MessagesCompanion.insert(
+        messageId: 'msg-sent',
+        senderId: 'me',
+        receiverId: 'peer-abc',
+        messageText: 'Sent message',
+        timestamp: now,
+        type: 'TEXT',
+        status: MessageStatus.sent,
+        createdAt: now,
+      ));
+
+      await db.messageDao.insertMessage(MessagesCompanion.insert(
+        messageId: 'msg-sending',
+        senderId: 'me',
+        receiverId: 'peer-abc',
+        messageText: 'Sending media',
+        timestamp: now,
+        type: 'IMAGE',
+        status: MessageStatus.sending,
+        createdAt: now,
+      ));
+
+      await db.messageDao.insertMessage(MessagesCompanion.insert(
+        messageId: 'msg-delivered',
+        senderId: 'me',
+        receiverId: 'peer-abc',
+        messageText: 'Delivered text',
+        timestamp: now,
+        type: 'TEXT',
+        status: MessageStatus.delivered,
+        createdAt: now,
+      ));
+
+      await db.messageDao.recoverSentMessages();
+
+      final sentMsg = await db.messageDao.getMessageById('msg-sent');
+      final sendingMsg = await db.messageDao.getMessageById('msg-sending');
+      final deliveredMsg = await db.messageDao.getMessageById('msg-delivered');
+
+      expect(sentMsg!.status, MessageStatus.pending);
+      expect(sendingMsg!.status, MessageStatus.pending);
+      expect(deliveredMsg!.status, MessageStatus.delivered); // DELIVERED MUST stay DELIVERED
+    });
+
+    test('Atomic incrementRetryCount prevents race condition increments', () async {
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      await db.messageDao.insertMessage(MessagesCompanion.insert(
+        messageId: 'msg-retry',
+        senderId: 'me',
+        receiverId: 'peer-abc',
+        messageText: 'Retry text',
+        timestamp: now,
+        type: 'TEXT',
+        status: MessageStatus.pending,
+        createdAt: now,
+      ));
+
+      // Run multiple increments concurrently (simulates async gaps / concurrent queues)
+      await Future.wait([
+        db.messageDao.incrementRetryCount('msg-retry'),
+        db.messageDao.incrementRetryCount('msg-retry'),
+        db.messageDao.incrementRetryCount('msg-retry'),
+      ]);
+
+      final msg = await db.messageDao.getMessageById('msg-retry');
+      expect(msg!.retryCount, 3); // Must be exactly 3, not overwritten
+    });
+
+    test('Corrupt or unknown status falls back to received and does not enter outbound queue', () async {
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      // Insert message with corrupted/unknown status via raw SQL
+      await db.customStatement(
+        'INSERT INTO messages (message_id, sender_id, receiver_id, text, timestamp, type, status, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ['msg-corrupt', 'me', 'peer-abc', 'Corrupt text', now, 'TEXT', 'INVALID_STATUS', now],
+      );
+
+      final msg = await db.messageDao.getMessageById('msg-corrupt');
+      expect(msg, isNotNull);
+      expect(msg!.status, MessageStatus.received); // Check fallback to received
+
+      // Verify that this corrupted message is NOT fetched in pending/failed queues
+      final pendingList = await db.messageDao.getPendingOrFailedMessages('peer-abc');
+      expect(pendingList.any((m) => m.messageId == 'msg-corrupt'), isFalse);
+
+      final allPendingList = await db.messageDao.getAllPendingOrFailedMessages();
+      expect(allPendingList.any((m) => m.messageId == 'msg-corrupt'), isFalse);
+    });
   });
 }

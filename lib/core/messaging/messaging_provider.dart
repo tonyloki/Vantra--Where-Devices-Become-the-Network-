@@ -58,6 +58,22 @@ class IdentityMismatchRequest {
   });
 }
 
+class PendingIncomingOffer {
+  final String peerId;
+  final String endpointId;
+  final SecuritySession session;
+  final DomainMediaControl offer;
+  final Timer timeoutTimer;
+
+  PendingIncomingOffer({
+    required this.peerId,
+    required this.endpointId,
+    required this.session,
+    required this.offer,
+    required this.timeoutTimer,
+  });
+}
+
 class MessagingState {
   final Map<String, PeerSession> sessions;
   final Map<String, String> endpointToPeerId;
@@ -162,8 +178,23 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Map<String, Completer<DomainMediaControl>> _mediaCompleters = {};
   final Map<String, double> _transferProgress = {};
   final Set<String> _inflightSends = {};
+  final Map<String, PendingIncomingOffer> _pendingIncomingOffers = {};
 
   double getTransferProgress(String transferId) => _transferProgress[transferId] ?? 0.0;
+
+  Future<void> _cleanupTempDir(String transferId, bool isImage) async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final dirPrefix = isImage ? 'media' : 'files';
+      final tempDir = Directory(path.join(appDir.path, dirPrefix, 'temp', transferId));
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+        VantraLogger.log('[VANTRA][MESSAGING] Cleaned up temporary directory for transferId=$transferId');
+      }
+    } catch (e, stack) {
+      VantraLogger.log('[VANTRA][MESSAGING] Failed to clean up temporary directory: $e', e, stack);
+    }
+  }
 
   bool hasActiveSecureTransport(String peerId) {
     final session = state.sessions[peerId];
@@ -171,10 +202,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     if (session == null || secSession == null) return false;
     if (!session.isSecure) return false;
-    if (state.activeEndpointId == null) return false;
-    if (state.connectionStatus != ConnectionStatus.connected) return false;
-    if (session.endpointId != state.activeEndpointId) return false;
-    if (secSession.endpointId != state.activeEndpointId) return false;
+    if (session.status != SessionStatus.connected) return false;
+    if (session.endpointId != secSession.endpointId) return false;
+    if (!_aliveEndpoints.contains(session.endpointId)) return false;
 
     return true;
   }
@@ -183,6 +213,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Set<String> _acceptedEndpoints = {};
   final Set<String> _rejectedEndpoints = {};
   final Set<String> _activeConnectLocks = {};
+  final Set<String> _aliveEndpoints = {};
   final Map<String, Timer> _handshakeTimers = {};
 
   StreamSubscription? _discoveredPeersSub;
@@ -218,7 +249,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
         if (previous != null) {
           try {
             await previous;
-          } catch (_) {}
+          } catch (e, stack) {
+            VantraLogger.log('[VANTRA][MESSAGING] Error in previous chain step: $e', e, stack);
+          }
         }
         try {
           await _handleIncomingEncryptedMessage(event);
@@ -270,6 +303,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
         t.cancel();
       }
       _backoffTimers.clear();
+      for (final pending in _pendingIncomingOffers.values) {
+        pending.timeoutTimer.cancel();
+      }
+      _pendingIncomingOffers.clear();
     });
 
     // Persistent Recovery on App Boot
@@ -384,20 +421,20 @@ class MessagingNotifier extends Notifier<MessagingState> {
       // 4. Update peer lastSeen timestamp in SQLite
       await repository.updatePeerLastSeen(peerId, plaintext.timestampMs);
 
-      // Lost-ACK + Duplicate-Message ACK Recovery
-      final existingMsg = await repository.getMessageById(plaintext.messageId);
-      final activeSession = state.sessions[peerId];
-      if (existingMsg != null) {
-        VantraLogger.log('[VANTRA][DB] DUPLICATE MESSAGE messageId=${plaintext.messageId}');
-        VantraLogger.log('[VANTRA][SECURITY] DUPLICATE DETECTED: messageId=${plaintext.messageId}. Discarding duplicate payload, but immediately re-acknowledging.');
-        if (activeSession != null) {
-          await _sendAck(event.endpointId, session, plaintext.messageId);
-        }
-        return;
-      }
-
       // 5. Handle Text Message vs Delivery ACK
       if (plaintext is DomainTextMessage) {
+        // Lost-ACK + Duplicate-Message ACK Recovery for Text Messages
+        final existingMsg = await repository.getMessageById(plaintext.messageId);
+        final activeSession = state.sessions[peerId];
+        if (existingMsg != null) {
+          VantraLogger.log('[VANTRA][DB] DUPLICATE MESSAGE messageId=${plaintext.messageId}');
+          VantraLogger.log('[VANTRA][SECURITY] DUPLICATE DETECTED: messageId=${plaintext.messageId}. Discarding duplicate payload, but immediately re-acknowledging.');
+          if (activeSession != null) {
+            await _sendAck(event.endpointId, session, plaintext.messageId);
+          }
+          return;
+        }
+
         final isCurrentlyViewing = state.activeConversationPeerId == peerId;
 
         final incomingMsg = VantraMessage(
@@ -449,6 +486,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
       } else if (plaintext is DomainCapabilitiesExchange) {
         print('[VANTRA][SESSION][HANDSHAKE] stage=CAPABILITIES_RECEIVED peerId=$peerId endpoint=${event.endpointId}');
         print('[VANTRA][SECURITY] Received CapabilitiesExchange from ${event.endpointId}');
+        print('[VANTRA][CAPABILITY][REMOTE_RECEIVED]\n'
+              'peerId=$peerId\n'
+              'endpointId=${event.endpointId}\n'
+              'minVersion=${plaintext.minSupportedVersion}\n'
+              'maxVersion=${plaintext.maxSupportedVersion}\n'
+              'remoteCapabilities=${plaintext.supportedCapabilities.map((c) => c.name).toList()}');
         
         final secSession = _securitySessions[peerId];
         if (secSession == null) {
@@ -546,87 +589,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
         print('[VANTRA][SESSION][HANDSHAKE] stage=PEER_READY peerId=$peerId endpoint=${event.endpointId}');
         print('[VANTRA][SESSION][SECURE] Capability negotiation complete. Peer $peerId is now ready for communication.');
         print('[VANTRA][SECURITY] CAPABILITY_NEGOTIATION_SUCCESS for peer $peerId. Enabled capabilities: $negotiatedCapabilities');
+        print('[VANTRA][CAPABILITY][NEGOTIATED]\n'
+              'peerId=$peerId\n'
+              'endpointId=${event.endpointId}\n'
+              'negotiatedCapabilities=${negotiatedCapabilities.map((c) => c.name).toList()}');
 
         await _sendAck(event.endpointId, secSession, plaintext.messageId);
         _flushQueue(peerId, 'DomainCapabilitiesExchange');
+        await _replayPendingOffersForPeer(peerId, event.endpointId);
       } else if (plaintext is DomainMediaControl) {
         if (plaintext.type == DomainMediaControlType.offer) {
-          print('[VANTRA][MEDIA][OFFER_RECEIVED]\n'
-                'messageId=${plaintext.messageId}\n'
-                'transferId=${plaintext.transferId}\n'
-                'fileSize=${plaintext.fileSize}\n'
-                'mimeType=${plaintext.mimeType}');
-          final mime = plaintext.mimeType;
-          final isImage = mime != null &&
-              (mime.startsWith('image/jpeg') ||
-               mime.startsWith('image/png') ||
-               mime.startsWith('image/webp')) &&
-              (plaintext.width != null && plaintext.width! > 0);
-          final capability = isImage ? VantraCapability.image : VantraCapability.file;
-          final isSupported = activeSession?.enabledCapabilities?.contains(capability) ?? false;
-          if (!isSupported) {
-            VantraLogger.log('[VANTRA][MESSAGING] Received OFFER for $capability, but capability not enabled.');
-            if (activeSession != null) {
-              await _sendMediaReject(event.endpointId, session, plaintext.transferId);
-            }
-            return;
-          }
-          final sizeLimit = isImage ? 10 * 1024 * 1024 : 200 * 1024 * 1024;
-          if (plaintext.fileSize != null && plaintext.fileSize! > sizeLimit) {
-            VantraLogger.log('[VANTRA][MESSAGING] Media OFFER exceeds size limit: ${plaintext.fileSize}');
-            if (activeSession != null) {
-              await _sendMediaReject(event.endpointId, session, plaintext.transferId);
-            }
-            return;
-          }
-
-          final existingMsg = await repository.getMessageById(plaintext.messageId);
-          if (existingMsg != null) {
-            if (activeSession != null) {
-              await _sendAck(event.endpointId, session, plaintext.messageId);
-            }
-            return;
-          }
-
-          final type = isImage ? 'IMAGE' : 'FILE';
-          final dirPrefix = isImage ? 'media' : 'files';
-
-          final appDir = await getApplicationDocumentsDirectory();
-          final tempDir = Directory(path.join(appDir.path, dirPrefix, 'temp', plaintext.transferId));
-          int nextExpectedChunk = 0;
-          if (await tempDir.exists()) {
-            while (true) {
-              final chunkFile = File(path.join(tempDir.path, 'chunk_$nextExpectedChunk'));
-              if (await chunkFile.exists()) {
-                nextExpectedChunk++;
-              } else {
-                break;
-              }
-            }
-          } else {
-            await tempDir.create(recursive: true);
-          }
-
-          final incomingMsg = VantraMessage(
-            messageId: plaintext.messageId,
-            senderId: plaintext.senderId,
-            receiverId: plaintext.receiverId,
-            text: plaintext.caption ?? '',
-            timestamp: plaintext.timestampMs,
-            status: MessageStatus.sending,
-            type: type,
-            fileName: plaintext.fileName,
-            fileSize: plaintext.fileSize,
-            width: plaintext.width,
-            height: plaintext.height,
-            transferId: plaintext.transferId,
-            sha256: plaintext.sha256,
-          );
-          await repository.saveIncomingMessage(incomingMsg);
-
-          if (activeSession != null) {
-            await _sendMediaAccept(event.endpointId, session, plaintext.transferId, nextExpectedChunk);
-          }
+          await _handleIncomingOffer(peerId, event.endpointId, session, plaintext);
         } else if (plaintext.type == DomainMediaControlType.accept || plaintext.type == DomainMediaControlType.reject) {
           final completer = _mediaCompleters[plaintext.transferId];
           if (completer != null && !completer.isCompleted) {
@@ -746,6 +719,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
                 'path=$finalPath\n'
                 'bytes=$finalSize');
 
+          final activeSession = state.sessions[peerId];
           print('[VANTRA][MEDIA][REMOTE_RECEIVED]\n'
                 'messageId=${msg.messageId}\n'
                 'peerId=${activeSession?.peerId ?? "none"}\n'
@@ -774,12 +748,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     VantraLogger.log('[VANTRA][MESSAGING] ACK CREATE originalMessageId=$originalMessageId');
 
+    final localId = ref.read(localIdentityStateProvider);
     final ackDomainMessage = DomainAckMessage(
       messageId: ackPacketId,
       sessionId: session.sessionId,
       sequence: ackSeq,
       timestampMs: DateTime.now().millisecondsSinceEpoch,
-      senderId: session.peerId, // local recipient is the sender of the ACK
+      senderId: localId.peerId,
       receiverId: session.peerId,
       originalMessageId: originalMessageId,
       status: DomainDeliveryStatus.delivered,
@@ -1126,16 +1101,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
     // Unconditional standard prints for diagnostic logging
     print('[VANTRA][SECURITY] CONNECTION UPDATE: endpointId=${update.endpointId}, status=${update.status.name}');
 
-    final index = update.endpointName.indexOf(':');
+    final index = update.endpointName.lastIndexOf(':');
     final candidateName = index != -1 ? update.endpointName.substring(0, index) : update.endpointName;
     final candidatePeerId = index != -1 ? update.endpointName.substring(index + 1) : null;
 
     if (update.status == ConnectionStatus.connected) {
+      _aliveEndpoints.add(update.endpointId);
       print('[VANTRA][SESSION][HANDSHAKE] stage=CONNECTED peerId=$candidatePeerId endpoint=${update.endpointId}');
       print('[VANTRA][CHAT-BRIDGE] Mapping endpointId=${update.endpointId} to peerId=$candidatePeerId');
       print('[VANTRA][CONNECTION] CONNECTION_CONNECTED: endpointId=${update.endpointId}');
-      _acceptedEndpoints.remove(update.endpointId);
-      _rejectedEndpoints.remove(update.endpointId);
       print('[VANTRA][NEARBY] CONNECTION_ESTABLISHED endpoint=${update.endpointId}');
 
       // Arm 15-second handshake watchdog timer
@@ -1237,6 +1211,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         });
       }
     } else if (update.status == ConnectionStatus.connecting) {
+      _aliveEndpoints.add(update.endpointId);
       print('[VANTRA][PIPELINE] CONNECTION_CONNECTING endpoint=${update.endpointId} peerId=$candidatePeerId');
       print('[VANTRA][CONNECTION] REQUEST_RECEIVED: endpointId=${update.endpointId}, peerName=$candidateName, direction=${update.isIncoming ? "incoming" : "outgoing"}');
       print('[VANTRA][SECURITY] STATE: CONNECTING (endpointId=${update.endpointId}, isIncoming=${update.isIncoming}, token=${update.authenticationToken})');
@@ -1252,9 +1227,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
 
       // SIMULTANEOUS CONNECTION REQUEST SAFETY CHECK:
-      if (update.isIncoming == true && state.activeEndpointId != null && state.activeEndpointId != update.endpointId) {
-        final pendingOutgoingPeerId = state.endpointToPeerId[state.activeEndpointId];
-        if (candidatePeerId != null && candidatePeerId == pendingOutgoingPeerId) {
+      final existingEndpointForPeer = state.endpointToPeerId.entries
+          .where((e) => e.value == candidatePeerId && e.key != update.endpointId)
+          .map((e) => e.key)
+          .firstOrNull;
+
+      if (update.isIncoming == true && existingEndpointForPeer != null) {
+        if (candidatePeerId != null) {
           final localPeerId = localIdentity.peerId;
           final remotePeerId = candidatePeerId;
           final isInitiator = localPeerId.compareTo(remotePeerId) < 0;
@@ -1266,7 +1245,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
           } else {
             print('[VANTRA][CONNECTION] Outgoing request abandoned due to simultaneous incoming request from initiator $remotePeerId');
             // Cancel/abandon outgoing attempt by calling disconnect() at transport layer
-            final outgoingEndpointId = state.activeEndpointId!;
+            final outgoingEndpointId = existingEndpointForPeer;
             try {
               ref.read(transportProvider).disconnect(outgoingEndpointId);
             } catch (_) {}
@@ -1299,7 +1278,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         final repo = ref.read(messagingRepositoryProvider);
         repo.getPeer(candidatePeerId).then((dbPeer) async {
           // Guard against race conditions where connection failed/disconnected while database lookup was running
-          if (state.activeEndpointId != update.endpointId) {
+          if (!_aliveEndpoints.contains(update.endpointId)) {
             print('[VANTRA][NEARBY] Connection was aborted before database lookup finished for endpointId=${update.endpointId}');
             return;
           }
@@ -1340,7 +1319,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
             _showManualPairingOverlay(update, candidateName, candidatePeerId);
           }
         }).catchError((_) {
-          if (state.activeEndpointId == update.endpointId) {
+          if (_aliveEndpoints.contains(update.endpointId)) {
             _showManualPairingOverlay(update, candidateName, candidatePeerId);
           }
         });
@@ -1350,6 +1329,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     } else if (update.status == ConnectionStatus.disconnected ||
         update.status == ConnectionStatus.rejected ||
         update.status == ConnectionStatus.error) {
+      _aliveEndpoints.remove(update.endpointId);
       print('[VANTRA][CONNECTION] DISCONNECTED endpoint=${update.endpointId} reason=${update.status.name}');
       if (update.status == ConnectionStatus.disconnected) {
         print('[VANTRA][CONNECTION] CONNECTION_DISCONNECTED: endpointId=${update.endpointId}');
@@ -1398,13 +1378,32 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
       _pendingEphemeralKeys.remove(update.endpointId);
 
+      final pendingToRemove = _pendingIncomingOffers.entries
+          .where((e) => e.value.endpointId == update.endpointId)
+          .toList();
+      for (final entry in pendingToRemove) {
+        entry.value.timeoutTimer.cancel();
+        _pendingIncomingOffers.remove(entry.key);
+        final offer = entry.value.offer;
+        final isImage = offer.mimeType != null &&
+            (offer.mimeType!.startsWith('image/jpeg') ||
+             offer.mimeType!.startsWith('image/png') ||
+             offer.mimeType!.startsWith('image/webp')) &&
+            (offer.width != null && offer.width! > 0);
+        _cleanupTempDir(entry.key, isImage);
+      }
+
       final newEndpointToPeerId = Map<String, String>.from(state.endpointToPeerId);
       newEndpointToPeerId.remove(update.endpointId);
 
       final bool isCurrentEndpoint = (state.activeEndpointId == update.endpointId);
+      final bool anyPeerStillConnected = state.sessions.values
+          .any((s) => s.endpointId != update.endpointId && s.status == SessionStatus.connected);
       _stateUpdateSource = '_handleConnectionUpdate';
       state = state.copyWith(
-        connectionStatus: isCurrentEndpoint ? update.status : state.connectionStatus,
+        connectionStatus: isCurrentEndpoint
+            ? (anyPeerStillConnected ? ConnectionStatus.connected : update.status)
+            : state.connectionStatus,
         clearActiveEndpoint: isCurrentEndpoint,
         endpointToPeerId: newEndpointToPeerId,
         clearActiveConnectionRequest: isCurrentEndpoint,
@@ -1471,8 +1470,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     print('[VANTRA][NEARBY] REJECT_PRESSED endpoint=$endpointId');
     if (_rejectedEndpoints.contains(endpointId) ||
         _acceptedEndpoints.contains(endpointId) ||
-        state.connectionStatus == ConnectionStatus.accepting ||
-        state.connectionStatus == ConnectionStatus.connected) {
+        state.connectionStatus == ConnectionStatus.accepting) {
       print('[VANTRA][NEARBY] Already accepted, accepting, connected, or processed endpoint $endpointId, skipping reject call');
       return;
     }
@@ -1616,6 +1614,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
       mac: Uint8List.fromList(encrypted.mac),
       protocolVersion: session.negotiatedVersion ?? kCurrentProtocolVersion,
     );
+    print('[VANTRA][CAPABILITY][LOCAL_ADVERTISE]\n'
+          'peerId=$peerId\n'
+          'endpointId=${session.endpointId}\n'
+          'minVersion=$kMinSupportedProtocolVersion\n'
+          'maxVersion=$kCurrentProtocolVersion\n'
+          'capabilities=[text, image, file]');
     print('[VANTRA][SESSION][HANDSHAKE] stage=CAPABILITIES_SENT peerId=$peerId endpoint=${session.endpointId}');
     print('[VANTRA][SECURITY] Sent CapabilitiesExchange to ${session.endpointId}');
   }
@@ -1747,8 +1751,27 @@ class MessagingNotifier extends Notifier<MessagingState> {
       _inflightSends.add(msg.messageId);
 
       final capability = msg.type == 'IMAGE' ? VantraCapability.image : VantraCapability.file;
-      final isSupported = session.enabledCapabilities?.contains(capability) ?? false;
+
+      if (session.enabledCapabilities == null) {
+        print('[VANTRA][CAPABILITY][CHECK]\n'
+              'peerId=${session.peerId}\n'
+              'messageType=${msg.type}\n'
+              'enabledCapabilities=null\n'
+              'state=WAITING');
+        print('[VANTRA][CAPABILITY][WAIT]\n'
+              'peerId=${session.peerId}\n'
+              'messageId=${msg.messageId}');
+        _inflightSends.remove(msg.messageId);
+        return false;
+      }
+
+      final isSupported = session.enabledCapabilities!.contains(capability);
       if (!isSupported) {
+        print('[VANTRA][CAPABILITY][REJECT]\n'
+              'peerId=${session.peerId}\n'
+              'requested=${capability.name}\n'
+              'enabledCapabilities=${session.enabledCapabilities?.map((c) => c.name).toList()}\n'
+              'reason=UNSUPPORTED_CAPABILITY');
         VantraLogger.log('[VANTRA][MESSAGING] Sharing type ${msg.type} not supported by peer ${msg.receiverId}. '
             'session.status=${session.status.name}, '
             'session.isSecure=${session.isSecure}, '
@@ -1758,6 +1781,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
         return false;
       }
 
+      print('[VANTRA][CAPABILITY][READY]\n'
+            'peerId=${session.peerId}\n'
+            'enabledCapabilities=${session.enabledCapabilities?.map((c) => c.name).toList()}\n'
+            'endpointId=${session.endpointId}');
+
       final file = File(msg.mediaPath!);
       if (!await file.exists()) {
         VantraLogger.log('[VANTRA][MESSAGING] Outgoing file missing: ${msg.mediaPath}');
@@ -1765,6 +1793,21 @@ class MessagingNotifier extends Notifier<MessagingState> {
               'messageId=${msg.messageId}\n'
               'transferId=${msg.transferId}\n'
               'reason=Outgoing file missing: ${msg.mediaPath}');
+        await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+        _inflightSends.remove(msg.messageId);
+        return false;
+      }
+
+      final fileSize = await file.length();
+      const int mediaSizeLimit = 500 * 1024 * 1024;
+      if (fileSize > mediaSizeLimit) {
+        print('REJECT_REASON=SIZE_LIMIT');
+        print('[VANTRA][MEDIA][REJECT]\n'
+              'peerId=${session.peerId}\n'
+              'endpointId=${session.endpointId}\n'
+              'transferId=${msg.transferId}\n'
+              'reason=SIZE_LIMIT');
+        VantraLogger.log('[VANTRA][MESSAGING] Media size $fileSize exceeds 500 MB limit');
         await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
         _inflightSends.remove(msg.messageId);
         return false;
@@ -1848,6 +1891,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
       print('[VANTRA][MEDIA][OFFER_SEND_SUCCESS]\n'
             'messageId=${msg.messageId}\n'
             'endpoint=${session.endpointId}');
+      print('[VANTRA][MEDIA][OFFER_SENT]\n'
+            'peerId=${session.peerId}\n'
+            'endpointId=${session.endpointId}\n'
+            'messageId=${msg.messageId}\n'
+            'transferId=${msg.transferId}');
 
       DomainMediaControl response;
       try {
@@ -2216,6 +2264,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
   Map<String, SecuritySession> get securitySessions => _securitySessions;
 
   @visibleForTesting
+  Set<String> get aliveEndpoints => _aliveEndpoints;
+
+  @visibleForTesting
+  Map<String, PendingIncomingOffer> get pendingIncomingOffers => _pendingIncomingOffers;
+
+  @visibleForTesting
   Future<void> flushQueue(String peerId, [String? triggerSource]) => _flushQueue(peerId, triggerSource);
 
   @visibleForTesting
@@ -2421,12 +2475,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final msgId = const Uuid().v4();
     final seq = session.nextSendSequence();
 
+    final localId = ref.read(localIdentityStateProvider);
     final rejectDomainMsg = DomainMediaControl(
       messageId: msgId,
       sessionId: session.sessionId,
       sequence: seq,
       timestampMs: DateTime.now().millisecondsSinceEpoch,
-      senderId: session.peerId,
+      senderId: localId.peerId,
       receiverId: session.peerId,
       type: DomainMediaControlType.reject,
       transferId: transferId,
@@ -2457,12 +2512,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final msgId = const Uuid().v4();
     final seq = session.nextSendSequence();
 
+    final localId = ref.read(localIdentityStateProvider);
     final acceptDomainMsg = DomainMediaControl(
       messageId: msgId,
       sessionId: session.sessionId,
       sequence: seq,
       timestampMs: DateTime.now().millisecondsSinceEpoch,
-      senderId: session.peerId,
+      senderId: localId.peerId,
       receiverId: session.peerId,
       type: DomainMediaControlType.accept,
       transferId: transferId,
@@ -2488,6 +2544,204 @@ class MessagingNotifier extends Notifier<MessagingState> {
       mac: Uint8List.fromList(encrypted.mac),
       protocolVersion: kCurrentProtocolVersion,
     );
+  }
+
+  Future<void> _handleIncomingOffer(
+    String peerId,
+    String endpointId,
+    SecuritySession session,
+    DomainMediaControl offer,
+  ) async {
+    final activeSession = state.sessions[peerId];
+    final repository = ref.read(messagingRepositoryProvider);
+
+    final mime = offer.mimeType;
+    final isImage = mime != null &&
+        (mime.startsWith('image/jpeg') ||
+         mime.startsWith('image/png') ||
+         mime.startsWith('image/webp')) &&
+        (offer.width != null && offer.width! > 0);
+    final capability = isImage ? VantraCapability.image : VantraCapability.file;
+    final isSupported = activeSession?.enabledCapabilities?.contains(capability) ?? false;
+    const int mediaSizeLimit = 500 * 1024 * 1024;
+
+    print('OFFER_RECEIVED\n'
+          'mimeType=$mime\n'
+          'width=${offer.width}\n'
+          'height=${offer.height}\n'
+          'isImage=$isImage\n'
+          'capability=${capability.name}\n'
+          'activeSession=${activeSession == null ? "null" : "not_null"}\n'
+          'sessionStatus=${activeSession?.status.name}\n'
+          'enabledCapabilities=${activeSession?.enabledCapabilities?.map((c) => c.name).toList()}\n'
+          'isSupported=$isSupported\n'
+          'fileSize=${offer.fileSize}\n'
+          'sizeLimit=$mediaSizeLimit');
+
+    print('[VANTRA][MEDIA][OFFER_RECEIVED]\n'
+          'peerId=$peerId\n'
+          'endpointId=$endpointId\n'
+          'transferId=${offer.transferId}\n'
+          'mimeType=$mime\n'
+          'fileSize=${offer.fileSize}\n'
+          'capability=${capability.name}');
+
+    if (activeSession == null) {
+      print('REJECT_REASON=CAPABILITY');
+      print('[VANTRA][MEDIA][REJECT]\n'
+            'peerId=$peerId\n'
+            'endpointId=$endpointId\n'
+            'transferId=${offer.transferId}\n'
+            'reason=NO_ACTIVE_SESSION');
+      await _cleanupTempDir(offer.transferId, isImage);
+      await _sendMediaReject(endpointId, session, offer.transferId);
+      return;
+    }
+
+    if (activeSession.enabledCapabilities == null) {
+      print('[VANTRA][MEDIA][OFFER_WAIT_CAPABILITY]\n'
+            'peerId=$peerId\n'
+            'endpointId=$endpointId\n'
+            'transferId=${offer.transferId}\n'
+            'reason=enabledCapabilities==null');
+
+      _pendingIncomingOffers[offer.transferId]?.timeoutTimer.cancel();
+      final timer = Timer(const Duration(seconds: 15), () async {
+        final pending = _pendingIncomingOffers.remove(offer.transferId);
+        if (pending != null) {
+          print('[VANTRA][MEDIA][OFFER_WAIT_TIMEOUT]\n'
+                'peerId=$peerId\n'
+                'endpointId=$endpointId\n'
+                'transferId=${offer.transferId}');
+          print('REJECT_REASON=CAPABILITY');
+          print('[VANTRA][MEDIA][REJECT]\n'
+                'peerId=$peerId\n'
+                'endpointId=$endpointId\n'
+                'transferId=${offer.transferId}\n'
+                'reason=CAPABILITY_NEGOTIATION_TIMEOUT');
+          await _cleanupTempDir(offer.transferId, isImage);
+          final curSec = _securitySessions[peerId];
+          if (curSec != null && curSec.endpointId == endpointId) {
+            await _sendMediaReject(endpointId, pending.session, offer.transferId);
+          }
+        }
+      });
+
+      _pendingIncomingOffers[offer.transferId] = PendingIncomingOffer(
+        peerId: peerId,
+        endpointId: endpointId,
+        session: session,
+        offer: offer,
+        timeoutTimer: timer,
+      );
+      return;
+    }
+
+    final isCapSupported = activeSession.enabledCapabilities!.contains(capability);
+    if (!isCapSupported) {
+      print('REJECT_REASON=CAPABILITY');
+      print('[VANTRA][MEDIA][REJECT]\n'
+            'peerId=$peerId\n'
+            'endpointId=$endpointId\n'
+            'transferId=${offer.transferId}\n'
+            'reason=UNSUPPORTED_CAPABILITY');
+      VantraLogger.log('[VANTRA][MESSAGING] Received OFFER for $capability, but capability not enabled. activeSessionCapabilities=${activeSession.enabledCapabilities?.map((c) => c.name).toList()}');
+      await _cleanupTempDir(offer.transferId, isImage);
+      await _sendMediaReject(endpointId, session, offer.transferId);
+      return;
+    }
+
+    if (offer.fileSize != null && offer.fileSize! > mediaSizeLimit) {
+      print('REJECT_REASON=SIZE_LIMIT');
+      print('[VANTRA][MEDIA][REJECT]\n'
+            'peerId=$peerId\n'
+            'endpointId=$endpointId\n'
+            'transferId=${offer.transferId}\n'
+            'reason=SIZE_LIMIT');
+      VantraLogger.log('[VANTRA][MESSAGING] Media OFFER exceeds size limit: ${offer.fileSize}');
+      await _cleanupTempDir(offer.transferId, isImage);
+      await _sendMediaReject(endpointId, session, offer.transferId);
+      return;
+    }
+
+    final type = isImage ? 'IMAGE' : 'FILE';
+    final dirPrefix = isImage ? 'media' : 'files';
+
+    final appDir = await getApplicationDocumentsDirectory();
+    final tempDir = Directory(path.join(appDir.path, dirPrefix, 'temp', offer.transferId));
+    int nextExpectedChunk = 0;
+    if (await tempDir.exists()) {
+      while (true) {
+        final chunkFile = File(path.join(tempDir.path, 'chunk_$nextExpectedChunk'));
+        if (await chunkFile.exists()) {
+          nextExpectedChunk++;
+        } else {
+          break;
+        }
+      }
+    } else {
+      await tempDir.create(recursive: true);
+    }
+
+    final existingMsg = await repository.getMessageById(offer.messageId);
+    if (existingMsg != null) {
+      if (existingMsg.status == MessageStatus.received) {
+        // Transfer already fully completed and verified
+        await _sendAck(endpointId, session, offer.messageId);
+      } else {
+        // In progress or retry: send ACCEPT to resume chunk transfer
+        print('[VANTRA][MEDIA][OFFER_ACCEPT]\n'
+              'peerId=$peerId\n'
+              'endpointId=$endpointId\n'
+              'transferId=${offer.transferId}\n'
+              'nextExpectedChunk=$nextExpectedChunk\n'
+              'resume=true');
+        await _sendMediaAccept(endpointId, session, offer.transferId, nextExpectedChunk);
+      }
+      return;
+    }
+
+    final incomingMsg = VantraMessage(
+      messageId: offer.messageId,
+      senderId: offer.senderId,
+      receiverId: offer.receiverId,
+      text: offer.caption ?? '',
+      timestamp: offer.timestampMs,
+      status: MessageStatus.sending,
+      type: type,
+      fileName: offer.fileName,
+      fileSize: offer.fileSize,
+      width: offer.width,
+      height: offer.height,
+      transferId: offer.transferId,
+      sha256: offer.sha256,
+    );
+    await repository.saveIncomingMessage(incomingMsg);
+
+    print('[VANTRA][MEDIA][OFFER_ACCEPT]\n'
+          'peerId=$peerId\n'
+          'endpointId=$endpointId\n'
+          'transferId=${offer.transferId}\n'
+          'nextExpectedChunk=$nextExpectedChunk');
+
+    await _sendMediaAccept(endpointId, session, offer.transferId, nextExpectedChunk);
+  }
+
+  Future<void> _replayPendingOffersForPeer(String peerId, String endpointId) async {
+    final toReplay = _pendingIncomingOffers.entries
+        .where((e) => e.value.peerId == peerId && e.value.endpointId == endpointId)
+        .map((e) => e.value)
+        .toList();
+
+    for (final pending in toReplay) {
+      _pendingIncomingOffers.remove(pending.offer.transferId);
+      pending.timeoutTimer.cancel();
+      print('[VANTRA][MEDIA][OFFER_REPLAY]\n'
+            'peerId=$peerId\n'
+            'endpointId=$endpointId\n'
+            'transferId=${pending.offer.transferId}');
+      await _handleIncomingOffer(pending.peerId, pending.endpointId, pending.session, pending.offer);
+    }
   }
 
   String _stateUpdateSource = 'unknown';
@@ -2522,10 +2776,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final oldSession = oldState.sessions[peerId];
       final newSession = newState.sessions[peerId];
 
-      final oldTransport = oldSession?.status == SessionStatus.connected ||
-          (oldSession != null && oldSession.isSecure && oldState.activeEndpointId == oldSession.endpointId);
-      final newTransport = newSession?.status == SessionStatus.connected ||
-          (newSession != null && newSession.isSecure && newState.activeEndpointId == newSession.endpointId);
+      final oldTransport = oldSession?.status == SessionStatus.connected && oldSession?.isSecure == true;
+      final newTransport = newSession?.status == SessionStatus.connected && newSession?.isSecure == true;
 
       final oldOnline = oldSession?.status == SessionStatus.connected;
       final newOnline = newSession?.status == SessionStatus.connected;

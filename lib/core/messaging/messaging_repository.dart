@@ -112,67 +112,162 @@ class MessagingRepository {
     String localPeerId,
     Map<String, PeerSession> activeSessions,
   ) {
-    // Combine peers stream with messages stream to create reactive summaries
-    return _db.peerDao.watchAllPeers().asyncMap((peerList) async {
-      final summaries = <ConversationSummary>[];
+    final peersStream = _db.peerDao.watchAllPeers();
 
-      for (final peer in peerList) {
-        final conv = await _db.messageDao.getConversation(localPeerId, peer.peerId);
-        final activeSession = activeSessions[peer.peerId];
-        final isTrusted = peer.trustState == PeerTrustState.trusted;
-        final isOnline = activeSession?.status == SessionStatus.connected;
+    final latestMessagesStream = _db.customSelect(
+      'SELECT * FROM messages WHERE local_id IN ( '
+      '  SELECT MAX(local_id) FROM messages GROUP BY '
+      '  CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END'
+      ')',
+      variables: [Variable.withString(localPeerId)],
+      readsFrom: {_db.messages},
+    ).watch().map((rows) {
+      return rows.map((row) => _db.messages.map(row.data)).toList();
+    });
 
-        if (conv.isEmpty && !isTrusted && !isOnline) {
-          continue;
+    final unreadCountsStream = _db.customSelect(
+      'SELECT sender_id, COUNT(*) as unread_count FROM messages '
+      'WHERE receiver_id = ? AND is_read = 0 GROUP BY sender_id',
+      variables: [Variable.withString(localPeerId)],
+      readsFrom: {_db.messages},
+    ).watch().map((rows) {
+      return {
+        for (final row in rows)
+          row.read<String>('sender_id'): row.read<int>('unread_count')
+      };
+    });
+
+    return _combineLatest3<List<Peer>, List<Message>, Map<String, int>, List<ConversationSummary>>(
+      peersStream,
+      latestMessagesStream,
+      unreadCountsStream,
+      (peerList, latestMessages, unreadCounts) {
+        final summaries = <ConversationSummary>[];
+
+        final latestMap = <String, Message>{};
+        for (final msg in latestMessages) {
+          final remoteId = msg.senderId == localPeerId ? msg.receiverId : msg.senderId;
+          latestMap[remoteId] = msg;
         }
 
-        if (conv.isEmpty) {
-          summaries.add(ConversationSummary(
-            peerId: peer.peerId,
-            displayName: peer.displayName,
-            nickname: peer.nickname,
-            fingerprint: peer.fingerprint,
-            trustState: peer.trustState,
-            lastMessageText: 'Start chatting',
-            lastMessageTimestamp: peer.updatedAt,
-            lastMessageStatus: MessageStatus.received,
-            isOutgoing: false,
-            unreadCount: 0,
-            isOnline: isOnline,
-            isSecure: activeSession?.isSecure == true,
-          ));
-        } else {
-          final lastMsg = conv.last;
-          final unreadCount = await _db.messageDao.getUnreadCount(localPeerId, peer.peerId);
+        for (final peer in peerList) {
+          final lastMsg = latestMap[peer.peerId];
+          final activeSession = activeSessions[peer.peerId];
+          final isTrusted = peer.trustState == PeerTrustState.trusted;
+          final isOnline = activeSession?.status == SessionStatus.connected;
 
-          String previewText = lastMsg.messageText;
-          if (lastMsg.type == 'IMAGE') {
-            previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📷 Photo';
-          } else if (lastMsg.type == 'FILE') {
-            previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📁 File: ${lastMsg.fileName ?? "Attachment"}';
+          if (lastMsg == null && !isTrusted && !isOnline) {
+            continue;
           }
 
-          summaries.add(ConversationSummary(
-            peerId: peer.peerId,
-            displayName: peer.displayName,
-            nickname: peer.nickname,
-            fingerprint: peer.fingerprint,
-            trustState: peer.trustState,
-            lastMessageText: previewText,
-            lastMessageTimestamp: lastMsg.timestamp,
-            lastMessageStatus: lastMsg.status,
-            isOutgoing: lastMsg.senderId == localPeerId,
-            unreadCount: unreadCount,
-            isOnline: isOnline,
-            isSecure: activeSession?.isSecure == true,
-          ));
+          if (lastMsg == null) {
+            summaries.add(ConversationSummary(
+              peerId: peer.peerId,
+              displayName: peer.displayName,
+              nickname: peer.nickname,
+              fingerprint: peer.fingerprint,
+              trustState: peer.trustState,
+              lastMessageText: 'Start chatting',
+              lastMessageTimestamp: peer.updatedAt,
+              lastMessageStatus: MessageStatus.received,
+              isOutgoing: false,
+              unreadCount: 0,
+              isOnline: isOnline,
+              isSecure: activeSession?.isSecure == true,
+            ));
+          } else {
+            final unreadCount = unreadCounts[peer.peerId] ?? 0;
+
+            String previewText = lastMsg.messageText;
+            if (lastMsg.type == 'IMAGE') {
+              previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📷 Photo';
+            } else if (lastMsg.type == 'FILE') {
+              previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📁 File: ${lastMsg.fileName ?? "Attachment"}';
+            }
+
+            summaries.add(ConversationSummary(
+              peerId: peer.peerId,
+              displayName: peer.displayName,
+              nickname: peer.nickname,
+              fingerprint: peer.fingerprint,
+              trustState: peer.trustState,
+              lastMessageText: previewText,
+              lastMessageTimestamp: lastMsg.timestamp,
+              lastMessageStatus: lastMsg.status,
+              isOutgoing: lastMsg.senderId == localPeerId,
+              unreadCount: unreadCount,
+              isOnline: isOnline,
+              isSecure: activeSession?.isSecure == true,
+            ));
+          }
+        }
+
+        summaries.sort((a, b) => b.lastMessageTimestamp.compareTo(a.lastMessageTimestamp));
+        return summaries;
+      },
+    );
+  }
+
+  Stream<T> _combineLatest3<A, B, C, T>(
+    Stream<A> streamA,
+    Stream<B> streamB,
+    Stream<C> streamC,
+    T Function(A a, B b, C c) combiner,
+  ) {
+    final controller = StreamController<T>.broadcast();
+    StreamSubscription<A>? subA;
+    StreamSubscription<B>? subB;
+    StreamSubscription<C>? subC;
+
+    A? latestA;
+    B? latestB;
+    C? latestC;
+
+    bool hasA = false;
+    bool hasB = false;
+    bool hasC = false;
+
+    void emitIfReady() {
+      if (hasA && hasB && hasC) {
+        if (!controller.isClosed) {
+          controller.add(combiner(latestA as A, latestB as B, latestC as C));
         }
       }
+    }
 
-      // Sort summaries by latest message timestamp descending
-      summaries.sort((a, b) => b.lastMessageTimestamp.compareTo(a.lastMessageTimestamp));
-      return summaries;
-    });
+    controller.onListen = () {
+      subA = streamA.listen((val) {
+        latestA = val;
+        hasA = true;
+        emitIfReady();
+      }, onError: (Object err, StackTrace st) {
+        if (!controller.isClosed) controller.addError(err, st);
+      });
+
+      subB = streamB.listen((val) {
+        latestB = val;
+        hasB = true;
+        emitIfReady();
+      }, onError: (Object err, StackTrace st) {
+        if (!controller.isClosed) controller.addError(err, st);
+      });
+
+      subC = streamC.listen((val) {
+        latestC = val;
+        hasC = true;
+        emitIfReady();
+      }, onError: (Object err, StackTrace st) {
+        if (!controller.isClosed) controller.addError(err, st);
+      });
+    };
+
+    controller.onCancel = () {
+      subA?.cancel();
+      subB?.cancel();
+      subC?.cancel();
+    };
+
+    return controller.stream;
   }
 
   /// Creates/Updates known peer records in SQLite

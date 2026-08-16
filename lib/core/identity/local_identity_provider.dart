@@ -35,14 +35,12 @@ class LocalIdentityNotifier extends Notifier<LocalIdentity> {
     String? peerId = prefs.getString(_keyPeerId);
     if (peerId == null) {
       peerId = const Uuid().v4();
-      prefs.setString(_keyPeerId, peerId);
     }
 
     String? displayName = prefs.getString(_keyDisplayName);
     if (displayName == null) {
       final randId = (1000 + (DateTime.now().millisecondsSinceEpoch % 9000)).toString();
       displayName = 'Vantra-$randId';
-      prefs.setString(_keyDisplayName, displayName);
     }
 
     final cachedPubKey = prefs.getString(_keyPublicKey) ?? '';
@@ -62,6 +60,13 @@ class LocalIdentityNotifier extends Notifier<LocalIdentity> {
     final secureStorage = ref.read(secureStorageServiceProvider);
     final cryptoService = ref.read(cryptoServiceProvider);
     final prefs = ref.read(sharedPreferencesProvider);
+
+    if (prefs.getString(_keyPeerId) == null) {
+      await prefs.setString(_keyPeerId, state.peerId);
+    }
+    if (prefs.getString(_keyDisplayName) == null) {
+      await prefs.setString(_keyDisplayName, state.displayName);
+    }
 
     final seed = await secureStorage.getIdentityPrivateKeySeed();
     SimpleKeyPair keyPair;

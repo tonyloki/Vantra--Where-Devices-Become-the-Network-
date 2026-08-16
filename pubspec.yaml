@@ -1,5 +1,5 @@
 name: vantra
-description: "A new Flutter project."
+description: "VANTRA: A decentralized, offline-first peer-to-peer secure messaging platform for nearby Android devices using Nearby Connections."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -51,8 +51,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  flutter_lints: any
-  build_runner: any
+  flutter_lints: ^6.0.0
+  build_runner: ^2.15.1
   drift_dev: ^2.34.0
   flutter_launcher_icons: ^0.13.1
 

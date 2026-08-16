@@ -3,12 +3,83 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:vantra/core/security/crypto_service.dart';
 import 'package:vantra/core/security/canonical_encoder.dart';
+import 'package:vantra/core/security/security_session.dart';
 
 void main() {
   late CryptoService cryptoService;
 
   setUp(() {
     cryptoService = CryptoService();
+  });
+
+  group('SecuritySession Replay Protection Tests', () {
+    late SecuritySession session;
+
+    setUp(() async {
+      final algorithm = Chacha20.poly1305Aead();
+      final key = await algorithm.newSecretKey();
+      session = SecuritySession(
+        peerId: 'peer-1',
+        endpointId: 'ep-1',
+        sessionId: 'session-123',
+        sessionSalt: [1, 2, 3, 4],
+        sendKey: key,
+        receiveKey: key,
+        remoteIdentityPublicKey: 'pubkey',
+        remoteFingerprint: 'fp',
+        receiveSequence: 0,
+      );
+    });
+
+    test('Sequential packets are accepted', () {
+      expect(session.isValidInboundSequence(1, 'session-123'), isTrue);
+      session.updateReceiveSequence(1);
+      expect(session.isValidInboundSequence(2, 'session-123'), isTrue);
+      session.updateReceiveSequence(2);
+      expect(session.isValidInboundSequence(3, 'session-123'), isTrue);
+      session.updateReceiveSequence(3);
+    });
+
+    test('Out-of-order packets inside the 64-packet window are accepted', () {
+      // Receive 10, moves receiveSequence to 10
+      expect(session.isValidInboundSequence(10, 'session-123'), isTrue);
+      session.updateReceiveSequence(10);
+
+      // 8 is less than 10, but inside the window (10 - 64 = -54), so it should be accepted
+      expect(session.isValidInboundSequence(8, 'session-123'), isTrue);
+      session.updateReceiveSequence(8);
+
+      // 9 is less than 10, inside the window, accepted
+      expect(session.isValidInboundSequence(9, 'session-123'), isTrue);
+      session.updateReceiveSequence(9);
+    });
+
+    test('Duplicate packets are rejected', () {
+      expect(session.isValidInboundSequence(5, 'session-123'), isTrue);
+      session.updateReceiveSequence(5);
+
+      // Re-receiving 5 must be rejected
+      expect(session.isValidInboundSequence(5, 'session-123'), isFalse);
+    });
+
+    test('Stale packets outside/at the exact 64-packet window boundary are rejected', () {
+      // Receive 100, receiveSequence becomes 100. Replay window: [37, 100] (100 - 64 = 36)
+      expect(session.isValidInboundSequence(100, 'session-123'), isTrue);
+      session.updateReceiveSequence(100);
+
+      // 36 (exact boundary: receiveSequence - 64) must be rejected
+      expect(session.isValidInboundSequence(36, 'session-123'), isFalse);
+
+      // 35 (below boundary) must be rejected
+      expect(session.isValidInboundSequence(35, 'session-123'), isFalse);
+
+      // 37 (just inside boundary) should be accepted if never received before
+      expect(session.isValidInboundSequence(37, 'session-123'), isTrue);
+      session.updateReceiveSequence(37);
+
+      // 37 duplicate must be rejected
+      expect(session.isValidInboundSequence(37, 'session-123'), isFalse);
+    });
   });
 
   group('CanonicalEncoder Tests', () {
@@ -23,6 +94,32 @@ void main() {
 
       expect(bytes, isNotEmpty);
       expect(utf8.decode(bytes.sublist(0, 23)), 'VANTRA_HANDSHAKE_DOMAIN');
+    });
+
+    test('Validates exact 65535-byte boundary successfully', () {
+      final longName = 'A' * 65535;
+      final bytes = CanonicalEncoder.encodeHandshakeTranscript(
+        protocolVersion: 1,
+        peerId: 'peer-123',
+        displayName: longName,
+        identityPublicKeyBytes: [1, 2, 3, 4],
+        ephemeralPublicKeyBytes: [5, 6, 7, 8],
+      );
+      expect(bytes, isNotEmpty);
+    });
+
+    test('Rejects 65536-byte overflow by throwing ArgumentError', () {
+      final oversizedName = 'A' * 65536;
+      expect(
+        () => CanonicalEncoder.encodeHandshakeTranscript(
+          protocolVersion: 1,
+          peerId: 'peer-123',
+          displayName: oversizedName,
+          identityPublicKeyBytes: [1, 2, 3, 4],
+          ephemeralPublicKeyBytes: [5, 6, 7, 8],
+        ),
+        throwsArgumentError,
+      );
     });
   });
 

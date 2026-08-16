@@ -72,5 +72,19 @@ void main() {
       await discoveryService.connect('EP1');
       await expectFuture;
     });
+
+    test('Parses display name containing colons correctly', () async {
+      await discoveryService.startDiscovery();
+
+      // Trigger discovered peer with colons in name
+      fakeTransport.triggerDiscoveredPeers([
+        const DiscoveredPeer(id: 'EP1', name: 'Vantra:With:Colons:peer-uuid-123', serviceId: 'vantra'),
+      ]);
+
+      final peers = await discoveryService.discoveredPeersStream.first;
+      expect(peers.length, 1);
+      expect(peers[0].endpointName, 'Vantra:With:Colons');
+      expect(peers[0].resolvedPeerId, 'peer-uuid-123');
+    });
   });
 }
