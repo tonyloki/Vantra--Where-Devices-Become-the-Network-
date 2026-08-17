@@ -82,33 +82,6 @@ const VantraWireEnvelope$json = {
       '9': 0,
       '10': 'error'
     },
-    {
-      '1': 'routed_message',
-      '3': 5,
-      '4': 1,
-      '5': 11,
-      '6': '.vantra.protocol.RouteEnvelope',
-      '9': 0,
-      '10': 'routedMessage'
-    },
-    {
-      '1': 'route_request',
-      '3': 6,
-      '4': 1,
-      '5': 11,
-      '6': '.vantra.protocol.RouteRequest',
-      '9': 0,
-      '10': 'routeRequest'
-    },
-    {
-      '1': 'route_reply',
-      '3': 7,
-      '4': 1,
-      '5': 11,
-      '6': '.vantra.protocol.RouteReply',
-      '9': 0,
-      '10': 'routeReply'
-    },
   ],
   '8': [
     {'1': 'payload'},
@@ -122,11 +95,7 @@ final $typed_data.Uint8List vantraWireEnvelopeDescriptor = $convert.base64Decode
     'Y3VyZVBheWxvYWRIAFIJaGFuZHNoYWtlElEKEWVuY3J5cHRlZF9tZXNzYWdlGAMgASgLMiIudm'
     'FudHJhLnByb3RvY29sLkVuY3J5cHRlZEVudmVsb3BlSABSEGVuY3J5cHRlZE1lc3NhZ2USPQoF'
     'ZXJyb3IYBCABKAsyJS52YW50cmEucHJvdG9jb2wuUHJvdG9jb2xFcnJvclBheWxvYWRIAFIFZX'
-    'Jyb3ISRwoOcm91dGVkX21lc3NhZ2UYBSABKAsyHi52YW50cmEucHJvdG9jb2wuUm91dGVFbnZl'
-    'bG9wZUgAUg1yb3V0ZWRNZXNzYWdlEkQKDXJvdXRlX3JlcXVlc3QYBiABKAsyHS52YW50cmEucH'
-    'JvdG9jb2wuUm91dGVSZXF1ZXN0SABSDHJvdXRlUmVxdWVzdBI+Cgtyb3V0ZV9yZXBseRgHIAEo'
-    'CzIbLnZhbnRyYS5wcm90b2NvbC5Sb3V0ZVJlcGx5SABSCnJvdXRlUmVwbHlCCQoHcGF5bG9hZA'
-    '==');
+    'Jyb3JCCQoHcGF5bG9hZA==');
 
 @$core.Deprecated('Use identitySecurePayloadDescriptor instead')
 const IdentitySecurePayload$json = {
@@ -450,87 +419,3 @@ final $typed_data.Uint8List protocolErrorPayloadDescriptor = $convert.base64Deco
     'ChRQcm90b2NvbEVycm9yUGF5bG9hZBIdCgplcnJvcl9jb2RlGAEgASgNUgllcnJvckNvZGUSIw'
     'oNZXJyb3JfbWVzc2FnZRgCIAEoCVIMZXJyb3JNZXNzYWdlEiwKEnJlbGF0ZWRfbWVzc2FnZV9p'
     'ZBgDIAEoCVIQcmVsYXRlZE1lc3NhZ2VJZA==');
-
-@$core.Deprecated('Use routeEnvelopeDescriptor instead')
-const RouteEnvelope$json = {
-  '1': 'RouteEnvelope',
-  '2': [
-    {'1': 'packet_id', '3': 1, '4': 1, '5': 9, '10': 'packetId'},
-    {'1': 'source_peer_id', '3': 2, '4': 1, '5': 9, '10': 'sourcePeerId'},
-    {
-      '1': 'destination_peer_id',
-      '3': 3,
-      '4': 1,
-      '5': 9,
-      '10': 'destinationPeerId'
-    },
-    {'1': 'hop_count', '3': 4, '4': 1, '5': 13, '10': 'hopCount'},
-    {'1': 'max_hops', '3': 5, '4': 1, '5': 13, '10': 'maxHops'},
-    {
-      '1': 'encrypted_payload',
-      '3': 6,
-      '4': 1,
-      '5': 12,
-      '10': 'encryptedPayload'
-    },
-  ],
-};
-
-/// Descriptor for `RouteEnvelope`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List routeEnvelopeDescriptor = $convert.base64Decode(
-    'Cg1Sb3V0ZUVudmVsb3BlEhsKCXBhY2tldF9pZBgBIAEoCVIIcGFja2V0SWQSJAoOc291cmNlX3'
-    'BlZXJfaWQYAiABKAlSDHNvdXJjZVBlZXJJZBIuChNkZXN0aW5hdGlvbl9wZWVyX2lkGAMgASgJ'
-    'UhFkZXN0aW5hdGlvblBlZXJJZBIbCglob3BfY291bnQYBCABKA1SCGhvcENvdW50EhkKCG1heF'
-    '9ob3BzGAUgASgNUgdtYXhIb3BzEisKEWVuY3J5cHRlZF9wYXlsb2FkGAYgASgMUhBlbmNyeXB0'
-    'ZWRQYXlsb2Fk');
-
-@$core.Deprecated('Use routeRequestDescriptor instead')
-const RouteRequest$json = {
-  '1': 'RouteRequest',
-  '2': [
-    {'1': 'request_id', '3': 1, '4': 1, '5': 9, '10': 'requestId'},
-    {'1': 'source_peer_id', '3': 2, '4': 1, '5': 9, '10': 'sourcePeerId'},
-    {
-      '1': 'destination_peer_id',
-      '3': 3,
-      '4': 1,
-      '5': 9,
-      '10': 'destinationPeerId'
-    },
-    {'1': 'hop_count', '3': 4, '4': 1, '5': 13, '10': 'hopCount'},
-    {'1': 'max_hops', '3': 5, '4': 1, '5': 13, '10': 'maxHops'},
-  ],
-};
-
-/// Descriptor for `RouteRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List routeRequestDescriptor = $convert.base64Decode(
-    'CgxSb3V0ZVJlcXVlc3QSHQoKcmVxdWVzdF9pZBgBIAEoCVIJcmVxdWVzdElkEiQKDnNvdXJjZV'
-    '9wZWVyX2lkGAIgASgJUgxzb3VyY2VQZWVySWQSLgoTZGVzdGluYXRpb25fcGVlcl9pZBgDIAEo'
-    'CVIRZGVzdGluYXRpb25QZWVySWQSGwoJaG9wX2NvdW50GAQgASgNUghob3BDb3VudBIZCghtYX'
-    'hfaG9wcxgFIAEoDVIHbWF4SG9wcw==');
-
-@$core.Deprecated('Use routeReplyDescriptor instead')
-const RouteReply$json = {
-  '1': 'RouteReply',
-  '2': [
-    {'1': 'request_id', '3': 1, '4': 1, '5': 9, '10': 'requestId'},
-    {'1': 'source_peer_id', '3': 2, '4': 1, '5': 9, '10': 'sourcePeerId'},
-    {
-      '1': 'destination_peer_id',
-      '3': 3,
-      '4': 1,
-      '5': 9,
-      '10': 'destinationPeerId'
-    },
-    {'1': 'hop_count', '3': 4, '4': 1, '5': 13, '10': 'hopCount'},
-    {'1': 'max_hops', '3': 5, '4': 1, '5': 13, '10': 'maxHops'},
-    {'1': 'signature', '3': 6, '4': 1, '5': 12, '10': 'signature'},
-  ],
-};
-
-/// Descriptor for `RouteReply`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List routeReplyDescriptor = $convert.base64Decode(
-    'CgpSb3V0ZVJlcGx5Eh0KCnJlcXVlc3RfaWQYASABKAlSCXJlcXVlc3RJZBIkCg5zb3VyY2VfcG'
-    'Vlcl9pZBgCIAEoCVIMc291cmNlUGVlcklkEi4KE2Rlc3RpbmF0aW9uX3BlZXJfaWQYAyABKAlS'
-    'EWRlc3RpbmF0aW9uUGVlcklkEhsKCWhvcF9jb3VudBgEIAEoDVIIaG9wQ291bnQSGQoIbWF4X2'
-    'hvcHMYBSABKA1SB21heEhvcHMSHAoJc2lnbmF0dXJlGAYgASgMUglzaWduYXR1cmU=');

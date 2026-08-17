@@ -64,24 +64,6 @@ class EncryptedMessageEvent {
   String get macHex => mac.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
-class RoutedEnvelopeEvent {
-  final String endpointId;
-  final DomainRouteEnvelope envelope;
-  const RoutedEnvelopeEvent({required this.endpointId, required this.envelope});
-}
-
-class RouteRequestEvent {
-  final String endpointId;
-  final DomainRouteRequest request;
-  const RouteRequestEvent({required this.endpointId, required this.request});
-}
-
-class RouteReplyEvent {
-  final String endpointId;
-  final DomainRouteReply reply;
-  const RouteReplyEvent({required this.endpointId, required this.reply});
-}
-
 class MessagingService {
   final Transport _transport;
   final ProtocolCodec codec;
@@ -89,15 +71,9 @@ class MessagingService {
 
   final _encryptedMessageController = StreamController<EncryptedMessageEvent>.broadcast();
   final _secureIdentityController = StreamController<SessionSecureIdentity>.broadcast();
-  final _routedEnvelopeController = StreamController<RoutedEnvelopeEvent>.broadcast();
-  final _routeRequestController = StreamController<RouteRequestEvent>.broadcast();
-  final _routeReplyController = StreamController<RouteReplyEvent>.broadcast();
 
   Stream<EncryptedMessageEvent> get encryptedMessageStream => _encryptedMessageController.stream;
   Stream<SessionSecureIdentity> get secureIdentityStream => _secureIdentityController.stream;
-  Stream<RoutedEnvelopeEvent> get routedEnvelopeStream => _routedEnvelopeController.stream;
-  Stream<RouteRequestEvent> get routeRequestStream => _routeRequestController.stream;
-  Stream<RouteReplyEvent> get routeReplyStream => _routeReplyController.stream;
 
   MessagingService(this._transport, {this.codec = const ProtobufCodec()}) {
     _payloadSubscription = _transport.payloadReceivedStream.listen(_onPayloadReceived);
@@ -107,11 +83,7 @@ class MessagingService {
     _payloadSubscription.cancel();
     _encryptedMessageController.close();
     _secureIdentityController.close();
-    _routedEnvelopeController.close();
-    _routeRequestController.close();
-    _routeReplyController.close();
   }
-
 
   /// Sends a secure identity handshake protobuf packet
   Future<void> sendSecureIdentity({
@@ -179,25 +151,6 @@ class MessagingService {
     }
   }
 
-  /// Sends a RouteRequest packet over the transport
-  Future<void> sendRouteRequest(String endpointId, DomainRouteRequest req) async {
-    final bytes = codec.encodeWireEnvelope(req);
-    await _transport.send(endpointId, bytes);
-  }
-
-  /// Sends a RouteReply packet over the transport
-  Future<void> sendRouteReply(String endpointId, DomainRouteReply rep) async {
-    final bytes = codec.encodeWireEnvelope(rep);
-    await _transport.send(endpointId, bytes);
-  }
-
-  /// Sends a RouteEnvelope packet over the transport
-  Future<void> sendRoutedEnvelope(String endpointId, DomainRouteEnvelope routed) async {
-    final bytes = codec.encodeWireEnvelope(routed);
-    await _transport.send(endpointId, bytes);
-  }
-
-
   void _onPayloadReceived(PayloadReceivedEvent event) {
     print('[VANTRA][MESSAGE] PAYLOAD_RECEIVED endpoint=${event.endpointId}');
     VantraLogger.log('[VANTRA][MESSAGE] Wire payload received from ${event.endpointId} (${event.bytes.length} bytes)');
@@ -244,24 +197,6 @@ class MessagingService {
 
         case DomainProtocolError err:
           VantraLogger.log('[VANTRA][SECURITY] Outer PROTOCOL_ERROR packet received (unauthenticated): code=${err.errorCode}, message=${err.errorMessage}');
-
-        case DomainRouteEnvelope routed:
-          _routedEnvelopeController.add(RoutedEnvelopeEvent(
-            endpointId: event.endpointId,
-            envelope: routed,
-          ));
-
-        case DomainRouteRequest rreq:
-          _routeRequestController.add(RouteRequestEvent(
-            endpointId: event.endpointId,
-            request: rreq,
-          ));
-
-        case DomainRouteReply rrep:
-          _routeReplyController.add(RouteReplyEvent(
-            endpointId: event.endpointId,
-            reply: rrep,
-          ));
       }
     } on ProtocolValidationException catch (e) {
       VantraLogger.log('[VANTRA][SECURITY] Protocol validation rejected payload from ${event.endpointId}: ${e.message}');

@@ -13,9 +13,6 @@ message VantraWireEnvelope {
     IdentitySecurePayload handshake = 2;
     EncryptedEnvelope encrypted_message = 3;
     ProtocolErrorPayload error = 4;
-    RouteEnvelope routed_message = 5;
-    RouteRequest route_request = 6;
-    RouteReply route_reply = 7;
   }
 }
 
@@ -125,31 +122,3 @@ message ProtocolErrorPayload {
   string error_message = 2;
   string related_message_id = 3;
 }
-
-// 5. Routing Envelope & Mesh Control Messages (Phase 16)
-message RouteEnvelope {
-  string packet_id = 1;
-  string source_peer_id = 2;
-  string destination_peer_id = 3;
-  uint32 hop_count = 4;
-  uint32 max_hops = 5;
-  bytes encrypted_payload = 6;
-}
-
-message RouteRequest {
-  string request_id = 1;
-  string source_peer_id = 2;
-  string destination_peer_id = 3;
-  uint32 hop_count = 4;
-  uint32 max_hops = 5;
-}
-
-message RouteReply {
-  string request_id = 1;
-  string source_peer_id = 2;
-  string destination_peer_id = 3;
-  uint32 hop_count = 4;
-  uint32 max_hops = 5;
-  bytes signature = 6;
-}
-

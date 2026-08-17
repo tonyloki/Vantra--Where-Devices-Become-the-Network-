@@ -112,37 +112,10 @@ class ProtobufCodec implements ProtocolCodec {
           errorMessage: error.errorMessage,
           relatedMessageId: error.relatedMessageId,
         );
-      case DomainRouteEnvelope routed:
-        pbEnvelope.routedMessage = RouteEnvelope(
-          packetId: routed.packetId,
-          sourcePeerId: routed.sourcePeerId,
-          destinationPeerId: routed.destinationPeerId,
-          hopCount: routed.hopCount,
-          maxHops: routed.maxHops,
-          encryptedPayload: routed.encryptedPayload,
-        );
-      case DomainRouteRequest rreq:
-        pbEnvelope.routeRequest = RouteRequest(
-          requestId: rreq.requestId,
-          sourcePeerId: rreq.sourcePeerId,
-          destinationPeerId: rreq.destinationPeerId,
-          hopCount: rreq.hopCount,
-          maxHops: rreq.maxHops,
-        );
-      case DomainRouteReply rrep:
-        pbEnvelope.routeReply = RouteReply(
-          requestId: rrep.requestId,
-          sourcePeerId: rrep.sourcePeerId,
-          destinationPeerId: rrep.destinationPeerId,
-          hopCount: rrep.hopCount,
-          maxHops: rrep.maxHops,
-          signature: rrep.signature,
-        );
     }
 
     return pbEnvelope.writeToBuffer();
   }
-
 
   @override
   DomainWireEnvelope decodeWireEnvelope(Uint8List bytes) {
@@ -242,74 +215,6 @@ class ProtobufCodec implements ProtocolCodec {
           errorCode: err.errorCode,
           errorMessage: err.errorMessage,
           relatedMessageId: err.relatedMessageId,
-        );
-
-      case VantraWireEnvelope_Payload.routedMessage:
-        final r = pbEnvelope.routedMessage;
-        if (r.packetId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteEnvelope packetId cannot be empty');
-        }
-        if (r.sourcePeerId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteEnvelope sourcePeerId cannot be empty');
-        }
-        if (r.destinationPeerId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteEnvelope destinationPeerId cannot be empty');
-        }
-        if (r.encryptedPayload.isEmpty) {
-          throw const ProtocolValidationException('RouteEnvelope encryptedPayload cannot be empty');
-        }
-        return DomainRouteEnvelope(
-          protocolVersion: pbEnvelope.protocolVersion,
-          packetId: r.packetId,
-          sourcePeerId: r.sourcePeerId,
-          destinationPeerId: r.destinationPeerId,
-          hopCount: r.hopCount,
-          maxHops: r.maxHops,
-          encryptedPayload: Uint8List.fromList(r.encryptedPayload),
-        );
-
-      case VantraWireEnvelope_Payload.routeRequest:
-        final req = pbEnvelope.routeRequest;
-        if (req.requestId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteRequest requestId cannot be empty');
-        }
-        if (req.sourcePeerId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteRequest sourcePeerId cannot be empty');
-        }
-        if (req.destinationPeerId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteRequest destinationPeerId cannot be empty');
-        }
-        return DomainRouteRequest(
-          protocolVersion: pbEnvelope.protocolVersion,
-          requestId: req.requestId,
-          sourcePeerId: req.sourcePeerId,
-          destinationPeerId: req.destinationPeerId,
-          hopCount: req.hopCount,
-          maxHops: req.maxHops,
-        );
-
-      case VantraWireEnvelope_Payload.routeReply:
-        final rep = pbEnvelope.routeReply;
-        if (rep.requestId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteReply requestId cannot be empty');
-        }
-        if (rep.sourcePeerId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteReply sourcePeerId cannot be empty');
-        }
-        if (rep.destinationPeerId.trim().isEmpty) {
-          throw const ProtocolValidationException('RouteReply destinationPeerId cannot be empty');
-        }
-        if (rep.signature.length != 64) {
-          throw ProtocolValidationException('Invalid RouteReply signature length: ${rep.signature.length} (expected 64)');
-        }
-        return DomainRouteReply(
-          protocolVersion: pbEnvelope.protocolVersion,
-          requestId: rep.requestId,
-          sourcePeerId: rep.sourcePeerId,
-          destinationPeerId: rep.destinationPeerId,
-          hopCount: rep.hopCount,
-          maxHops: rep.maxHops,
-          signature: Uint8List.fromList(rep.signature),
         );
 
       case VantraWireEnvelope_Payload.notSet:

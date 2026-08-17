@@ -126,58 +126,6 @@ class CryptoService {
     }
   }
 
-  /// Computes a signature over the canonical RREP transcript (Phase 16).
-  Future<List<int>> signRouteReply({
-    required SimpleKeyPair identityKeyPair,
-    required String requestId,
-    required String sourcePeerId,
-    required String destinationPeerId,
-  }) async {
-    final transcriptBytes = Uint8List.fromList([
-      ...utf8.encode('VANTRA_RREP_TRANSCRIPT'),
-      ...utf8.encode(requestId),
-      ...utf8.encode(sourcePeerId),
-      ...utf8.encode(destinationPeerId),
-    ]);
-
-    final signature = await _ed25519.sign(
-      transcriptBytes,
-      keyPair: identityKeyPair,
-    );
-    return signature.bytes;
-  }
-
-  /// Verifies an Ed25519 signature over the canonical RREP transcript (Phase 16).
-  Future<bool> verifyRouteReply({
-    required List<int> signatureBytes,
-    required List<int> identityPublicKeyBytes,
-    required String requestId,
-    required String sourcePeerId,
-    required String destinationPeerId,
-  }) async {
-    try {
-      final transcriptBytes = Uint8List.fromList([
-        ...utf8.encode('VANTRA_RREP_TRANSCRIPT'),
-        ...utf8.encode(requestId),
-        ...utf8.encode(sourcePeerId),
-        ...utf8.encode(destinationPeerId),
-      ]);
-
-      final signature = Signature(
-        signatureBytes,
-        publicKey: SimplePublicKey(identityPublicKeyBytes, type: KeyPairType.ed25519),
-      );
-
-      return await _ed25519.verify(
-        transcriptBytes,
-        signature: signature,
-      );
-    } catch (_) {
-      return false;
-    }
-  }
-
-
   /// Derives directional symmetric keys using ECDH X25519 and HKDF-SHA256.
   /// Deterministically assigns Device A (lexicographically lower ephemeral public key)
   /// and Device B (higher ephemeral public key) so both peers symmetrically agree on directional keys.
