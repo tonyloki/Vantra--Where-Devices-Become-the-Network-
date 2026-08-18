@@ -2,8 +2,8 @@
 
 ## Phase Status
 
-*   **Current Phase:** Production Hardening
-*   **Status:** Capabilities-based version negotiation, secure offline-first media and file chunking transfer engine, and connection recovery protection completed. Production hardening audit issues BUG-01 to BUG-14 fully resolved and verified.
+*   **Current Phase:** Phase 18: Large Media Streaming (Direct to Disk)
+*   **Status:** Direct-to-disk random-access media streaming, multi-hop routing, mesh reliability layers, and capabilities-based version negotiation completed.
 
 ---
 
@@ -16,16 +16,16 @@ VANTRA uses a layered architecture to decouple presentation, business logic, dat
       [ChatPage / ConversationsPage / ContactsPage / SplashPage]
                                 │
                                 ▼
-              Application State Layer (Riverpod Providers)
+               Application State Layer (Riverpod Providers)
     [MessagingNotifier / conversationStreamProvider / peersProvider]
                                 │
                                 ▼
-             Domain Service Layer (Encoding / Wire format)
+              Domain Service Layer (Encoding / Wire format)
      [MessagingService / ProtobufCodec / NearbyConnectionService]
                                 │
                                 ▼
-                   Cryptographic Security Layer
-                  [CryptoService / SecuritySession]
+                    Cryptographic Security Layer
+                   [CryptoService / SecuritySession]
                                 │
                 ┌───────────────┴───────────────┐
                 ▼                               ▼
@@ -58,7 +58,7 @@ VANTRA uses a layered architecture to decouple presentation, business logic, dat
 ### 3. Cryptographic Security Layer
 - **CryptoService**: Ephemeral Diffie-Hellman (X25519) key agreement, long-term Ed25519 signature checks, and HKDF-SHA256 session key derivation.
 - **ChaCha20-Poly1305**: Encrypts and decrypts message bodies and media chunks (`VantraPlaintext` payload) with Associated Data (AAD) binding using the envelope `messageId`.
-- **SecuritySession**: Tracks monotonic sequence counters (`sendSequence`, `receiveSequence`) and session key states in memory.
+- **SecuritySession**: Tracks monotonic sequence counters (`sendSequence`, `receiveSequence`), sliding window replay protection (64 packets), and session key states in memory.
 
 ### 4. Local Persistence Data Layer
 - **MessagingRepository**: Enforces duplicate message packet protection at database write time. Stores trusted peer public keys and fingerprints.

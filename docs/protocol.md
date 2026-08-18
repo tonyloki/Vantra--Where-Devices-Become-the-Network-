@@ -2,8 +2,8 @@
 
 ## Phase Status
 
-*   **Current Phase:** Production Hardening
-*   **Status:** Capabilities-based V2 version negotiation, connection recovery protection, chunked E2E encrypted media transfer (OFFER/ACCEPT protocol), and SQLite file reassembly engine completed. Production hardening audit issues BUG-01 to BUG-14 fully resolved and verified.
+*   **Current Phase:** Phase 18: Large Media Streaming (Direct to Disk)
+*   **Status:** Capabilities-based V2 version negotiation, connection recovery protection, direct-to-disk random-access media streaming (OFFER/ACCEPT protocol), SHA-256 integrity checks, and sliding window sequence verification completed.
 
 ---
 
@@ -20,7 +20,7 @@ VANTRA coordinates background candidate discovery by embedding identity hints in
 
 ---
 
-## 1. Protocol Buffers Wire Format
+## 2. Protocol Buffers Wire Format
 
 All data transmitted over the Nearby Connections transport is serialized using Protocol Buffers. The outer envelope is always a `VantraWireEnvelope` (version `1`).
 
@@ -183,21 +183,21 @@ message MediaChunk {
 
 ---
 
-## 2. Sequence, Replay & Session Validation
+## 3. Sequence, Replay & Session Validation
 
 *   **Sliding Window Replay Protection:** Incoming packets must pass a 64-packet sliding window check: the sequence number must be greater than `receiveSequence - 64`, and it must not have been previously received (no duplicates).
 *   **Retransmission Invariant:** Retransmissions of a pending message (e.g. if the original ACK was lost) must use the **same logical messageId** but must be encrypted using a **new sequence number and nonce** under the current active session. This allows the packet to pass replay protection, and then trigger duplicate-message handling.
 
 ---
 
-## 3. Encrypted ACK Invariant
+## 4. Encrypted ACK Invariant
 
 *   Delivery ACKs are encrypted using the same session security parameters.
 *   **Distinct Packet IDs:** Every ACK packet has its own unique outer `message_id` (representing the ACK packet itself) so that AAD binding and replay sequence tracking function normally. The ID of the original text message being acknowledged is placed inside `AckBody.original_message_id`.
 
 ---
 
-## 4. Lost-ACK & Duplicate-Message ACK Recovery
+## 5. Lost-ACK & Duplicate-Message ACK Recovery
 
 *   If an incoming decrypted message has a `message_id` that is already present in the local database (indicating the remote peer retransmitted because it did not receive our ACK):
     1. The payload is discarded to prevent duplicate entries in SQLite and duplicate message bubbles in the UI.
@@ -205,7 +205,7 @@ message MediaChunk {
 
 ---
 
-## 5. Protocol V2 Version Negotiation
+## 6. Protocol V2 Version Negotiation
 
 VANTRA V2 introduces version negotiation to support backward compatibility with V1 devices.
 1. **Version Range Advertisement**: The handshake payload (`IdentitySecurePayload`) includes `min_supported_version` and `max_supported_version`.
@@ -221,7 +221,7 @@ VANTRA V2 introduces version negotiation to support backward compatibility with 
 
 ---
 
-## 6. Capabilities Exchange Protocol
+## 7. Capabilities Exchange Protocol
 
 On a negotiated V2 session, the session status transitions to `SessionStatus.handshaking` (secure but not yet ready) until capability negotiation is complete.
 1. **Capabilities Exchange Payload**: Both peers build a `CapabilitiesExchange` plaintext body containing their supported capabilities list and send it as sequence `1` on their outbound encrypted streams.
@@ -230,7 +230,7 @@ On a negotiated V2 session, the session status transitions to `SessionStatus.han
 
 ---
 
-## 7. Secure Chunked Media/File Transfer Protocol
+## 8. Secure Chunked Media/File Transfer Protocol
 
 Arbitrary file and image transfers are coordinated offline using a structured control loop (OFFER -> ACCEPT/REJECT -> CHUNK -> ACK):
 
@@ -240,20 +240,26 @@ Arbitrary file and image transfers are coordinated offline using a structured co
 
 ### B. Media ACCEPT / REJECT
 * The receiver validates if it supports the capability (`image` or `file`) and checks local space limits.
-* If valid, the receiver scans its temp directory `<appDocs>/media/temp/<transferId>/` to determine the index of the next chunk it needs (supporting resumable transfers).
+* If valid, the receiver checks if a transfer session exists. If resuming, it queries the number of unique received chunks to determine `nextExpectedChunk`.
 * The receiver replies with a `MediaControl` packet of type `ACCEPT` containing `nextExpectedChunk`.
 * If invalid, it replies with `REJECT`.
 
-### C. Chunk Streaming
-* Upon receiving `ACCEPT`, the sender opens the file and reads 16 KB chunks starting from the requested `nextExpectedChunk` index.
-* Each chunk is packed into a `MediaChunk` message containing the `transfer_id`, `chunk_index`, `total_chunks`, and the raw segment bytes.
-* Chunks are encrypted individually as separate `VantraPlaintext` envelopes using unique nonces under the monotonic session counter, then streamed to the peer.
+### C. Chunk Streaming (Direct-to-Disk)
+* Upon receiving `ACCEPT`, the sender opens the source file once as a `RandomAccessFile` in read-only mode.
+* The sender sequentially reads, encrypts, and sends segments of **128 KB** (or as advertised in the offer), ensuring a bounded memory footprint.
+* The receiver opens a single `.tmp` file (e.g. `<appDocs>/media/temp/<transferId>.tmp`) using random-access I/O.
+* As chunks arrive, the receiver seeks directly to the target offset `chunkIndex * chunkSize` and writes the decrypted bytes:
+  ```dart
+  await raf.setPosition(offset);
+  await raf.writeFrom(chunkData);
+  ```
+* Out-of-order chunks are supported natively through sliding window replay protection updates.
 
-### D. Reassembly & Final Integrity Check
-* As chunks arrive, the receiver saves them to the temp directory.
-* Once all chunks are received, the receiver decrypts and writes the parts sequentially to the final storage location:
+### D. Final Integrity Check & Cleanups
+* Once all unique chunks exist in the tracking set, the receiver closes the `.tmp` file.
+* The receiver computes the SHA-256 hash of the complete `.tmp` file and verifies it against the expected hash.
+* On success, the file is atomically renamed/moved to final storage:
   * Image: `<appDocs>/media/incoming/`
   * File: `<appDocs>/files/incoming/`
-* The receiver computes the SHA-256 hash of the reassembled file and verifies it against the `sha256` integrity hash received in the `OFFER`.
-* If hashes match, the receiver updates the message status to `received` and transmits a secure delivery `ACK` to the sender. If verification fails, it deletes the files.
-
+  * The message status in SQLite is updated to `received`, and a secure `ACK` is sent to the sender.
+* On failure or timeout, the temporary file is deleted and resources are freed.

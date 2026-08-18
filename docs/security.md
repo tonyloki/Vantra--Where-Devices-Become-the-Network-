@@ -2,8 +2,8 @@
 
 ## Phase Status
 
-*   **Current Phase:** Production Hardening
-*   **Status:** Auto-reconnection identity mismatch verification, V2 capabilities exchange negotiation, and chunked media transfer encryption invariants completed. Production hardening audit issues BUG-01 to BUG-14 fully resolved and verified.
+*   **Current Phase:** Phase 18: Large Media Streaming (Direct to Disk)
+*   **Status:** Direct-to-disk random-access media streaming encryption invariants, out-of-order sequence decryption using sliding window replay protection, and dynamic chunk size checks completed.
 
 ---
 
@@ -139,9 +139,9 @@ Protocol V2 introduces version range checks and capability verification to prote
 ## 7. Media and File Chunk Encryption Security
 
 Arbitrary file and image transfers utilize the exact same secure channel and cryptographic bounds as text messages:
-*   **Segmented Encryption**: Rather than encrypting the file in its entirety and sending a single giant packet, VANTRA divides the file into 16 KB segments. Each segment is packed as a `MediaChunk` message and encrypted separately as a `VantraPlaintext` envelope.
+*   **Segmented Encryption**: Rather than encrypting the file in its entirety and sending a single giant packet, VANTRA divides the file into segments. Chunks are negotiated dynamically or default to **128 KB** (131072 bytes) for production files. Each segment is packed as a `MediaChunk` message and encrypted separately as a `VantraPlaintext` envelope.
 *   **Counter-Based Nonces**: Every individual chunk is encrypted with a unique counter-based nonce derived from the current session's sequence counter. This guarantees that key-nonce reuse is impossible, preventing multi-chunk keystream extraction.
-*   **Integrity Hash (SHA-256)**: During the initial `OFFER` exchange, the sender transmits the SHA-256 integrity hash of the complete file. Once all chunks are decrypted and reassembled on the receiver's end, the receiver computes the SHA-256 hash of the final file. The file is only committed to final storage and exposed to the user if the reassembled file's hash matches the `sha256` value in the `OFFER`. If a mismatch is detected, the files are deleted immediately.
+*   **Integrity Hash (SHA-256)**: During the initial `OFFER` exchange, the sender transmits the SHA-256 integrity hash of the complete file. Once all chunks are decrypted and written directly to their offsets on the receiver's disk, the receiver computes the SHA-256 hash of the final file. The file is only committed to final storage and exposed to the user if the reassembled file's hash matches the `sha256` value in the `OFFER`. If a mismatch is detected, the files are deleted immediately.
 
 ---
 

@@ -2,26 +2,21 @@
 
 ## Phase Status
 
-*   **Current Phase:** Production Hardening
-*   **Status:** Comprehensive automated testing suite (154 tests) and manual multi-device image/file verification guidelines completed.
+*   **Current Phase:** Phase 18: Large Media Streaming (Direct to Disk)
+*   **Status:** Direct-to-disk random-access media streaming verified via 167 automated unit, integration, and widget tests.
 
 ---
 
 ## Automated Verification Suite
 
-Vantra includes **154 automated unit, widget, and integration tests** to guarantee cryptographic security, protocol accuracy, and UI correctness:
+Vantra includes **167 automated unit, widget, and integration tests** to guarantee cryptographic security, protocol accuracy, and UI correctness:
 - **`test/crypto_test.dart`**: Verifies X25519 DH key agreements, Ed25519 identity verification, ChaCha20-Poly1305 AEAD ciphers, 64-packet sliding window replay protection, and transcript length verification.
 - **`test/database_test.dart` & `test/repository_test.dart`**: Verifies Drift persistence layer, bilaterally ordered message chats, message queues, read states, atomic retry increments, startup recovery (retaining delivered state), and duplicate message prevention.
 - **`test/conversations_test.dart`**: Verifies optimized conversation summaries reactively using raw SQL queries and stream combineLatest3 mapping.
 - **`test/peer_discovery_test.dart`**: Verifies colon-delimited displayName and peerId advertising name parsing.
 - **`test/trust_block_test.dart`**: Verifies security blocking invariants, distrusted peer connection rejections, and signature checking.
-- **`test/multi_peer_test.dart` & `test/messaging_test.dart`**: Complete multi-peer routing and media integration tests covering:
-  - V2 version negotiation and compatibility fallbacks.
-  - Asynchronous capability exchanges and connection recovery checks.
-  - Image chunking, E2E encrypted transmission, and receiver reassembly.
-  - Resumable chunk transfer negotiation (ACCEPT chunk resumption indexes).
-  - SHA-256 integrity hash verification, 500 MB size limit checks, and failure drop routines.
-  - Temporary directory chunk file cleanups on all reject/timeout/disconnect paths, and multi-peer directory isolation.
+- **`test/mesh_reliability_test.dart`**: Verifies dynamic link-failure detection, Route Error (RERR) propagation, path rediscovery, next-hop invalidation, and hop-level retries.
+- **`test/media_streaming_test.dart`**: Verifies Phase 18 direct-to-disk random-access streaming, including out-of-order chunk writing, duplicate packet rejection, boundary and overflow checks, SHA-256 checksum validation, atomic move/rename, file descriptor closing, 30-second inactivity watchdog cleanup, and simultaneous isolated transfers.
 - **`test/widget_test.dart` & `test/chat_widget_test.dart`**: Verifies animated splash loaders, conversations empty states, chat bubbles, unread counts, text composers, and location warnings.
 
 ---
@@ -52,4 +47,3 @@ To manually verify secure text and media transfers offline on physical Android d
    * Device A's bubble status transitions to `sent` when the receiver sends the final delivery ACK.
 3. Repeat the steps in the other direction (Device B → Device A) to verify bidirectional media transfers.
 4. Attempt to send an arbitrary file (e.g. PDF/TXT) and verify that it transfers successfully and is saved under the `<appDocs>/files/incoming/` directory.
-

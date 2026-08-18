@@ -2,36 +2,48 @@
 
 > Where Devices Become the Network.
 
-VANTRA is a decentralized, offline-first peer-to-peer communication platform designed to allow nearby Android devices to discover each other, establish secure connections, and exchange messages without Internet or cellular networks.
+![Vantra Logo](lib/Assets/Logo.png)
 
-## Phase Status
+VANTRA is a decentralized, offline-first peer-to-peer (P2P) communication platform designed to allow nearby Android devices to discover each other, establish secure connections, and exchange messages and large media files without Internet or cellular networks.
 
-*   **Current Phase:** Phase 14
-*   **Status:** Secure chunked media/file transfer protocol, capabilities-based version negotiation, connection recovery protection, and SQLite reassembly engine completed.
+---
 
-## Completed Core Phases
+## Why It Matters
 
-*   **Phase 0:** Scaffold Foundation & Project Setup
-*   **Phase 1:** Direct P2P Connectivity & Raw Byte Transfer (Nearby Connections)
-*   **Phase 2:** Persistent Peer Identity & Text Messaging Core
-*   **Phase 3:** Offline-First SQLite Local Messaging Persistence (Drift SQLite)
-*   **Phase 4:** Secure Handshake, Ephemeral Key Exchange (X25519) & Cryptographic Signature Verification (Ed25519)
-*   **Phase 5:** Protobuf Wire Serialization & Encrypted ACK Protocol
-*   **Phase 6:** Peer Discovery, Contacts Book, Trust Management & Peer Blocking
-*   **Phase 7:** Persistent Outgoing Queue, Duplicate-Message ACK Recovery, and Crash Resiliency
-*   **Phase 8:** Production Connection Lifecycle & App Entry Experience
-*   **Phase 9:** Production UI/UX Polish & Dedicated Android Launcher Icons
-*   **Phase 10:** Persistent Trusted Peer Auto-Reconnection & Cryptographic Mismatch Warnings
-*   **Phase 11:** Protocol V2 Version Negotiation & Async Capability-Based Exchange
-*   **Phase 12:** Vantra V2 Core Image/File Transfer Protocol (OFFER/ACCEPT control messages)
-*   **Phase 13:** Generalized File Transfer Engine, SQLite Schema Migration, & SHA-256 Hash Verification
-*   **Phase 14:** Capability-Based Connection Recovery Protection & Physical Device Stabilization
+In a world dependent on centralized internet service providers and cellular towers, communication is vulnerable to surveillance, outages, natural disasters, and censorship. VANTRA is designed to solve these issues:
+- **Resilience:** Operates during grid failures, natural disasters, or in remote offline areas.
+- **Privacy:** Eliminates central servers, metadata tracking, and third-party intermediaries.
+- **Zero Cost:** Uses point-to-point Wi-Fi Direct and Bluetooth radios to transmit data locally at no cellular cost.
 
-## Architecture Overview
+---
 
-VANTRA features a highly decoupled, layered architecture to isolate presentation widgets, Riverpod state notifiers, domain-level wire formatting (Protobuf), cryptographic security operations, and offline transports:
+## Solution
 
-### Architectural Layer Diagram (Phase 14)
+VANTRA implements a robust multi-hop mesh network:
+- **Zero-Config Discovery:** Nearby devices automatically find each other and establish local connection topologies.
+- **End-to-End Cryptography:** Handshakes verify identity and establish session keys, ensuring confidentiality, integrity, and forward secrecy.
+- **Multi-Hop Mesh Routing:** Packets are automatically relayed via intermediate nodes, allowing end-to-end delivery between devices out of physical radio range.
+- **Direct-to-Disk Media Streaming:** Supports transferring large files (up to 500 MB) with a bounded memory footprint.
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Description |
+|---|---|---|
+| **Framework** | Flutter & Dart | Cross-platform runtime and UI shell |
+| **State Management** | Riverpod | Reactive state management and dependency injection |
+| **Local Database** | Drift (SQLite) | Persistent schema-safe offline storage |
+| **Transport Protocol** | Google Nearby Connections | Bluetooth and Wi-Fi Direct point-to-point radios |
+| **Serialization** | Protocol Buffers (Protobuf) | Compact binary wire framing and serialization |
+| **Identity & Exchange** | Ed25519 & X25519 | Cryptographic identities and ephemeral key exchange |
+| **Cipher AEAD** | ChaCha20-Poly1305 | Authenticated encryption with Associated Data (AAD) binding |
+
+---
+
+## Architecture
+
+VANTRA features a highly decoupled, layered architecture to isolate presentation, application state, domain protocols, cryptographic security, and transport layers:
 
 ```mermaid
 graph TD
@@ -84,55 +96,102 @@ graph TD
     NetTransport --> NearbyAPI
 ```
 
-### Protocol & Media Transfer Workflow (V2)
+---
 
-The sequential workflow of connection establishment, cryptographic handshake, version range negotiation, capability exchange, and chunked media transfer is illustrated below:
+## Flowchart: Connection & Secure Session Handshake
 
+```mermaid
+graph TD
+    Start([Discovered Endpoint]) --> RoleNegotiate{Compare localPeerId vs remotePeerId}
+    RoleNegotiate -->|local < remote| Initiator[Send Connection Request]
+    RoleNegotiate -->|local >= remote| Responder[Wait for Connection Request]
+    
+    Initiator --> ConnectSuccess{Connection Established?}
+    Responder --> ConnectSuccess
+    
+    ConnectSuccess -->|Yes| SecureHandshake[Exchange IDENTITY_SECURE<br/>Min/Max supported version & Ephemeral X25519]
+    ConnectSuccess -->|No| Disconnect([Disconnect])
+    
+    SecureHandshake --> SigVerify{Verify Ed25519 signature}
+    SigVerify -->|Match| KeyDerivation[Derive session keys via X25519 ECDH + HKDF-SHA256]
+    SigVerify -->|Mismatch| Warning[Show Mismatch Alert & Disconnect]
+    
+    KeyDerivation --> VersionNegotiate{Negotiated Version?}
+    VersionNegotiate -->|V2| CapExchange[Send Encrypted CapabilitiesExchange]
+    VersionNegotiate -->|V1| Connected[Status: Connected<br/>Capabilities default to text]
+    
+    CapExchange --> CapMatch{Intersects capabilities?}
+    CapMatch -->|Yes| Connected
+    CapMatch -->|No| Disconnect
+```
+
+---
+
+## Workflow: E2E Mesh Relaying & Large Media Streaming
+
+### Mesh Message Relaying (A -> B -> C)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alice as Device A (Sender)
+    actor Bob as Device B (Relay)
+    actor Charlie as Device C (Receiver)
+
+    Note over Alice, Charlie: Alice establishes secure session with Charlie E2E. Bob only relays.
+    Alice->>Bob: Envelope: destination=Charlie, nextHop=Bob (Encrypted payload inside)
+    Note over Bob: Parse routing header. ID not mine -> lookup next hop to Charlie
+    Bob->>Charlie: Envelope: destination=Charlie, nextHop=Charlie (Encrypted payload inside)
+    Note over Charlie: Parse routing header. ID is mine -> Decrypt E2E payload
+    Charlie->>Bob: Routing ACK (Backwards propagation)
+    Bob->>Alice: Routing ACK
+```
+
+### Direct-to-Disk Media Streaming (V2)
 ```mermaid
 sequenceDiagram
     autonumber
     actor Alice as Device A (Sender)
     actor Bob as Device B (Receiver)
 
-    Note over Alice, Bob: 1. Connection & Version Negotiation
-    Alice->>Bob: Connection Request (Nearby P2P)
-    Bob-->>Alice: Connection Accepted
-    Alice->>Bob: IDENTITY_SECURE (Handshake: version range [1, 2], identity key, ephemeral key, signature)
-    Bob->>Alice: IDENTITY_SECURE (Handshake: version range [1, 2], identity key, ephemeral key, signature)
-    Note over Alice, Bob: Verify Ed25519 signature & derive session keys via X25519 ECDH + HKDF-SHA256
-    Note over Alice, Bob: Negotiated Version calculated: 2 (V2 Mode)
-
-    Note over Alice, Bob: 2. Encrypted V2 Capabilities Exchange
-    Alice->>Bob: CapabilitiesExchange (seq 1, encrypted: [text, image, file])
-    Bob->>Alice: CapabilitiesExchange (seq 1, encrypted: [text, image, file])
-    Note over Alice, Bob: Both calculate intersection: [text, image, file] -> status promoted to CONNECTED
-
-    Note over Alice, Bob: 3. Secure Bidirectional Messaging (Text)
-    Alice->>Bob: VantraPlaintext.TextBody (seq 2, encrypted: "Hello!")
-    Bob->>Alice: Delivery ACK (seq 2, encrypted status: delivered)
-
-    Note over Alice, Bob: 4. Secure Chunked Media/File Transfer Loop
-    Alice->>Bob: MediaControl.OFFER (seq 3, transferId, fileName, fileSize, sha256)
-    Note over Bob: Verify capabilities & check local storage limits
-    Note over Bob: Scan temp folder for chunk progress (0 chunks found)
-    Bob->>Alice: MediaControl.ACCEPT (seq 3, nextExpectedChunk: 0)
-
-    Note over Alice: Read 16 KB chunks from file
-    Alice->>Bob: MediaChunk 1/4 (seq 4, raw bytes)
-    Alice->>Bob: MediaChunk 2/4 (seq 5, raw bytes)
-    Alice->>Bob: MediaChunk 3/4 (seq 6, raw bytes)
-    Alice->>Bob: MediaChunk 4/4 (seq 7, raw bytes)
-    Note over Bob: Decrypt and write chunks to temp folder
-
-    Note over Bob: Reassemble chunks sequentially
-    Note over Bob: Compute SHA-256 of reassembled file & verify match with OFFER hash
-    Bob->>Alice: Delivery ACK (seq 4, originalMessageId, status: delivered)
-    Note over Alice: Set message status to SENT
+    Note over Alice, Bob: Direct-to-disk large media transfer loop
+    Alice->>Bob: MediaControl.OFFER (transferId, size, sha256)
+    Note over Bob: Check capabilities & space limits
+    Bob->>Alice: MediaControl.ACCEPT (nextExpectedChunk: 0)
+    
+    Note over Alice: Open file as RandomAccessFile
+    Alice->>Bob: MediaChunk 0/N (Encrypted segment)
+    Note over Bob: Seek & write directly to offset
+    Alice->>Bob: MediaChunk 1/N (Encrypted segment)
+    Note over Bob: Seek & write directly to offset
+    
+    Note over Alice: Close RandomAccessFile
+    Note over Bob: Close .tmp file & Verify SHA-256 hash
+    Note over Bob: Hash Match -> Atomically rename to target folder
+    Bob->>Alice: Delivery ACK (originalMessageId, status: delivered)
 ```
 
-See the documentation in `docs/` for specific specifications:
-*   [Architecture Guide](docs/architecture.md)
-*   [Protocol Spec](docs/protocol.md)
-*   [Security Architecture](docs/security.md)
-*   [Networking Specs](docs/networking.md)
-*   [Testing Guidelines](docs/testing.md)
+---
+
+## Phase Status
+
+*   **Current Phase:** Phase 19: Media Transfer Progress UI
+*   **Completed Phases:**
+    *   **Phase 0:** Scaffold Foundation & Project Setup
+    *   **Phase 1:** Direct P2P Connectivity & Raw Byte Transfer (Nearby Connections)
+    *   **Phase 2:** Persistent Peer Identity & Text Messaging Core
+    *   **Phase 3:** Offline-First SQLite Local Messaging Persistence (Drift SQLite)
+    *   **Phase 4:** Secure Handshake, Ephemeral Key Exchange (X25519) & Cryptographic Signature Verification (Ed25519)
+    *   **Phase 5:** Protobuf Wire Serialization & Encrypted ACK Protocol
+    *   **Phase 6:** Peer Discovery, Contacts Book, Trust Management & Peer Blocking
+    *   **Phase 7:** Persistent Outgoing Queue, Duplicate-Message ACK Recovery, and Crash Resiliency
+    *   **Phase 8:** Production Connection Lifecycle & App Entry Experience
+    *   **Phase 9:** Production UI/UX Polish & Dedicated Android Launcher Icons
+    *   **Phase 10:** Persistent Trusted Peer Auto-Reconnection & Cryptographic Mismatch Warnings
+    *   **Phase 11:** Protocol V2 Version Negotiation & Async Capability-Based Exchange
+    *   **Phase 12:** Vantra V2 Core Image/File Transfer Protocol (OFFER/ACCEPT control messages)
+    *   **Phase 13:** Generalized File Transfer Engine, SQLite Schema Migration, & SHA-256 Hash Verification
+    *   **Phase 14:** Capability-Based Connection Recovery Protection & Physical Device Stabilization
+    *   **Phase 15:** Memory-Bounded File Chunking & Performance Optimization
+    *   **Phase 16:** Real Mesh Routing (A -> B -> C) & Route Table Schema
+    *   **Phase 17:** Mesh Reliability, RERR Route Invalidation & Hop-Level Retries
+    *   **Phase 18:** Large Media Streaming (Direct to Disk), sliding window validation, & fallback chunk sizing
