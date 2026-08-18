@@ -2287,7 +2287,11 @@ void main() {
         ciphertext: Uint8List.fromList(encOffer.ciphertext),
         mac: Uint8List.fromList(encOffer.mac),
       )));
-      await Future.delayed(const Duration(milliseconds: 50));
+      // Wait for cleanup to complete (up to 1.5 seconds)
+      for (int i = 0; i < 30; i++) {
+        if (!await tempDirA.exists()) break;
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
 
       // Verify that Peer A's temp folder is cleaned up (deleted)
       expect(await tempDirA.exists(), isFalse);

@@ -191,20 +191,52 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Map<String, double> _transferProgress = {};
   final Set<String> _inflightSends = {};
   final Map<String, PendingIncomingOffer> _pendingIncomingOffers = {};
+  
+  // Phase 18 Large Media Streaming structures
+  final Map<String, RandomAccessFile> _activeReceiveFiles = {};
+  final Map<String, Set<int>> _receivedChunkIndices = {};
+  final Map<String, Timer> _receiveTimeoutTimers = {};
+  final Map<String, int> _receiveChunkSizes = {};
 
   double getTransferProgress(String transferId) => _transferProgress[transferId] ?? 0.0;
+
+  Future<void> _cleanupReceiveTransfer(String transferId, {bool deleteTempFile = false, String? tempFilePath}) async {
+    final raf = _activeReceiveFiles.remove(transferId);
+    if (raf != null) {
+      try {
+        await raf.close();
+      } catch (_) {}
+    }
+    _receivedChunkIndices.remove(transferId);
+    final timer = _receiveTimeoutTimers.remove(transferId);
+    timer?.cancel();
+    _receiveChunkSizes.remove(transferId);
+
+    if (deleteTempFile && tempFilePath != null) {
+      try {
+        final f = File(tempFilePath);
+        if (await f.exists()) {
+          await f.delete();
+          VantraLogger.log('[VANTRA][MESSAGING] Deleted temporary file for transferId=$transferId path=$tempFilePath');
+        }
+      } catch (_) {}
+    }
+  }
 
   Future<void> _cleanupTempDir(String transferId, bool isImage) async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
       final dirPrefix = isImage ? 'media' : 'files';
-      final tempDir = Directory(path.join(appDir.path, dirPrefix, 'temp', transferId));
-      if (await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
-        VantraLogger.log('[VANTRA][MESSAGING] Cleaned up temporary directory for transferId=$transferId');
+      final tempFilePath = path.join(appDir.path, dirPrefix, 'temp', '$transferId.tmp');
+      await _cleanupReceiveTransfer(transferId, deleteTempFile: true, tempFilePath: tempFilePath);
+      
+      // Also check and delete legacy chunk directory if it exists
+      final legacyDir = Directory(path.join(appDir.path, dirPrefix, 'temp', transferId));
+      if (await legacyDir.exists()) {
+        await legacyDir.delete(recursive: true);
       }
     } catch (e, stack) {
-      VantraLogger.log('[VANTRA][MESSAGING] Failed to clean up temporary directory: $e', e, stack);
+      VantraLogger.log('[VANTRA][MESSAGING] Failed to clean up temporary resources: $e', e, stack);
     }
   }
 
@@ -337,6 +369,18 @@ class MessagingNotifier extends Notifier<MessagingState> {
         t.cancel();
       }
       _cacheTimers.clear();
+      for (final raf in _activeReceiveFiles.values) {
+        try {
+          raf.closeSync();
+        } catch (_) {}
+      }
+      _activeReceiveFiles.clear();
+      _receivedChunkIndices.clear();
+      for (final t in _receiveTimeoutTimers.values) {
+        t.cancel();
+      }
+      _receiveTimeoutTimers.clear();
+      _receiveChunkSizes.clear();
     });
 
     // Persistent Recovery on App Boot
@@ -417,8 +461,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
             'payloadType=${plaintext.runtimeType}\n'
             'transferId=$transferIdVal');
 
-      // 3. Replay Protection: verify sequence > lastSeenReceiveSequence & matching session ID
-      if (plaintext.sessionId != session.sessionId || plaintext.sequence <= session.receiveSequence) {
+      // 3. Replay Protection: verify sequence validity with sliding window & matching session ID
+      if (!session.isValidInboundSequence(plaintext.sequence, plaintext.sessionId)) {
         VantraLogger.log('[VANTRA][SECURITY] REPLAY / INVALID SEQUENCE: messageId=${plaintext.messageId}, seq=${plaintext.sequence} <= receiveSequence=${session.receiveSequence} or sessionId mismatch. Discarded.');
         return;
       }
@@ -638,74 +682,133 @@ class MessagingNotifier extends Notifier<MessagingState> {
         }
       } else if (plaintext is DomainMediaChunk) {
         final msg = await repository.getMessageByTransferId(plaintext.transferId);
+        if (msg == null) {
+          VantraLogger.log('[VANTRA][MESSAGING] Error: Message metadata missing for transferId=${plaintext.transferId}');
+          return;
+        }
+
+        final advertisedSize = msg.fileSize ?? 0;
+        final totalChunks = plaintext.totalChunks;
+        final chunkIndex = plaintext.chunkIndex;
+        final chunkLength = plaintext.data.length;
+        final isImage = msg.type == 'IMAGE';
+        final dirPrefix = isImage ? 'media' : 'files';
+
+        // Bounded application-level buffer tracking and size computation
+        final defaultChunkSize = (advertisedSize < 131072 && totalChunks > 0)
+            ? (advertisedSize / totalChunks).ceil()
+            : 131072;
+        final chunkSize = _receiveChunkSizes[plaintext.transferId] ?? (totalChunks > 1 ? defaultChunkSize : advertisedSize);
+        final offset = chunkIndex * chunkSize;
+
+        // 1. Chunk validation checks
+        if (chunkIndex < 0 || chunkIndex >= totalChunks) {
+          VantraLogger.log('[VANTRA][MESSAGING] Rejected chunk: invalid chunkIndex=$chunkIndex totalChunks=$totalChunks');
+          final appDir = await getApplicationDocumentsDirectory();
+          final tempFilePath = path.join(appDir.path, dirPrefix, 'temp', '${plaintext.transferId}.tmp');
+          await _cleanupReceiveTransfer(plaintext.transferId, deleteTempFile: true, tempFilePath: tempFilePath);
+          await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+          return;
+        }
+
+        if (offset < 0 || offset + chunkLength > advertisedSize) {
+          VantraLogger.log('[VANTRA][MESSAGING] Rejected chunk: boundary overflow. offset=$offset chunkLength=$chunkLength advertisedSize=$advertisedSize');
+          final appDir = await getApplicationDocumentsDirectory();
+          final tempFilePath = path.join(appDir.path, dirPrefix, 'temp', '${plaintext.transferId}.tmp');
+          await _cleanupReceiveTransfer(plaintext.transferId, deleteTempFile: true, tempFilePath: tempFilePath);
+          await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+          return;
+        }
+
         print('[VANTRA][MEDIA][CHUNK_RECEIVED]\n'
-              'messageId=${msg?.messageId ?? "unknown"}\n'
+              'messageId=${msg.messageId}\n'
               'transferId=${plaintext.transferId}\n'
               'chunkIndex=${plaintext.chunkIndex}\n'
               'totalChunks=${plaintext.totalChunks}');
-        final isImage = msg == null || msg.type == 'IMAGE';
-        final dirPrefix = isImage ? 'media' : 'files';
 
         final appDir = await getApplicationDocumentsDirectory();
-        final tempDir = Directory(path.join(appDir.path, dirPrefix, 'temp', plaintext.transferId));
-        if (!await tempDir.exists()) {
-          await tempDir.create(recursive: true);
-        }
-        final chunkFile = File(path.join(tempDir.path, 'chunk_${plaintext.chunkIndex}'));
-        await chunkFile.writeAsBytes(plaintext.data);
+        final tempFilePath = path.join(appDir.path, dirPrefix, 'temp', '${plaintext.transferId}.tmp');
 
-        _transferProgress[plaintext.transferId] = (plaintext.chunkIndex + 1) / plaintext.totalChunks;
+        // Reset the timeout timer for this transfer
+        final oldTimer = _receiveTimeoutTimers.remove(plaintext.transferId);
+        oldTimer?.cancel();
+        _receiveTimeoutTimers[plaintext.transferId] = Timer(const Duration(seconds: 30), () async {
+          VantraLogger.log('[VANTRA][MESSAGING] Transfer timed out: transferId=${plaintext.transferId}');
+          await _cleanupReceiveTransfer(plaintext.transferId, deleteTempFile: true, tempFilePath: tempFilePath);
+          await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+        });
+
+        // 2. Open and pre-allocate the temporary file if not already open
+        RandomAccessFile raf;
+        try {
+          if (!_activeReceiveFiles.containsKey(plaintext.transferId)) {
+            final tempParentDir = Directory(path.join(appDir.path, dirPrefix, 'temp'));
+            if (!await tempParentDir.exists()) {
+              await tempParentDir.create(recursive: true);
+            }
+            final file = File(tempFilePath);
+            raf = await file.open(mode: FileMode.write);
+            await raf.truncate(advertisedSize);
+            _activeReceiveFiles[plaintext.transferId] = raf;
+          } else {
+            raf = _activeReceiveFiles[plaintext.transferId]!;
+          }
+        } catch (fileErr) {
+          VantraLogger.log('[VANTRA][MESSAGING] File initialization error: $fileErr');
+          await _cleanupReceiveTransfer(plaintext.transferId, deleteTempFile: true, tempFilePath: tempFilePath);
+          await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+          return;
+        }
+
+        // 3. Write data to the random access file at correct offset
+        final receivedIndices = _receivedChunkIndices.putIfAbsent(plaintext.transferId, () => {});
+        final isDuplicate = receivedIndices.contains(chunkIndex);
+
+        try {
+          await raf.setPosition(offset);
+          await raf.writeFrom(plaintext.data);
+        } catch (writeErr) {
+          VantraLogger.log('[VANTRA][MESSAGING] Write error: $writeErr');
+          await _cleanupReceiveTransfer(plaintext.transferId, deleteTempFile: true, tempFilePath: tempFilePath);
+          await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+          return;
+        }
+
+        if (!isDuplicate) {
+          receivedIndices.add(chunkIndex);
+        }
+
+        // 4. Update progress metrics
+        _transferProgress[plaintext.transferId] = receivedIndices.length / totalChunks;
         state = state.copyWith();
 
-        bool allReceived = true;
-        for (var i = 0; i < plaintext.totalChunks; i++) {
-          final file = File(path.join(tempDir.path, 'chunk_$i'));
-          if (!await file.exists()) {
-            allReceived = false;
-            break;
-          }
-        }
+        // 5. Completion Check
+        if (receivedIndices.length == totalChunks) {
+          VantraLogger.log('[VANTRA][MESSAGING] All chunks received for transferId=${plaintext.transferId}. Finalizing...');
+          
+          // Close the file handle atomically
+          await _cleanupReceiveTransfer(plaintext.transferId);
 
-        if (allReceived) {
-          VantraLogger.log('[VANTRA][MESSAGING] All chunks received for transferId=${plaintext.transferId}. Reassembling...');
           final incomingDir = Directory(path.join(appDir.path, dirPrefix, 'incoming'));
           if (!await incomingDir.exists()) {
             await incomingDir.create(recursive: true);
           }
 
-          if (msg == null) {
-            VantraLogger.log('[VANTRA][MESSAGING] Error: Message metadata missing for transferId=${plaintext.transferId}');
-            return;
-          }
-
           final ext = path.extension(msg.fileName ?? (isImage ? '.jpg' : '.bin'));
           final finalPath = path.join(incomingDir.path, '${msg.messageId}$ext');
-
           final outFile = File(finalPath);
-          try {
-            final ios = await outFile.open(mode: FileMode.write);
-            try {
-              for (var i = 0; i < plaintext.totalChunks; i++) {
-                final chunkF = File(path.join(tempDir.path, 'chunk_$i'));
-                final data = await chunkF.readAsBytes();
-                await ios.writeFrom(data);
-              }
-            } finally {
-              await ios.close();
-            }
+          final tmpFile = File(tempFilePath);
 
-            final fileSizeVal = await outFile.length();
-            print('[VANTRA][MEDIA][REASSEMBLY_COMPLETE]\n'
-                  'messageId=${msg.messageId}\n'
-                  'transferId=${msg.transferId}\n'
-                  'chunksReceived=${plaintext.totalChunks}\n'
-                  'expectedChunks=${plaintext.totalChunks}\n'
-                  'fileSize=$fileSizeVal');
-          } catch (writeErr) {
-            print('[VANTRA][MEDIA][REASSEMBLY_FAILED]\n'
-                  'messageId=${msg.messageId}\n'
-                  'transferId=${msg.transferId}\n'
-                  'reason=File reassembly write error: $writeErr');
+          // Verify file size matches advertised size
+          if (!await tmpFile.exists()) {
+            VantraLogger.log('[VANTRA][MESSAGING] Error: Temp file missing on finalization');
+            await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+            return;
+          }
+          final finalSize = await tmpFile.length();
+          if (finalSize != advertisedSize) {
+            VantraLogger.log('[VANTRA][MESSAGING] Final size mismatch: got $finalSize, expected $advertisedSize');
+            await tmpFile.delete();
             await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
             return;
           }
@@ -713,7 +816,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
           // Verify SHA-256 integrity hash if provided
           if (msg.sha256 != null && msg.sha256!.isNotEmpty) {
             try {
-              final fileStream = outFile.openRead();
+              final fileStream = tmpFile.openRead();
               final hashVal = await sha256.bind(fileStream).first;
               final computedHash = hashVal.toString();
               if (computedHash != msg.sha256) {
@@ -722,8 +825,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
                       'messageId=${msg.messageId}\n'
                       'transferId=${msg.transferId}\n'
                       'reason=Hash verification failed. Expected: ${msg.sha256}, Computed: $computedHash');
-                await outFile.delete();
-                await tempDir.delete(recursive: true);
+                await tmpFile.delete();
                 await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
                 return;
               }
@@ -734,15 +836,32 @@ class MessagingNotifier extends Notifier<MessagingState> {
                     'messageId=${msg.messageId}\n'
                     'transferId=${msg.transferId}\n'
                     'reason=Hash verification error: $hashErr');
+              await tmpFile.delete();
               await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
               return;
             }
           }
 
-          await tempDir.delete(recursive: true);
+          // Atomically move the file to final destination
+          try {
+            if (await outFile.exists()) {
+              await outFile.delete();
+            }
+            await tmpFile.rename(finalPath);
+          } catch (renameErr) {
+            VantraLogger.log('[VANTRA][MESSAGING] Error moving completed file: $renameErr. Falling back to copy-delete.');
+            try {
+              await tmpFile.copy(finalPath);
+              await tmpFile.delete();
+            } catch (copyErr) {
+              VantraLogger.log('[VANTRA][MESSAGING] Copy-delete fallback failed: $copyErr');
+              await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+              return;
+            }
+          }
+
           await repository.updateIncomingMediaDetails(msg.messageId, finalPath, MessageStatus.received);
 
-          final finalSize = await File(finalPath).length();
           print('[VANTRA][MEDIA][FILE_STORED]\n'
                 'messageId=${msg.messageId}\n'
                 'transferId=${msg.transferId}\n'
@@ -2797,6 +2916,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       transferId: offer.transferId,
       sha256: offer.sha256,
     );
+    _receiveChunkSizes[offer.transferId] = offer.chunkSize ?? 131072;
     await repository.saveIncomingMessage(incomingMsg);
 
     print('[VANTRA][MEDIA][OFFER_ACCEPT]\n'
@@ -3400,7 +3520,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final plaintext = _service.codec.decodePlaintext(decryptedBytes);
       VantraLogger.log('[VANTRA][MESSAGING] MESSAGE RECONSTRUCTED messageId=${plaintext.messageId} senderId=${plaintext.senderId} receiverId=${plaintext.receiverId} timestamp=${plaintext.timestampMs}');
 
-      if (plaintext.sessionId != session.sessionId || plaintext.sequence <= session.receiveSequence) {
+      if (!session.isValidInboundSequence(plaintext.sequence, plaintext.sessionId)) {
         VantraLogger.log('[VANTRA][SECURITY] REPLAY / INVALID SEQUENCE: messageId=${plaintext.messageId}, seq=${plaintext.sequence} <= receiveSequence=${session.receiveSequence}. Discarded.');
         return;
       }
@@ -3621,6 +3741,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
       state = state.copyWith(sessions: newSessions);
     }
   }
+
+  @visibleForTesting
+  Map<String, Timer> get receiveTimeoutTimers => _receiveTimeoutTimers;
+
+  @visibleForTesting
+  Future<void> cleanupReceiveTransfer(String transferId, {bool deleteTempFile = false, String? tempFilePath}) =>
+      _cleanupReceiveTransfer(transferId, deleteTempFile: deleteTempFile, tempFilePath: tempFilePath);
 }
 
 class RouteEntry {

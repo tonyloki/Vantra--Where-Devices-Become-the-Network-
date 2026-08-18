@@ -55,7 +55,7 @@ class MessagingRepository {
         messageText: msg.text,
         timestamp: msg.timestamp,
         type: msg.type,
-        status: MessageStatus.received,
+        status: msg.status,
         isRead: Value(isRead),
         createdAt: DateTime.now().millisecondsSinceEpoch,
         mediaPath: Value(msg.mediaPath),
