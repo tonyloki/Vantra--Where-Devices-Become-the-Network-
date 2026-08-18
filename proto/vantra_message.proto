@@ -16,6 +16,7 @@ message VantraWireEnvelope {
     RouteEnvelope routed_message = 5;
     RouteRequest route_request = 6;
     RouteReply route_reply = 7;
+    RouteError route_error = 8;
   }
 }
 
@@ -151,5 +152,14 @@ message RouteReply {
   uint32 hop_count = 4;
   uint32 max_hops = 5;
   bytes signature = 6;
+}
+
+// Phase 17 — Route Error (RERR)
+message RouteError {
+  string error_id = 1;
+  string broken_peer_id = 2;
+  string reporter_id = 3;
+  uint32 hop_count = 4;
+  uint32 max_hops = 5;
 }
 

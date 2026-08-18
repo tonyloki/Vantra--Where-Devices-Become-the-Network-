@@ -270,3 +270,22 @@ class DomainRouteReply extends DomainWireEnvelope {
   });
 }
 
+/// Route error control message (Phase 17).
+class DomainRouteError extends DomainWireEnvelope {
+  final String errorId;
+  final String brokenPeerId;
+  final String reporterId;
+  final int hopCount;
+  final int maxHops;
+
+  const DomainRouteError({
+    required super.protocolVersion,
+    required this.errorId,
+    required this.brokenPeerId,
+    required this.reporterId,
+    required this.hopCount,
+    required this.maxHops,
+  });
+}
+
+

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/conversation_summary.dart';
 import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/networking/nearby_connection_service.dart';
@@ -44,6 +45,67 @@ class ConversationsPage extends ConsumerWidget {
       case MessageStatus.received:
         return const SizedBox.shrink();
     }
+  }
+
+  void _showConversationOptions(BuildContext context, WidgetRef ref, ConversationSummary summary) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: VantraTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.person_outline_rounded, color: VantraTheme.primaryAccent),
+              title: const Text('View Peer Profile', style: TextStyle(color: VantraTheme.textPrimary)),
+              onTap: () {
+                Navigator.pop(ctx);
+                context.push('/peer/${summary.peerId}');
+              },
+            ),
+            const Divider(color: Colors.white10, height: 1),
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded, color: VantraTheme.redBlocked),
+              title: const Text('Delete / Clear Chat', style: TextStyle(color: VantraTheme.redBlocked)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showClearChatConfirmation(context, ref, summary);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showClearChatConfirmation(BuildContext context, WidgetRef ref, ConversationSummary summary) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear chat history?'),
+        content: Text(
+          'This will delete all messages and media transfer history with ${summary.effectiveName} locally. This action cannot be undone.',
+          style: const TextStyle(color: VantraTheme.textSecondary, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: VantraTheme.redBlocked, foregroundColor: Colors.white),
+            onPressed: () async {
+              await ref.read(messagingStateProvider.notifier).clearChat(summary.peerId);
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -135,7 +197,7 @@ class ConversationsPage extends ConsumerWidget {
                 formattedTime: _formatTimestamp(summary.lastMessageTimestamp),
                 statusIcon: _buildStatusIcon(summary.lastMessageStatus),
                 onTap: () => context.push('/chat/${summary.peerId}'),
-                onLongPress: () => context.push('/peer/${summary.peerId}'),
+                onLongPress: () => _showConversationOptions(context, ref, summary),
               );
             },
           );

@@ -18,7 +18,11 @@ class _ContactsPageState extends ConsumerState<ContactsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final allPeersAsync = ref.watch(allPeersStreamProvider);
+    final peersAsync = _selectedFilterIndex == 1
+        ? ref.watch(trustedPeersStreamProvider)
+        : _selectedFilterIndex == 2
+            ? ref.watch(blockedPeersStreamProvider)
+            : ref.watch(allPeersStreamProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -86,7 +90,7 @@ class _ContactsPageState extends ConsumerState<ContactsPage> {
 
           // Peer list
           Expanded(
-            child: allPeersAsync.when(
+            child: peersAsync.when(
               data: (peers) {
                 var filtered = peers.where((p) {
                   // Search query filter
@@ -95,10 +99,6 @@ class _ContactsPageState extends ConsumerState<ContactsPage> {
                     final nickMatch = p.nickname?.toLowerCase().contains(_searchQuery) ?? false;
                     if (!nameMatch && !nickMatch) return false;
                   }
-
-                  // Category filter
-                  if (_selectedFilterIndex == 1) return p.isTrusted;
-                  if (_selectedFilterIndex == 2) return p.isBlocked;
                   return true;
                 }).toList();
 

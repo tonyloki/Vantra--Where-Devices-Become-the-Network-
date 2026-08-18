@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vantra/core/networking/transport.dart';
@@ -366,7 +367,29 @@ class _PocPageState extends ConsumerState<PocPage> {
               const SizedBox(height: 12),
 
               // System Console Log
-              const Text('System Console Log:', style: TextStyle(fontWeight: FontWeight.bold)),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('System Console Log:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  TextButton.icon(
+                    onPressed: _logs.isEmpty
+                        ? null
+                        : () {
+                            Clipboard.setData(ClipboardData(text: _logs.join('\n')));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('System logs copied to clipboard')),
+                            );
+                          },
+                    icon: const Icon(Icons.copy_all_rounded, size: 16),
+                    label: const Text('Copy Logs', style: TextStyle(fontSize: 12)),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(50, 30),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
               Container(
                 height: 160,

@@ -102,6 +102,36 @@ class PeerProfilePage extends ConsumerWidget {
     );
   }
 
+  void _showDeleteConfirmation(BuildContext context, WidgetRef ref, PeerProfile peer) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete contact?'),
+        content: Text(
+          'This will delete ${peer.effectiveName} from your contacts list along with all messaging and transfer history.',
+          style: const TextStyle(color: VantraTheme.textSecondary, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: VantraTheme.redBlocked, foregroundColor: Colors.white),
+            onPressed: () async {
+              await ref.read(messagingStateProvider.notifier).deleteContact(peer.peerId);
+              if (ctx.mounted) {
+                Navigator.pop(ctx);
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showFingerprintVerificationSheet(BuildContext context, WidgetRef ref, PeerProfile peer) {
     showModalBottomSheet(
       context: context,
@@ -456,6 +486,19 @@ class PeerProfilePage extends ConsumerWidget {
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
                         ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _showDeleteConfirmation(context, ref, peer),
+                    icon: const Icon(Icons.delete_forever_rounded, color: VantraTheme.redBlocked),
+                    label: const Text('Delete Contact', style: TextStyle(color: VantraTheme.redBlocked)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: VantraTheme.redBlocked),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
                 ),
               ],
             ),

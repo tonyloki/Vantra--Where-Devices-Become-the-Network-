@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -46,6 +47,99 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _showClearChatConfirmation(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear chat history?'),
+        content: const Text(
+          'This will delete all messages and media transfer history for this conversation locally. This action cannot be undone.',
+          style: TextStyle(color: VantraTheme.textSecondary, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: VantraTheme.redBlocked, foregroundColor: Colors.white),
+            onPressed: () async {
+              await ref.read(messagingStateProvider.notifier).clearChat(widget.peerId);
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMessageOptionsSheet(VantraMessage msg) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: VantraTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (msg.type == 'TEXT') ...[
+              ListTile(
+                leading: const Icon(Icons.copy_rounded, color: VantraTheme.primaryAccent),
+                title: const Text('Copy Message Text', style: TextStyle(color: VantraTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Clipboard.setData(ClipboardData(text: msg.text));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Message copied to clipboard')),
+                  );
+                },
+              ),
+              const Divider(color: Colors.white10, height: 1),
+            ],
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded, color: VantraTheme.redBlocked),
+              title: const Text('Delete Message', style: TextStyle(color: VantraTheme.redBlocked)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showDeleteMessageConfirmation(msg);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDeleteMessageConfirmation(VantraMessage msg) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete message?'),
+        content: const Text(
+          'This will delete this message locally on your device. This action cannot be undone.',
+          style: TextStyle(color: VantraTheme.textSecondary, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: VantraTheme.redBlocked, foregroundColor: Colors.white),
+            onPressed: () async {
+              await ref.read(messagingStateProvider.notifier).deleteMessage(msg.messageId);
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _scrollToBottom() {
@@ -393,6 +487,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             icon: const Icon(Icons.info_outline_rounded),
             tooltip: 'Peer Profile',
             onPressed: () => context.push('/peer/${widget.peerId}'),
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded),
+            onSelected: (val) {
+              if (val == 'clear') {
+                _showClearChatConfirmation(context);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'clear',
+                child: Text('Clear Chat', style: TextStyle(color: VantraTheme.redBlocked)),
+              ),
+            ],
           ),
         ],
       ),
@@ -770,24 +878,29 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         ),
                       );
 
+                      final gestureBubble = GestureDetector(
+                        onLongPress: () => _showMessageOptionsSheet(msg),
+                        child: bubble,
+                      );
+
                       if (isMe && msg.status == MessageStatus.failed) {
                         return Align(
-                          alignment: Alignment.centerRight,
-                          child: GestureDetector(
-                            onTap: () {
-                              ref.read(messagingStateProvider.notifier).retryMessage(msg.messageId, widget.peerId);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Retrying message...')),
-                              );
-                            },
-                            child: bubble,
-                          ),
-                        );
+                           alignment: Alignment.centerRight,
+                           child: GestureDetector(
+                             onTap: () {
+                               ref.read(messagingStateProvider.notifier).retryMessage(msg.messageId, widget.peerId);
+                               ScaffoldMessenger.of(context).showSnackBar(
+                                 const SnackBar(content: Text('Retrying message...')),
+                               );
+                             },
+                             child: gestureBubble,
+                           ),
+                         );
                       }
 
                       return Align(
                         alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                        child: bubble,
+                        child: gestureBubble,
                       );
                     },
                   );

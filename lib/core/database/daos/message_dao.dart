@@ -146,4 +146,9 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
     ));
     return rowsAffected > 0;
   }
+
+  Future<int> deleteMessageById(String messageId) {
+    return (delete(messages)..where((t) => t.messageId.equals(messageId))).go();
+  }
 }
+

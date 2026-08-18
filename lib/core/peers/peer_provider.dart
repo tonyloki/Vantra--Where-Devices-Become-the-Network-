@@ -54,22 +54,56 @@ final allPeersStreamProvider = StreamProvider<List<PeerProfile>>((ref) {
 
 /// Streams only trusted peers
 final trustedPeersStreamProvider = StreamProvider<List<PeerProfile>>((ref) {
-  final allPeersAsync = ref.watch(allPeersStreamProvider);
-  return allPeersAsync.when(
-    data: (peers) => Stream.value(peers.where((p) => p.trustState == PeerTrustState.trusted).toList()),
-    loading: () => Stream.value([]),
-    error: (err, stack) => Stream.value([]),
-  );
+  final repo = ref.watch(messagingRepositoryProvider);
+  final messagingState = ref.watch(messagingStateProvider);
+
+  return repo.watchTrustedPeers().map((peers) {
+    return peers.map((p) {
+      final session = messagingState.sessions[p.peerId];
+      return PeerProfile(
+        peerId: p.peerId,
+        displayName: p.displayName,
+        nickname: p.nickname,
+        lastKnownEndpointId: p.lastKnownEndpointId,
+        publicKey: p.publicKey,
+        fingerprint: p.fingerprint,
+        trustState: p.trustState,
+        protocolVersion: p.protocolVersion,
+        lastSeen: p.lastSeen,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+        sessionStatus: session?.status ?? SessionStatus.disconnected,
+        isSecure: session?.isSecure ?? false,
+      );
+    }).toList();
+  });
 });
 
 /// Streams only blocked peers
 final blockedPeersStreamProvider = StreamProvider<List<PeerProfile>>((ref) {
-  final allPeersAsync = ref.watch(allPeersStreamProvider);
-  return allPeersAsync.when(
-    data: (peers) => Stream.value(peers.where((p) => p.trustState == PeerTrustState.distrusted).toList()),
-    loading: () => Stream.value([]),
-    error: (err, stack) => Stream.value([]),
-  );
+  final repo = ref.watch(messagingRepositoryProvider);
+  final messagingState = ref.watch(messagingStateProvider);
+
+  return repo.watchBlockedPeers().map((peers) {
+    return peers.map((p) {
+      final session = messagingState.sessions[p.peerId];
+      return PeerProfile(
+        peerId: p.peerId,
+        displayName: p.displayName,
+        nickname: p.nickname,
+        lastKnownEndpointId: p.lastKnownEndpointId,
+        publicKey: p.publicKey,
+        fingerprint: p.fingerprint,
+        trustState: p.trustState,
+        protocolVersion: p.protocolVersion,
+        lastSeen: p.lastSeen,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+        sessionStatus: session?.status ?? SessionStatus.disconnected,
+        isSecure: session?.isSecure ?? false,
+      );
+    }).toList();
+  });
 });
 
 /// Streams a specific PeerProfile by peerId

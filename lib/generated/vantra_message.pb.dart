@@ -28,6 +28,7 @@ enum VantraWireEnvelope_Payload {
   routedMessage,
   routeRequest,
   routeReply,
+  routeError,
   notSet
 }
 
@@ -41,6 +42,7 @@ class VantraWireEnvelope extends $pb.GeneratedMessage {
     RouteEnvelope? routedMessage,
     RouteRequest? routeRequest,
     RouteReply? routeReply,
+    RouteError? routeError,
   }) {
     final result = create();
     if (protocolVersion != null) result.protocolVersion = protocolVersion;
@@ -50,6 +52,7 @@ class VantraWireEnvelope extends $pb.GeneratedMessage {
     if (routedMessage != null) result.routedMessage = routedMessage;
     if (routeRequest != null) result.routeRequest = routeRequest;
     if (routeReply != null) result.routeReply = routeReply;
+    if (routeError != null) result.routeError = routeError;
     return result;
   }
 
@@ -70,6 +73,7 @@ class VantraWireEnvelope extends $pb.GeneratedMessage {
     5: VantraWireEnvelope_Payload.routedMessage,
     6: VantraWireEnvelope_Payload.routeRequest,
     7: VantraWireEnvelope_Payload.routeReply,
+    8: VantraWireEnvelope_Payload.routeError,
     0: VantraWireEnvelope_Payload.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
@@ -77,7 +81,7 @@ class VantraWireEnvelope extends $pb.GeneratedMessage {
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'vantra.protocol'),
       createEmptyInstance: create)
-    ..oo(0, [2, 3, 4, 5, 6, 7])
+    ..oo(0, [2, 3, 4, 5, 6, 7, 8])
     ..aI(1, _omitFieldNames ? '' : 'protocolVersion',
         fieldType: $pb.PbFieldType.OU3)
     ..aOM<IdentitySecurePayload>(2, _omitFieldNames ? '' : 'handshake',
@@ -92,6 +96,8 @@ class VantraWireEnvelope extends $pb.GeneratedMessage {
         subBuilder: RouteRequest.create)
     ..aOM<RouteReply>(7, _omitFieldNames ? '' : 'routeReply',
         subBuilder: RouteReply.create)
+    ..aOM<RouteError>(8, _omitFieldNames ? '' : 'routeError',
+        subBuilder: RouteError.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -119,6 +125,7 @@ class VantraWireEnvelope extends $pb.GeneratedMessage {
   @$pb.TagNumber(5)
   @$pb.TagNumber(6)
   @$pb.TagNumber(7)
+  @$pb.TagNumber(8)
   VantraWireEnvelope_Payload whichPayload() =>
       _VantraWireEnvelope_PayloadByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(2)
@@ -127,6 +134,7 @@ class VantraWireEnvelope extends $pb.GeneratedMessage {
   @$pb.TagNumber(5)
   @$pb.TagNumber(6)
   @$pb.TagNumber(7)
+  @$pb.TagNumber(8)
   void clearPayload() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -203,6 +211,17 @@ class VantraWireEnvelope extends $pb.GeneratedMessage {
   void clearRouteReply() => $_clearField(7);
   @$pb.TagNumber(7)
   RouteReply ensureRouteReply() => $_ensure(6);
+
+  @$pb.TagNumber(8)
+  RouteError get routeError => $_getN(7);
+  @$pb.TagNumber(8)
+  set routeError(RouteError value) => $_setField(8, value);
+  @$pb.TagNumber(8)
+  $core.bool hasRouteError() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearRouteError() => $_clearField(8);
+  @$pb.TagNumber(8)
+  RouteError ensureRouteError() => $_ensure(7);
 }
 
 /// 1. Handshake Payload (Unencrypted wire format during initial connection)
@@ -1602,6 +1621,109 @@ class RouteReply extends $pb.GeneratedMessage {
   $core.bool hasSignature() => $_has(5);
   @$pb.TagNumber(6)
   void clearSignature() => $_clearField(6);
+}
+
+/// Phase 17 — Route Error (RERR)
+class RouteError extends $pb.GeneratedMessage {
+  factory RouteError({
+    $core.String? errorId,
+    $core.String? brokenPeerId,
+    $core.String? reporterId,
+    $core.int? hopCount,
+    $core.int? maxHops,
+  }) {
+    final result = create();
+    if (errorId != null) result.errorId = errorId;
+    if (brokenPeerId != null) result.brokenPeerId = brokenPeerId;
+    if (reporterId != null) result.reporterId = reporterId;
+    if (hopCount != null) result.hopCount = hopCount;
+    if (maxHops != null) result.maxHops = maxHops;
+    return result;
+  }
+
+  RouteError._();
+
+  factory RouteError.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RouteError.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RouteError',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'vantra.protocol'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'errorId')
+    ..aOS(2, _omitFieldNames ? '' : 'brokenPeerId')
+    ..aOS(3, _omitFieldNames ? '' : 'reporterId')
+    ..aI(4, _omitFieldNames ? '' : 'hopCount', fieldType: $pb.PbFieldType.OU3)
+    ..aI(5, _omitFieldNames ? '' : 'maxHops', fieldType: $pb.PbFieldType.OU3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RouteError clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RouteError copyWith(void Function(RouteError) updates) =>
+      super.copyWith((message) => updates(message as RouteError)) as RouteError;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RouteError create() => RouteError._();
+  @$core.override
+  RouteError createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static RouteError getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RouteError>(create);
+  static RouteError? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get errorId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set errorId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasErrorId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearErrorId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get brokenPeerId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set brokenPeerId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasBrokenPeerId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearBrokenPeerId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get reporterId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set reporterId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasReporterId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearReporterId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.int get hopCount => $_getIZ(3);
+  @$pb.TagNumber(4)
+  set hopCount($core.int value) => $_setUnsignedInt32(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasHopCount() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearHopCount() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.int get maxHops => $_getIZ(4);
+  @$pb.TagNumber(5)
+  set maxHops($core.int value) => $_setUnsignedInt32(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasMaxHops() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearMaxHops() => $_clearField(5);
 }
 
 const $core.bool _omitFieldNames =

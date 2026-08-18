@@ -412,4 +412,18 @@ class MessagingRepository {
       sha256: dbMsg.sha256,
     );
   }
+
+  Future<int> clearConversation(String localPeerId, String remotePeerId) {
+    return _db.messageDao.clearConversation(localPeerId, remotePeerId);
+  }
+
+  Future<int> deleteMessage(String messageId) {
+    return _db.messageDao.deleteMessageById(messageId);
+  }
+
+  Future<void> deletePeerAndHistory(String peerId, String localPeerId) async {
+    await _db.peerDao.deletePeerById(peerId);
+    await _db.messageDao.clearConversation(localPeerId, peerId);
+  }
 }
+

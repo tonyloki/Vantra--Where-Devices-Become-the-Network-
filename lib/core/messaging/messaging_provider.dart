@@ -170,11 +170,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
   StreamSubscription? _routedEnvelopeSub;
   StreamSubscription? _routeRequestSub;
   StreamSubscription? _routeReplySub;
+  StreamSubscription? _routeErrorSub;
 
   // Phase 16 Mesh Routing Table and caches
   final Map<String, RouteEntry> _routingTable = {};
   final Set<String> _recentlyForwardedPackets = {};
   final Set<String> _recentlyProcessedRouteRequests = {};
+  final Set<String> _recentlyProcessedRouteErrors = {};
+  final List<Timer> _cacheTimers = [];
   final Map<String, List<Completer<DomainRouteReply>>> _pendingRreqs = {};
 
   final Map<String, SecuritySession> _securitySessions = {};
@@ -280,10 +283,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
     _routedEnvelopeSub?.cancel();
     _routeRequestSub?.cancel();
     _routeReplySub?.cancel();
+    _routeErrorSub?.cancel();
 
     _routedEnvelopeSub = _service.routedEnvelopeStream.listen(_handleIncomingRoutedEnvelope);
     _routeRequestSub = _service.routeRequestStream.listen(_handleIncomingRouteRequest);
     _routeReplySub = _service.routeReplyStream.listen(_handleIncomingRouteReply);
+    _routeErrorSub = _service.routeErrorStream.listen(_handleIncomingRouteError);
 
     _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       _handleDiscoveredPeersUpdate(_lastDiscoveredList);
@@ -297,6 +302,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       _routedEnvelopeSub?.cancel();
       _routeRequestSub?.cancel();
       _routeReplySub?.cancel();
+      _routeErrorSub?.cancel();
       _reconnectTimer?.cancel();
       for (final session in _securitySessions.values) {
         print('[VANTRA][SESSION] SESSION_INVALIDATED peerId=${session.peerId} reason=Provider disposed');
@@ -327,6 +333,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
         pending.timeoutTimer.cancel();
       }
       _pendingIncomingOffers.clear();
+      for (final t in _cacheTimers) {
+        t.cancel();
+      }
+      _cacheTimers.clear();
     });
 
     // Persistent Recovery on App Boot
@@ -1350,6 +1360,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         update.status == ConnectionStatus.rejected ||
         update.status == ConnectionStatus.error) {
       _aliveEndpoints.remove(update.endpointId);
+      _invalidateRoutesViaEndpoint(update.endpointId);
       print('[VANTRA][CONNECTION] DISCONNECTED endpoint=${update.endpointId} reason=${update.status.name}');
       if (update.status == ConnectionStatus.disconnected) {
         print('[VANTRA][CONNECTION] CONNECTION_DISCONNECTED: endpointId=${update.endpointId}');
@@ -2891,9 +2902,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   void _addToDuplicateCache(String key, Set<String> cache, {Duration duration = const Duration(minutes: 5)}) {
     cache.add(key);
-  Timer(duration, () {
+    final timer = Timer(duration, () {
       cache.remove(key);
     });
+    _cacheTimers.add(timer);
   }
 
   String _hexEncode(List<int> bytes) {
@@ -3024,7 +3036,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     print('[VANTRA][MESH][FORWARD] packetId=$packetId source=${routeEnvelope.sourcePeerId} destination=$destinationPeerId currentPeer=${ref.read(localIdentityStateProvider).peerId} nextHop=${route.nextHopPeerId} hopCount=0 TTL=8');
-    await _service.sendRoutedEnvelope(route.nextHopEndpointId, routeEnvelope);
+    await _sendWithHopRetry(route.nextHopEndpointId, routeEnvelope);
   }
 
   Future<void> _sendRoutedAck(String recipientPeerId, String originalMessageId, int sequence) async {
@@ -3255,7 +3267,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
           encryptedPayload: event.envelope.encryptedPayload,
         );
         print('[B][MESH][FORWARD] packetId=${event.envelope.packetId} source=${event.envelope.sourcePeerId} destination=${event.envelope.destinationPeerId} currentPeer=${localIdentity.peerId} nextHop=${route.nextHopPeerId} hopCount=$newHopCount TTL=${event.envelope.maxHops - 1}');
-        await _service.sendRoutedEnvelope(route.nextHopEndpointId, forwardedEnvelope);
+        await _sendWithHopRetry(route.nextHopEndpointId, forwardedEnvelope);
       } else {
         print('[VANTRA][MESH][DROP] No route found for destination ${event.envelope.destinationPeerId}, dropping packetId=${event.envelope.packetId}');
       }
@@ -3417,6 +3429,196 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
     } catch (e, stack) {
       VantraLogger.log('[VANTRA][MESH] Failed to decrypt routed message: $e', e, stack);
+    }
+  }
+
+  // --- Phase 17 Mesh Reliability Methods ---
+
+  void _invalidateRoutesViaEndpoint(String deadEndpointId) {
+    final invalidatedDestinations = <String>[];
+    _routingTable.forEach((dest, entry) {
+      if (entry.nextHopEndpointId == deadEndpointId && entry.isActive) {
+        _routingTable[dest] = entry.copyWith(isActive: false);
+        invalidatedDestinations.add(dest);
+        print('[VANTRA][MESH][ROUTE_INVALIDATED] destination=$dest nextHop=${entry.nextHopPeerId} reason=Local Link Failure');
+        _conditionallyResetE2eSession(dest, failedEndpointId: deadEndpointId);
+      }
+    });
+
+    if (invalidatedDestinations.isNotEmpty) {
+      _broadcastRouteError(invalidatedDestinations, excludeEndpointId: deadEndpointId);
+    }
+  }
+
+  void _broadcastRouteError(List<String> brokenPeerIds, {String? excludeEndpointId}) {
+    final localIdentity = ref.read(localIdentityStateProvider);
+    for (final brokenPeerId in brokenPeerIds) {
+      final errorId = const Uuid().v4();
+      final rerr = DomainRouteError(
+        protocolVersion: kCurrentProtocolVersion,
+        errorId: errorId,
+        brokenPeerId: brokenPeerId,
+        reporterId: localIdentity.peerId,
+        hopCount: 0,
+        maxHops: 8,
+      );
+
+      print('[VANTRA][MESH][RERR_SENT] errorId=$errorId brokenPeerId=$brokenPeerId');
+      
+      for (final entry in state.sessions.entries) {
+        final session = entry.value;
+        if (session.status == SessionStatus.connected && session.endpointId != excludeEndpointId) {
+          _service.sendRouteError(session.endpointId, rerr);
+        }
+      }
+    }
+  }
+
+  Future<void> _handleIncomingRouteError(RouteErrorEvent event) async {
+    if (_recentlyProcessedRouteErrors.contains(event.error.errorId)) {
+      print('[VANTRA][MESH][RERR_DUPLICATE_DROP] errorId=${event.error.errorId}');
+      return;
+    }
+    _addToDuplicateCache(event.error.errorId, _recentlyProcessedRouteErrors);
+
+    print('[VANTRA][MESH][RERR_RECEIVED] errorId=${event.error.errorId} brokenPeerId=${event.error.brokenPeerId} reporter=${event.error.reporterId}');
+
+    final brokenPeerId = event.error.brokenPeerId;
+    final senderEndpointId = event.endpointId;
+
+    final route = _routingTable[brokenPeerId];
+    final routeIsAffected = (
+      route != null &&
+      route.isActive &&
+      route.nextHopEndpointId == senderEndpointId
+    );
+
+    if (routeIsAffected) {
+      _routingTable[brokenPeerId] = route.copyWith(isActive: false);
+      print('[VANTRA][MESH][ROUTE_INVALIDATED] destination=$brokenPeerId reason=RERR errorId=${event.error.errorId}');
+
+      // Step 2: Conditionally reset E2E session
+      _conditionallyResetE2eSession(brokenPeerId, failedEndpointId: senderEndpointId);
+
+      // Step 3: Conditionally rediscover
+      _conditionallyRediscover(brokenPeerId);
+    }
+
+    // Step 4: TTL check and forward
+    final newHopCount = event.error.hopCount + 1;
+    if (newHopCount >= event.error.maxHops) {
+      print('[VANTRA][MESH][RERR_TTL_DROP] errorId=${event.error.errorId} hopCount=$newHopCount');
+      return;
+    }
+
+    final forwardedRerr = DomainRouteError(
+      protocolVersion: event.error.protocolVersion,
+      errorId: event.error.errorId,
+      brokenPeerId: event.error.brokenPeerId,
+      reporterId: event.error.reporterId,
+      hopCount: newHopCount,
+      maxHops: event.error.maxHops,
+    );
+
+    for (final entry in state.sessions.entries) {
+      final session = entry.value;
+      if (session.status == SessionStatus.connected && session.endpointId != senderEndpointId) {
+        await _service.sendRouteError(session.endpointId, forwardedRerr);
+        print('[VANTRA][MESH][RERR_FORWARDED] errorId=${event.error.errorId} nextHop=${session.peerId} hopCount=$newHopCount');
+      }
+    }
+  }
+
+  void _conditionallyResetE2eSession(String brokenPeerId, {required String failedEndpointId}) {
+    final secSession = _securitySessions[brokenPeerId];
+    if (secSession == null) return;
+
+    final route = _routingTable[brokenPeerId];
+    if (route == null || route.nextHopEndpointId != failedEndpointId) {
+      // The session did not use the broken path, so do not reset it.
+      return;
+    }
+
+    _securitySessions.remove(brokenPeerId);
+    print('[VANTRA][MESH][SESSION_RESET] peerId=$brokenPeerId reason=route_invalidated');
+
+    final currentPeerSession = state.sessions[brokenPeerId];
+    if (currentPeerSession != null) {
+      state = state.copyWith(
+        sessions: {
+          ...state.sessions,
+          brokenPeerId: currentPeerSession.copyWith(status: SessionStatus.disconnected, isSecure: false),
+        },
+      );
+    }
+  }
+
+  Future<void> _conditionallyRediscover(String brokenPeerId) async {
+    // Check if there is any pending/failed message in the database queue for brokenPeerId
+    final repository = ref.read(messagingRepositoryProvider);
+    final pending = await repository.getPendingOrFailedMessages(brokenPeerId);
+    if (pending.isEmpty) {
+      print('[VANTRA][MESH][RERR_NO_REDISCOVERY] peerId=$brokenPeerId reason=no_queued_traffic');
+      return;
+    }
+
+    print('[VANTRA][MESH][RERR_REDISCOVERY] peerId=$brokenPeerId reason=queued_traffic');
+    final route = await _getOrDiscoverRoute(brokenPeerId);
+    if (route != null && route.isActive) {
+      _flushQueue(brokenPeerId, 'routeRediscovery');
+    }
+  }
+
+  Future<bool> _sendWithHopRetry(
+    String endpointId,
+    DomainRouteEnvelope envelope, {
+    int maxAttempts = 3,
+    Duration retryDelay = const Duration(milliseconds: 300),
+  }) async {
+    int attempt = 0;
+    while (attempt < maxAttempts) {
+      try {
+        await _service.sendRoutedEnvelope(endpointId, envelope);
+        print('[VANTRA][MESH][HOP_SEND] packetId=${envelope.packetId} attempt=$attempt');
+        return true;
+      } catch (e) {
+        attempt++;
+        print('[VANTRA][MESH][HOP_RETRY] packetId=${envelope.packetId} attempt=$attempt error=$e');
+        if (attempt < maxAttempts) {
+          await Future.delayed(retryDelay);
+        }
+      }
+    }
+
+    print('[VANTRA][MESH][HOP_FAILED] packetId=${envelope.packetId} endpoint=$endpointId');
+    _invalidateRoutesViaEndpoint(endpointId);
+    return false;
+  }
+
+  // --- Phase 17 Contacts & Chat Management Methods ---
+
+  Future<void> deleteMessage(String messageId) async {
+    await ref.read(messagingRepositoryProvider).deleteMessage(messageId);
+  }
+
+  Future<void> clearChat(String peerId) async {
+    final localId = ref.read(localIdentityStateProvider).peerId;
+    await ref.read(messagingRepositoryProvider).clearConversation(localId, peerId);
+  }
+
+  Future<void> deleteContact(String peerId) async {
+    final localId = ref.read(localIdentityStateProvider).peerId;
+    await ref.read(messagingRepositoryProvider).deletePeerAndHistory(peerId, localId);
+
+    // Clean up routing table entry
+    _routingTable.remove(peerId);
+
+    // Clean up session state if it exists
+    final session = state.sessions[peerId];
+    if (session != null) {
+      _securitySessions.remove(peerId);
+      final newSessions = Map<String, PeerSession>.from(state.sessions)..remove(peerId);
+      state = state.copyWith(sessions: newSessions);
     }
   }
 }

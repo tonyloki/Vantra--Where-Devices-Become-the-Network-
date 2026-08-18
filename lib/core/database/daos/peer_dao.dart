@@ -87,4 +87,9 @@ class PeerDao extends DatabaseAccessor<AppDatabase> with _$PeerDaoMixin {
   Future<List<Peer>> listPeers() {
     return (select(peers)..orderBy([(t) => OrderingTerm(expression: t.lastSeen, mode: OrderingMode.desc)])).get();
   }
+
+  Future<int> deletePeerById(String peerId) {
+    return (delete(peers)..where((t) => t.peerId.equals(peerId))).go();
+  }
 }
+

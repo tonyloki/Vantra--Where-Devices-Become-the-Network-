@@ -82,6 +82,12 @@ class RouteReplyEvent {
   const RouteReplyEvent({required this.endpointId, required this.reply});
 }
 
+class RouteErrorEvent {
+  final String endpointId;
+  final DomainRouteError error;
+  const RouteErrorEvent({required this.endpointId, required this.error});
+}
+
 class MessagingService {
   final Transport _transport;
   final ProtocolCodec codec;
@@ -92,12 +98,14 @@ class MessagingService {
   final _routedEnvelopeController = StreamController<RoutedEnvelopeEvent>.broadcast();
   final _routeRequestController = StreamController<RouteRequestEvent>.broadcast();
   final _routeReplyController = StreamController<RouteReplyEvent>.broadcast();
+  final _routeErrorController = StreamController<RouteErrorEvent>.broadcast();
 
   Stream<EncryptedMessageEvent> get encryptedMessageStream => _encryptedMessageController.stream;
   Stream<SessionSecureIdentity> get secureIdentityStream => _secureIdentityController.stream;
   Stream<RoutedEnvelopeEvent> get routedEnvelopeStream => _routedEnvelopeController.stream;
   Stream<RouteRequestEvent> get routeRequestStream => _routeRequestController.stream;
   Stream<RouteReplyEvent> get routeReplyStream => _routeReplyController.stream;
+  Stream<RouteErrorEvent> get routeErrorStream => _routeErrorController.stream;
 
   MessagingService(this._transport, {this.codec = const ProtobufCodec()}) {
     _payloadSubscription = _transport.payloadReceivedStream.listen(_onPayloadReceived);
@@ -197,6 +205,12 @@ class MessagingService {
     await _transport.send(endpointId, bytes);
   }
 
+  /// Sends a RouteError packet over the transport
+  Future<void> sendRouteError(String endpointId, DomainRouteError err) async {
+    final bytes = codec.encodeWireEnvelope(err);
+    await _transport.send(endpointId, bytes);
+  }
+
 
   void _onPayloadReceived(PayloadReceivedEvent event) {
     print('[VANTRA][MESSAGE] PAYLOAD_RECEIVED endpoint=${event.endpointId}');
@@ -261,6 +275,12 @@ class MessagingService {
           _routeReplyController.add(RouteReplyEvent(
             endpointId: event.endpointId,
             reply: rrep,
+          ));
+
+        case DomainRouteError rerr:
+          _routeErrorController.add(RouteErrorEvent(
+            endpointId: event.endpointId,
+            error: rerr,
           ));
       }
     } on ProtocolValidationException catch (e) {

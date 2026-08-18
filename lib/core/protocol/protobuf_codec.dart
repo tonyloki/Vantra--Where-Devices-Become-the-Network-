@@ -138,6 +138,14 @@ class ProtobufCodec implements ProtocolCodec {
           maxHops: rrep.maxHops,
           signature: rrep.signature,
         );
+      case DomainRouteError rerr:
+        pbEnvelope.routeError = RouteError(
+          errorId: rerr.errorId,
+          brokenPeerId: rerr.brokenPeerId,
+          reporterId: rerr.reporterId,
+          hopCount: rerr.hopCount,
+          maxHops: rerr.maxHops,
+        );
     }
 
     return pbEnvelope.writeToBuffer();
@@ -310,6 +318,26 @@ class ProtobufCodec implements ProtocolCodec {
           hopCount: rep.hopCount,
           maxHops: rep.maxHops,
           signature: Uint8List.fromList(rep.signature),
+        );
+
+      case VantraWireEnvelope_Payload.routeError:
+        final err = pbEnvelope.routeError;
+        if (err.errorId.trim().isEmpty) {
+          throw const ProtocolValidationException('RouteError errorId cannot be empty');
+        }
+        if (err.brokenPeerId.trim().isEmpty) {
+          throw const ProtocolValidationException('RouteError brokenPeerId cannot be empty');
+        }
+        if (err.reporterId.trim().isEmpty) {
+          throw const ProtocolValidationException('RouteError reporterId cannot be empty');
+        }
+        return DomainRouteError(
+          protocolVersion: pbEnvelope.protocolVersion,
+          errorId: err.errorId,
+          brokenPeerId: err.brokenPeerId,
+          reporterId: err.reporterId,
+          hopCount: err.hopCount,
+          maxHops: err.maxHops,
         );
 
       case VantraWireEnvelope_Payload.notSet:

@@ -109,6 +109,15 @@ const VantraWireEnvelope$json = {
       '9': 0,
       '10': 'routeReply'
     },
+    {
+      '1': 'route_error',
+      '3': 8,
+      '4': 1,
+      '5': 11,
+      '6': '.vantra.protocol.RouteError',
+      '9': 0,
+      '10': 'routeError'
+    },
   ],
   '8': [
     {'1': 'payload'},
@@ -125,8 +134,9 @@ final $typed_data.Uint8List vantraWireEnvelopeDescriptor = $convert.base64Decode
     'Jyb3ISRwoOcm91dGVkX21lc3NhZ2UYBSABKAsyHi52YW50cmEucHJvdG9jb2wuUm91dGVFbnZl'
     'bG9wZUgAUg1yb3V0ZWRNZXNzYWdlEkQKDXJvdXRlX3JlcXVlc3QYBiABKAsyHS52YW50cmEucH'
     'JvdG9jb2wuUm91dGVSZXF1ZXN0SABSDHJvdXRlUmVxdWVzdBI+Cgtyb3V0ZV9yZXBseRgHIAEo'
-    'CzIbLnZhbnRyYS5wcm90b2NvbC5Sb3V0ZVJlcGx5SABSCnJvdXRlUmVwbHlCCQoHcGF5bG9hZA'
-    '==');
+    'CzIbLnZhbnRyYS5wcm90b2NvbC5Sb3V0ZVJlcGx5SABSCnJvdXRlUmVwbHkSPgoLcm91dGVfZX'
+    'Jyb3IYCCABKAsyGy52YW50cmEucHJvdG9jb2wuUm91dGVFcnJvckgAUgpyb3V0ZUVycm9yQgkK'
+    'B3BheWxvYWQ=');
 
 @$core.Deprecated('Use identitySecurePayloadDescriptor instead')
 const IdentitySecurePayload$json = {
@@ -534,3 +544,22 @@ final $typed_data.Uint8List routeReplyDescriptor = $convert.base64Decode(
     'Vlcl9pZBgCIAEoCVIMc291cmNlUGVlcklkEi4KE2Rlc3RpbmF0aW9uX3BlZXJfaWQYAyABKAlS'
     'EWRlc3RpbmF0aW9uUGVlcklkEhsKCWhvcF9jb3VudBgEIAEoDVIIaG9wQ291bnQSGQoIbWF4X2'
     'hvcHMYBSABKA1SB21heEhvcHMSHAoJc2lnbmF0dXJlGAYgASgMUglzaWduYXR1cmU=');
+
+@$core.Deprecated('Use routeErrorDescriptor instead')
+const RouteError$json = {
+  '1': 'RouteError',
+  '2': [
+    {'1': 'error_id', '3': 1, '4': 1, '5': 9, '10': 'errorId'},
+    {'1': 'broken_peer_id', '3': 2, '4': 1, '5': 9, '10': 'brokenPeerId'},
+    {'1': 'reporter_id', '3': 3, '4': 1, '5': 9, '10': 'reporterId'},
+    {'1': 'hop_count', '3': 4, '4': 1, '5': 13, '10': 'hopCount'},
+    {'1': 'max_hops', '3': 5, '4': 1, '5': 13, '10': 'maxHops'},
+  ],
+};
+
+/// Descriptor for `RouteError`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List routeErrorDescriptor = $convert.base64Decode(
+    'CgpSb3V0ZUVycm9yEhkKCGVycm9yX2lkGAEgASgJUgdlcnJvcklkEiQKDmJyb2tlbl9wZWVyX2'
+    'lkGAIgASgJUgxicm9rZW5QZWVySWQSHwoLcmVwb3J0ZXJfaWQYAyABKAlSCnJlcG9ydGVySWQS'
+    'GwoJaG9wX2NvdW50GAQgASgNUghob3BDb3VudBIZCghtYXhfaG9wcxgFIAEoDVIHbWF4SG9wcw'
+    '==');
