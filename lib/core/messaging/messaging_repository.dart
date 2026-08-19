@@ -323,6 +323,11 @@ class MessagingRepository {
     await _db.peerDao.updateTrustState(peerId, trustState);
   }
 
+  /// Verifies a peer's identity and stores the verified public key
+  Future<void> updatePeerVerification(String peerId, String verifiedPublicKey) async {
+    await _db.peerDao.updatePeerVerification(peerId, verifiedPublicKey);
+  }
+
   /// Updates peer lastSeen timestamp
   Future<void> updatePeerLastSeen(String peerId, int lastSeen) async {
     await _db.peerDao.updateLastSeen(peerId, lastSeen);

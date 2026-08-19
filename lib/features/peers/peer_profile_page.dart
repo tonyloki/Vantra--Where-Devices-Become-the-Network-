@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vantra/core/messaging/messaging_provider.dart';
+import 'package:vantra/core/identity/local_identity_provider.dart';
+import 'package:vantra/core/security/safety_number_service.dart';
 import 'package:vantra/core/models/peer_profile.dart';
 import 'package:vantra/core/models/peer_session.dart';
 import 'package:vantra/core/models/peer_trust_state.dart';
@@ -132,7 +134,12 @@ class PeerProfilePage extends ConsumerWidget {
     );
   }
 
-  void _showFingerprintVerificationSheet(BuildContext context, WidgetRef ref, PeerProfile peer) {
+  void _showSafetyNumberSheet(BuildContext context, WidgetRef ref, PeerProfile peer) {
+    final localIdentity = ref.read(localIdentityStateProvider);
+    final expectedSafetyNumber = (peer.publicKey != null && localIdentity.identityPublicKey.isNotEmpty)
+        ? SafetyNumberService.computeSafetyNumber(localIdentity.identityPublicKey, peer.publicKey!)
+        : 'Keys not exchanged yet';
+
     showModalBottomSheet(
       context: context,
       backgroundColor: VantraTheme.surface,
@@ -150,14 +157,14 @@ class PeerProfilePage extends ConsumerWidget {
                 const Icon(Icons.security_rounded, color: VantraTheme.primaryAccent, size: 28),
                 const SizedBox(width: 12),
                 Text(
-                  'Verify Security Fingerprint',
+                  'Verify Identity',
                   style: Theme.of(ctx).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold, color: VantraTheme.textPrimary),
                 ),
               ],
             ),
             const SizedBox(height: 16),
             Text(
-              'Compare this fingerprint in person or through another trusted channel with ${peer.effectiveName}:',
+              'Compare the Safety Number below in person with ${peer.effectiveName}, or scan each other\'s QR codes.',
               style: const TextStyle(fontSize: 14, color: VantraTheme.textSecondary),
             ),
             const SizedBox(height: 16),
@@ -169,55 +176,73 @@ class PeerProfilePage extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.white12),
               ),
-              child: SelectableText(
-                peer.fingerprint ?? 'No cryptographic key exchanged yet',
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  color: VantraTheme.cyanSecurity,
+              child: Center(
+                child: SelectableText(
+                  expectedSafetyNumber,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: VantraTheme.cyanSecurity,
+                    letterSpacing: 1.5,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Only mark this device as trusted after comparing the fingerprint through another trusted channel.',
-              style: TextStyle(fontSize: 12, color: VantraTheme.amberWarning, fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 24),
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(
-                    onPressed: () async {
-                      await ref.read(messagingStateProvider.notifier).setPeerTrustState(
-                            peer.peerId,
-                            PeerTrustState.untrusted,
-                          );
-                      if (ctx.mounted) Navigator.pop(ctx);
-                    },
-                    child: const Text('Mark Untrusted'),
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: VantraTheme.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onPressed: peer.publicKey == null
+                        ? null
+                        : () {
+                            Navigator.pop(ctx);
+                            context.push('/peers/${peer.peerId}/verify');
+                          },
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: const Text('Scan QR Code'),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: VantraTheme.greenVerified,
-                      foregroundColor: Colors.white,
+                      backgroundColor: VantraTheme.surface,
+                      foregroundColor: VantraTheme.textPrimary,
+                      side: const BorderSide(color: Colors.white12),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
-                    onPressed: () async {
-                      await ref.read(messagingStateProvider.notifier).setPeerTrustState(
-                            peer.peerId,
-                            PeerTrustState.trusted,
-                          );
-                      if (ctx.mounted) Navigator.pop(ctx);
-                    },
-                    icon: const Icon(Icons.verified_user_rounded),
-                    label: const Text('Mark Trusted'),
+                    onPressed: peer.publicKey == null
+                        ? null
+                        : () {
+                            Navigator.pop(ctx);
+                            context.push('/peers/${peer.peerId}/my-qr');
+                          },
+                    icon: const Icon(Icons.qr_code_rounded),
+                    label: const Text('Show My QR'),
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () async {
+                  await ref.read(messagingStateProvider.notifier).setPeerTrustState(
+                        peer.peerId,
+                        PeerTrustState.trusted,
+                      );
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: const Text('Mark Trusted Manually'),
+              ),
             ),
           ],
         ),
@@ -302,34 +327,42 @@ class PeerProfilePage extends ConsumerWidget {
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: peer.isTrusted
+                    color: peer.isVerified
                         ? VantraTheme.greenVerified.withValues(alpha: 0.08)
-                        : peer.isBlocked
-                            ? VantraTheme.redBlocked.withValues(alpha: 0.08)
-                            : VantraTheme.amberWarning.withValues(alpha: 0.08),
+                        : peer.isTrusted
+                            ? VantraTheme.greenVerified.withValues(alpha: 0.04)
+                            : peer.isBlocked
+                                ? VantraTheme.redBlocked.withValues(alpha: 0.08)
+                                : VantraTheme.amberWarning.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: peer.isTrusted
+                      color: peer.isVerified
                           ? VantraTheme.greenVerified
-                          : peer.isBlocked
-                              ? VantraTheme.redBlocked
-                              : VantraTheme.amberWarning,
+                          : peer.isTrusted
+                              ? VantraTheme.greenVerified.withValues(alpha: 0.5)
+                              : peer.isBlocked
+                                  ? VantraTheme.redBlocked
+                                  : VantraTheme.amberWarning,
                       width: 1.5,
                     ),
                   ),
                   child: Row(
                     children: [
                       Icon(
-                        peer.isTrusted
+                        peer.isVerified
                             ? Icons.verified_user_rounded
-                            : peer.isBlocked
-                                ? Icons.block_flipped
-                                : Icons.warning_amber_rounded,
-                        color: peer.isTrusted
+                            : peer.isTrusted
+                                ? Icons.verified_user_outlined
+                                : peer.isBlocked
+                                    ? Icons.block_flipped
+                                    : Icons.warning_amber_rounded,
+                        color: peer.isVerified
                             ? VantraTheme.greenVerified
-                            : peer.isBlocked
-                                ? VantraTheme.redBlocked
-                                : VantraTheme.amberWarning,
+                            : peer.isTrusted
+                                ? VantraTheme.greenVerified
+                                : peer.isBlocked
+                                    ? VantraTheme.redBlocked
+                                    : VantraTheme.amberWarning,
                         size: 24,
                       ),
                       const SizedBox(width: 14),
@@ -338,28 +371,34 @@ class PeerProfilePage extends ConsumerWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              peer.isTrusted
+                              peer.isVerified
                                   ? 'Verified Identity'
-                                  : peer.isBlocked
-                                      ? 'Blocked Peer'
-                                      : 'Untrusted Identity',
+                                  : peer.isTrusted
+                                      ? 'Manually Trusted'
+                                      : peer.isBlocked
+                                          ? 'Blocked Peer'
+                                          : 'Untrusted Identity',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 14.5,
-                                color: peer.isTrusted
+                                color: peer.isVerified
                                     ? VantraTheme.greenVerified
-                                    : peer.isBlocked
-                                        ? VantraTheme.redBlocked
-                                        : VantraTheme.amberWarning,
+                                    : peer.isTrusted
+                                        ? VantraTheme.greenVerified
+                                        : peer.isBlocked
+                                            ? VantraTheme.redBlocked
+                                            : VantraTheme.amberWarning,
                               ),
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              peer.isTrusted
-                                  ? 'Cryptographic fingerprint verified'
-                                  : peer.isBlocked
-                                      ? 'Cannot send or receive messages'
-                                      : 'Compare fingerprint to prevent MITM attacks',
+                              peer.isVerified
+                                  ? 'Identity verified via QR code scan'
+                                  : peer.isTrusted
+                                      ? 'Peer marked as trusted manually'
+                                      : peer.isBlocked
+                                          ? 'Cannot send or receive messages'
+                                          : 'Compare Safety Number to prevent MITM attacks',
                               style: const TextStyle(fontSize: 12.5, color: VantraTheme.textSecondary),
                             ),
                           ],
@@ -389,7 +428,7 @@ class PeerProfilePage extends ConsumerWidget {
                     ],
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => _showFingerprintVerificationSheet(context, ref, peer),
+                        onPressed: () => _showSafetyNumberSheet(context, ref, peer),
                         icon: const Icon(Icons.fingerprint_rounded, size: 16),
                         label: const Text('Verify Identity'),
                         style: OutlinedButton.styleFrom(

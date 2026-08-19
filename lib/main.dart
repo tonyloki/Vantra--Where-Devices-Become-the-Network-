@@ -19,6 +19,8 @@ import 'features/peers/peer_profile_page.dart';
 import 'features/messaging/chat_page.dart';
 import 'features/profile/profile_page.dart';
 import 'features/poc/poc_page.dart';
+import 'features/peers/verify_identity_page.dart';
+import 'features/peers/show_my_qr_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -86,6 +88,20 @@ final GoRouter _router = GoRouter(
     GoRoute(
       path: '/poc',
       builder: (context, state) => const PocPage(),
+    ),
+    GoRoute(
+      path: '/peers/:peerId/verify',
+      builder: (context, state) {
+        final peerId = state.pathParameters['peerId'] ?? 'unknown';
+        return VerifyIdentityPage(peerId: peerId);
+      },
+    ),
+    GoRoute(
+      path: '/peers/:peerId/my-qr',
+      builder: (context, state) {
+        final peerId = state.pathParameters['peerId'] ?? 'unknown';
+        return ShowMyQrPage(peerId: peerId);
+      },
     ),
   ],
 );

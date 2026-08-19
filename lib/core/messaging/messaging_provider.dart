@@ -480,12 +480,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
       Uint8List decryptedBytes;
       try {
         print('[VANTRA][SESSION] state=${state.sessions[peerId]?.status.name}');
-        print('[VANTRA][SESSION] sendCounter=${session.sendSequence}');
-        print('[VANTRA][SESSION] receiveCounter=${session.receiveSequence}');
+        print('[VANTRA][SESSION] sendCounter=${session.ns}');
+        print('[VANTRA][SESSION] receiveCounter=${session.nr}');
         print('[VANTRA][SESSION] endpoint=${session.endpointId}');
         print('[VANTRA][SESSION] keyAvailable=true');
-        decryptedBytes = await _cryptoService.decryptBytes(
-          secretKey: session.receiveKey,
+        decryptedBytes = await _cryptoService.decryptWithDoubleRatchet(
+          session: session,
+          incomingDhPublicKeyBytes: event.dhPublicKey,
+          incomingSequence: event.sequence,
+          incomingPreviousChainLength: event.previousChainLength ?? 0,
           nonce: event.nonce,
           ciphertext: event.ciphertext,
           mac: event.mac,
@@ -514,12 +517,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
             'payloadType=${plaintext.runtimeType}\n'
             'transferId=$transferIdVal');
 
-      // 3. Replay Protection: verify sequence validity with sliding window & matching session ID
-      if (!session.isValidInboundSequence(plaintext.sequence, plaintext.sessionId)) {
-        VantraLogger.log('[VANTRA][SECURITY] REPLAY / INVALID SEQUENCE: messageId=${plaintext.messageId}, seq=${plaintext.sequence} <= receiveSequence=${session.receiveSequence} or sessionId mismatch. Discarded.');
+      // 3. Verify session ID
+      if (plaintext.sessionId != session.sessionId) {
+        VantraLogger.log('[VANTRA][SECURITY] SESSION ID MISMATCH: messageId=${plaintext.messageId}, expected=${session.sessionId}, actual=${plaintext.sessionId}. Discarded.');
         return;
       }
-      session.updateReceiveSequence(plaintext.sequence);
       print('[VANTRA][PIPELINE] MESSAGE_RECEIVED endpoint=${event.endpointId} peerId=$peerId');
 
       final currentSession = state.sessions[peerId];
@@ -627,6 +629,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         }
 
         final activeSession = state.sessions[peerId];
+        final isHandshaking = activeSession == null || activeSession.status == SessionStatus.handshaking;
 
         // Enforce SessionStatus.connected and keep state synchronized with the authoritative secure session
         final localCapabilities = const [
@@ -722,6 +725,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
               'negotiatedCapabilities=${negotiatedCapabilities.map((c) => c.name).toList()}');
 
         await _sendAck(event.endpointId, secSession, plaintext.messageId);
+
+        if (!secSession.isDeviceA && isHandshaking) {
+          print('[VANTRA][SECURITY] Responder replying with CapabilitiesExchange to $peerId');
+          await _sendCapabilitiesExchange(peerId);
+        }
+
         _flushQueue(peerId, 'DomainCapabilitiesExchange');
         await _replayPendingOffersForPeer(peerId, event.endpointId);
       } else if (plaintext is DomainMediaControl) {
@@ -986,7 +995,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   Future<void> _sendAck(String endpointId, SecuritySession session, String originalMessageId) async {
     final ackPacketId = const Uuid().v4();
-    final ackSeq = session.nextSendSequence();
+    final ackSeq = session.ns;
 
     VantraLogger.log('[VANTRA][MESSAGING] ACK CREATE originalMessageId=$originalMessageId');
 
@@ -1004,13 +1013,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     final ackPlaintextBytes = _service.codec.encodePlaintext(ackDomainMessage);
 
-    final encAck = await _cryptoService.encryptBytes(
-      secretKey: session.sendKey,
-      sessionSalt: session.sessionSalt,
-      sequence: ackSeq,
+    final encAck = await _cryptoService.encryptWithDoubleRatchet(
+      session: session,
       messageId: ackPacketId,
       plaintextBytes: ackPlaintextBytes,
     );
+
+    final dhPubBytes = await session.getLocalDhPublicKeyBytes();
+    final prevChainLen = session.pn;
 
     VantraLogger.log('[VANTRA][CRYPTO] ACK ENCRYPT SUCCESS ackPacketId=$ackPacketId');
 
@@ -1022,6 +1032,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
       nonce: Uint8List.fromList(encAck.nonce),
       ciphertext: Uint8List.fromList(encAck.ciphertext),
       mac: Uint8List.fromList(encAck.mac),
+      dhPublicKey: dhPubBytes,
+      previousChainLength: prevChainLen,
       protocolVersion: kCurrentProtocolVersion,
     );
 
@@ -1085,7 +1097,6 @@ class MessagingNotifier extends Notifier<MessagingState> {
     print('[VANTRA][SECURITY] STATE: IDENTITY_VERIFIED');
     print('[VANTRA][CONNECTION] IDENTITY_RECEIVED: peerId=${identity.peerId}, endpointId=${identity.endpointId}');
 
-    // BLOCKING SECURITY INVARIANT CHECK
     final repo = ref.read(messagingRepositoryProvider);
     final existingPeer = await repo.getPeer(identity.peerId);
     final trustState = existingPeer?.trustState ?? PeerTrustState.untrusted;
@@ -1095,6 +1106,34 @@ class MessagingNotifier extends Notifier<MessagingState> {
       _pendingEphemeralKeys.remove(identity.endpointId);
       final transport = ref.read(transportProvider);
       await transport.disconnect(identity.endpointId);
+      return;
+    }
+
+    if (trustState == PeerTrustState.verified &&
+        existingPeer?.verifiedPublicKey != null &&
+        existingPeer!.verifiedPublicKey != identity.identityPublicKeyHex) {
+      print('[VANTRA][NEARBY] IDENTITY_MISMATCH (VERIFIED) peerId=${identity.peerId} verifiedKey=${existingPeer.verifiedPublicKey} newKey=${identity.identityPublicKeyHex}');
+      _pendingEphemeralKeys.remove(identity.endpointId);
+      final transport = ref.read(transportProvider);
+      await transport.disconnect(identity.endpointId);
+
+      final session = state.sessions[identity.peerId];
+      state = state.copyWith(
+        identityMismatchRequest: IdentityMismatchRequest(
+          peerId: identity.peerId,
+          endpointId: identity.endpointId,
+          oldPublicKey: existingPeer.verifiedPublicKey!,
+          newPublicKey: identity.identityPublicKeyHex,
+        ),
+        sessions: {
+          ...state.sessions,
+          if (session != null)
+            identity.peerId: session.copyWith(
+              status: SessionStatus.disconnected,
+              isSecure: false,
+            ),
+        },
+      );
       return;
     }
 
@@ -1158,10 +1197,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
       endpointId: identity.endpointId,
       sessionId: derivedKeys.sessionId,
       sessionSalt: derivedKeys.sessionSalt,
-      sendKey: derivedKeys.sendKey,
-      receiveKey: derivedKeys.receiveKey,
       remoteIdentityPublicKey: identity.identityPublicKeyHex,
       remoteFingerprint: remoteFingerprint,
+      sendKey: derivedKeys.sendKey,
+      receiveKey: derivedKeys.receiveKey,
+    );
+
+    await _cryptoService.initializeDoubleRatchet(
+      session: secSession,
+      handshakeLocalKeyPair: localEphKeyPair,
+      handshakeRemotePublicKeyBytes: ephKeyBytes,
+      isDeviceA: derivedKeys.isDeviceA,
     );
 
     _securitySessions[identity.peerId] = secSession;
@@ -1250,8 +1296,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
     }
 
     if (!isV1) {
-      print('[VANTRA][SECURITY] Initiating V2 CapabilitiesExchange with peer ${identity.peerId}');
-      await _sendCapabilitiesExchange(identity.peerId);
+      if (derivedKeys.isDeviceA) {
+        print('[VANTRA][SECURITY] Initiating V2 CapabilitiesExchange with peer ${identity.peerId}');
+        await _sendCapabilitiesExchange(identity.peerId);
+      } else {
+        print('[VANTRA][SECURITY] Responder waiting for initiator CapabilitiesExchange from ${identity.peerId}');
+      }
     } else {
       // Reconnection: Flush queue upon secure session establishment
       print('[VANTRA][MESSAGE] peer=${identity.peerId} queue_flush_started');
@@ -1818,7 +1868,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     if (session == null || secSession == null) return;
 
     final msgId = const Uuid().v4();
-    final seq = secSession.nextSendSequence();
+    final seq = secSession.ns;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
 
     final domainPlaintext = DomainCapabilitiesExchange(
@@ -1839,13 +1889,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     final bytes = _service.codec.encodePlaintext(domainPlaintext);
 
-    final encrypted = await _cryptoService.encryptBytes(
-      secretKey: secSession.sendKey,
-      sessionSalt: secSession.sessionSalt,
-      sequence: seq,
+    final encrypted = await _cryptoService.encryptWithDoubleRatchet(
+      session: secSession,
       messageId: msgId,
       plaintextBytes: bytes,
     );
+
+    final dhPubBytes = await secSession.getLocalDhPublicKeyBytes();
+    final prevChainLen = secSession.pn;
 
     await _service.sendEncryptedMessage(
       endpointId: session.endpointId,
@@ -1855,6 +1906,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
       nonce: Uint8List.fromList(encrypted.nonce),
       ciphertext: Uint8List.fromList(encrypted.ciphertext),
       mac: Uint8List.fromList(encrypted.mac),
+      dhPublicKey: dhPubBytes,
+      previousChainLength: prevChainLen,
       protocolVersion: session.negotiatedVersion ?? kCurrentProtocolVersion,
     );
     print('[VANTRA][CAPABILITY][LOCAL_ADVERTISE]\n'
@@ -2105,7 +2158,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       await repository.updateMessageStatus(msg.messageId, MessageStatus.sending);
 
       final offerMsgId = msg.messageId; // Reuse messageId to link offer, receiver saving, and final ACK matching
-      final offerSeq = secSession.nextSendSequence();
+      final offerSeq = secSession.ns;
 
       print('[VANTRA][MEDIA][OFFER]\n'
             'messageId=${msg.messageId}\n'
@@ -2134,13 +2187,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
       final offerBytes = _service.codec.encodePlaintext(offerDomainMsg);
 
-      final encryptedOffer = await _cryptoService.encryptBytes(
-        secretKey: secSession.sendKey,
-        sessionSalt: secSession.sessionSalt,
-        sequence: offerSeq,
+      final encryptedOffer = await _cryptoService.encryptWithDoubleRatchet(
+        session: secSession,
         messageId: offerMsgId,
         plaintextBytes: offerBytes,
       );
+
+      final dhPubBytes = await secSession.getLocalDhPublicKeyBytes();
+      final prevChainLen = secSession.pn;
 
       print('[VANTRA][MEDIA][OFFER_ENCRYPT]\n'
             'messageId=${msg.messageId}\n'
@@ -2162,6 +2216,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
         nonce: Uint8List.fromList(encryptedOffer.nonce),
         ciphertext: Uint8List.fromList(encryptedOffer.ciphertext),
         mac: Uint8List.fromList(encryptedOffer.mac),
+        dhPublicKey: dhPubBytes,
+        previousChainLength: prevChainLen,
         protocolVersion: kCurrentProtocolVersion,
       );
 
@@ -2229,7 +2285,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
           final chunkData = await accessFile.read(chunkSize);
 
           final chunkMsgId = const Uuid().v4();
-          final chunkSeq = secSession.nextSendSequence();
+          final chunkSeq = secSession.ns;
 
           final chunkDomainMsg = DomainMediaChunk(
             messageId: chunkMsgId,
@@ -2245,13 +2301,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
           );
 
           final chunkBytes = _service.codec.encodePlaintext(chunkDomainMsg);
-          final encryptedChunk = await _cryptoService.encryptBytes(
-            secretKey: secSession.sendKey,
-            sessionSalt: secSession.sessionSalt,
-            sequence: chunkSeq,
+          final encryptedChunk = await _cryptoService.encryptWithDoubleRatchet(
+            session: secSession,
             messageId: chunkMsgId,
             plaintextBytes: chunkBytes,
           );
+
+          final dhPubBytes = await secSession.getLocalDhPublicKeyBytes();
+          final prevChainLen = secSession.pn;
 
           print('[VANTRA][MEDIA][CHUNK_SEND]\n'
                 'messageId=${msg.messageId}\n'
@@ -2267,6 +2324,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
             nonce: Uint8List.fromList(encryptedChunk.nonce),
             ciphertext: Uint8List.fromList(encryptedChunk.ciphertext),
             mac: Uint8List.fromList(encryptedChunk.mac),
+            dhPublicKey: dhPubBytes,
+            previousChainLength: prevChainLen,
             protocolVersion: kCurrentProtocolVersion,
           );
 
@@ -2325,7 +2384,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     }
     _inflightSends.add(msg.messageId);
 
-    final seq = secSession.nextSendSequence();
+    final seq = secSession.ns;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
 
     VantraLogger.log('[VANTRA][PROTO] PLAINTEXT BUILD START messageId=${msg.messageId} sequence=$seq sessionIdPresent=${secSession.sessionId.isNotEmpty}');
@@ -2352,17 +2411,19 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
       VantraLogger.log('[VANTRA][CRYPTO] ENCRYPT START messageId=${msg.messageId} sequence=$seq');
       print('[VANTRA][SESSION] state=${session.status.name}');
-      print('[VANTRA][SESSION] sendCounter=${secSession.sendSequence}');
-      print('[VANTRA][SESSION] receiveCounter=${secSession.receiveSequence}');
+      print('[VANTRA][SESSION] sendCounter=${secSession.ns}');
+      print('[VANTRA][SESSION] receiveCounter=${secSession.nr}');
       print('[VANTRA][SESSION] endpoint=${session.endpointId}');
       print('[VANTRA][SESSION] keyAvailable=true');
-      final encrypted = await _cryptoService.encryptBytes(
-        secretKey: secSession.sendKey,
-        sessionSalt: secSession.sessionSalt,
-        sequence: seq,
+      final encrypted = await _cryptoService.encryptWithDoubleRatchet(
+        session: secSession,
         messageId: msg.messageId,
         plaintextBytes: plaintextBytes,
       );
+
+      final dhPubBytes = await secSession.getLocalDhPublicKeyBytes();
+      final prevChainLen = secSession.pn;
+
       print('[VANTRA][MESSAGE] ENCRYPTED messageId=${msg.messageId} bytes=${encrypted.ciphertext.length}');
       VantraLogger.log('[VANTRA][CRYPTO] ENCRYPT SUCCESS messageId=${msg.messageId} nonceLength=12 ciphertextLength=${encrypted.ciphertext.length} macLength=16');
 
@@ -2376,6 +2437,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
           nonce: Uint8List.fromList(encrypted.nonce),
           ciphertext: Uint8List.fromList(encrypted.ciphertext),
           mac: Uint8List.fromList(encrypted.mac),
+          dhPublicKey: dhPubBytes,
+          previousChainLength: prevChainLen,
         );
         print('[A][MESH][FORWARD] packetId=${msg.messageId} source=${localIdentity.peerId} destination=${session.peerId} currentPeer=${localIdentity.peerId} nextHop=${session.endpointId} hopCount=0 TTL=8');
         await _sendRoutedPayload(session.peerId, innerEnvelope);
@@ -2389,6 +2452,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
           nonce: Uint8List.fromList(encrypted.nonce),
           ciphertext: Uint8List.fromList(encrypted.ciphertext),
           mac: Uint8List.fromList(encrypted.mac),
+          dhPublicKey: dhPubBytes,
+          previousChainLength: prevChainLen,
           protocolVersion: kCurrentProtocolVersion,
         );
         print('[VANTRA][PIPELINE] MESSAGE_TRANSPORT_SEND_SUCCESS endpoint=${session.endpointId}');
@@ -2559,7 +2624,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   Future<void> _sendMediaCancel(String endpointId, SecuritySession session, String transferId) async {
     final msgId = const Uuid().v4();
-    final seq = session.nextSendSequence();
+    final seq = session.ns;
 
     final localId = ref.read(localIdentityStateProvider);
     final cancelDomainMsg = DomainMediaControl(
@@ -2574,13 +2639,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     final bytes = _service.codec.encodePlaintext(cancelDomainMsg);
-    final encrypted = await _cryptoService.encryptBytes(
-      secretKey: session.sendKey,
-      sessionSalt: session.sessionSalt,
-      sequence: seq,
+    final encrypted = await _cryptoService.encryptWithDoubleRatchet(
+      session: session,
       messageId: msgId,
       plaintextBytes: bytes,
     );
+
+    final dhPubBytes = await session.getLocalDhPublicKeyBytes();
+    final prevChainLen = session.pn;
 
     await _service.sendEncryptedMessage(
       endpointId: endpointId,
@@ -2590,6 +2656,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
       nonce: Uint8List.fromList(encrypted.nonce),
       ciphertext: Uint8List.fromList(encrypted.ciphertext),
       mac: Uint8List.fromList(encrypted.mac),
+      dhPublicKey: dhPubBytes,
+      previousChainLength: prevChainLen,
       protocolVersion: kCurrentProtocolVersion,
     );
   }
@@ -2607,6 +2675,25 @@ class MessagingNotifier extends Notifier<MessagingState> {
         },
       );
     }
+  }
+
+  Future<void> verifyPeer(String peerId, String verifiedPublicKey) async {
+    final repo = ref.read(messagingRepositoryProvider);
+    await repo.updatePeerVerification(peerId, verifiedPublicKey);
+
+    final session = state.sessions[peerId];
+    if (session != null) {
+      state = state.copyWith(
+        sessions: {
+          ...state.sessions,
+          peerId: session.copyWith(trustState: PeerTrustState.verified),
+        },
+      );
+    }
+  }
+
+  void clearIdentityMismatchRequest() {
+    state = state.copyWith(clearIdentityMismatchRequest: true);
   }
 
   Future<void> blockPeer(String peerId) async {
@@ -2874,7 +2961,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   Future<void> _sendMediaReject(String endpointId, SecuritySession session, String transferId) async {
     final msgId = const Uuid().v4();
-    final seq = session.nextSendSequence();
+    final seq = session.ns;
 
     final localId = ref.read(localIdentityStateProvider);
     final rejectDomainMsg = DomainMediaControl(
@@ -2889,13 +2976,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     final bytes = _service.codec.encodePlaintext(rejectDomainMsg);
-    final encrypted = await _cryptoService.encryptBytes(
-      secretKey: session.sendKey,
-      sessionSalt: session.sessionSalt,
-      sequence: seq,
+    final encrypted = await _cryptoService.encryptWithDoubleRatchet(
+      session: session,
       messageId: msgId,
       plaintextBytes: bytes,
     );
+
+    final dhPubBytes = await session.getLocalDhPublicKeyBytes();
+    final prevChainLen = session.pn;
 
     await _service.sendEncryptedMessage(
       endpointId: endpointId,
@@ -2905,13 +2993,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
       nonce: Uint8List.fromList(encrypted.nonce),
       ciphertext: Uint8List.fromList(encrypted.ciphertext),
       mac: Uint8List.fromList(encrypted.mac),
+      dhPublicKey: dhPubBytes,
+      previousChainLength: prevChainLen,
       protocolVersion: kCurrentProtocolVersion,
     );
   }
 
   Future<void> _sendMediaAccept(String endpointId, SecuritySession session, String transferId, int nextExpectedChunk) async {
     final msgId = const Uuid().v4();
-    final seq = session.nextSendSequence();
+    final seq = session.ns;
 
     final localId = ref.read(localIdentityStateProvider);
     final acceptDomainMsg = DomainMediaControl(
@@ -2927,13 +3017,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     final bytes = _service.codec.encodePlaintext(acceptDomainMsg);
-    final encrypted = await _cryptoService.encryptBytes(
-      secretKey: session.sendKey,
-      sessionSalt: session.sessionSalt,
-      sequence: seq,
+    final encrypted = await _cryptoService.encryptWithDoubleRatchet(
+      session: session,
       messageId: msgId,
       plaintextBytes: bytes,
     );
+
+    final dhPubBytes = await session.getLocalDhPublicKeyBytes();
+    final prevChainLen = session.pn;
 
     await _service.sendEncryptedMessage(
       endpointId: endpointId,
@@ -2943,6 +3034,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
       nonce: Uint8List.fromList(encrypted.nonce),
       ciphertext: Uint8List.fromList(encrypted.ciphertext),
       mac: Uint8List.fromList(encrypted.mac),
+      dhPublicKey: dhPubBytes,
+      previousChainLength: prevChainLen,
       protocolVersion: kCurrentProtocolVersion,
     );
   }
@@ -3364,10 +3457,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final session = _securitySessions[recipientPeerId];
     if (session == null) return;
 
+    final ackSeq = session.ns;
+    final ackMsgId = const Uuid().v4();
+
     final ackDomainMessage = DomainAckMessage(
-      messageId: const Uuid().v4(),
+      messageId: ackMsgId,
       sessionId: session.sessionId,
-      sequence: session.nextSendSequence(),
+      sequence: ackSeq,
       timestampMs: DateTime.now().millisecondsSinceEpoch,
       senderId: ref.read(localIdentityStateProvider).peerId,
       receiverId: recipientPeerId,
@@ -3376,22 +3472,25 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     final ackPlaintextBytes = _service.codec.encodePlaintext(ackDomainMessage);
-    final encAck = await _cryptoService.encryptBytes(
-      secretKey: session.sendKey,
-      sessionSalt: session.sessionSalt,
-      sequence: ackDomainMessage.sequence,
-      messageId: ackDomainMessage.messageId,
+    final encAck = await _cryptoService.encryptWithDoubleRatchet(
+      session: session,
+      messageId: ackMsgId,
       plaintextBytes: ackPlaintextBytes,
     );
 
+    final dhPubBytes = await session.getLocalDhPublicKeyBytes();
+    final prevChainLen = session.pn;
+
     final routeEnvelope = DomainEncryptedEnvelope(
       protocolVersion: kCurrentProtocolVersion,
-      messageId: ackDomainMessage.messageId,
+      messageId: ackMsgId,
       sessionId: session.sessionId,
-      sequence: ackDomainMessage.sequence,
+      sequence: ackSeq,
       nonce: Uint8List.fromList(encAck.nonce),
       ciphertext: Uint8List.fromList(encAck.ciphertext),
       mac: Uint8List.fromList(encAck.mac),
+      dhPublicKey: dhPubBytes,
+      previousChainLength: prevChainLen,
     );
 
     await _sendRoutedPayload(recipientPeerId, routeEnvelope);
@@ -3614,6 +3713,68 @@ class MessagingNotifier extends Notifier<MessagingState> {
       return;
     }
 
+    final repo = ref.read(messagingRepositoryProvider);
+    final existingPeer = await repo.getPeer(senderPeerId);
+    final trustState = existingPeer?.trustState ?? PeerTrustState.untrusted;
+
+    if (trustState == PeerTrustState.distrusted) {
+      print('[VANTRA][SECURITY][MESH] BLOCKED PEER CONNECTION REJECTED: peerId=$senderPeerId');
+      _pendingEphemeralKeys.remove(senderPeerId);
+      return;
+    }
+
+    if (trustState == PeerTrustState.verified &&
+        existingPeer?.verifiedPublicKey != null &&
+        existingPeer!.verifiedPublicKey != _hexEncode(handshake.identityPublicKey)) {
+      print('[VANTRA][MESH] IDENTITY_MISMATCH (VERIFIED) peerId=$senderPeerId verifiedKey=${existingPeer.verifiedPublicKey} newKey=${_hexEncode(handshake.identityPublicKey)}');
+      _pendingEphemeralKeys.remove(senderPeerId);
+
+      final session = state.sessions[senderPeerId];
+      state = state.copyWith(
+        identityMismatchRequest: IdentityMismatchRequest(
+          peerId: senderPeerId,
+          endpointId: 'mesh:$senderPeerId',
+          oldPublicKey: existingPeer.verifiedPublicKey!,
+          newPublicKey: _hexEncode(handshake.identityPublicKey),
+        ),
+        sessions: {
+          ...state.sessions,
+          if (session != null)
+            senderPeerId: session.copyWith(
+              status: SessionStatus.disconnected,
+              isSecure: false,
+            ),
+        },
+      );
+      return;
+    }
+
+    if (trustState == PeerTrustState.trusted &&
+        existingPeer?.publicKey != null &&
+        existingPeer!.publicKey != _hexEncode(handshake.identityPublicKey)) {
+      print('[VANTRA][MESH] IDENTITY_MISMATCH peerId=$senderPeerId oldKey=${existingPeer.publicKey} newKey=${_hexEncode(handshake.identityPublicKey)}');
+      _pendingEphemeralKeys.remove(senderPeerId);
+
+      final session = state.sessions[senderPeerId];
+      state = state.copyWith(
+        identityMismatchRequest: IdentityMismatchRequest(
+          peerId: senderPeerId,
+          endpointId: 'mesh:$senderPeerId',
+          oldPublicKey: existingPeer.publicKey!,
+          newPublicKey: _hexEncode(handshake.identityPublicKey),
+        ),
+        sessions: {
+          ...state.sessions,
+          if (session != null)
+            senderPeerId: session.copyWith(
+              status: SessionStatus.disconnected,
+              isSecure: false,
+            ),
+        },
+      );
+      return;
+    }
+
     var localEphKeyPair = _pendingEphemeralKeys[senderPeerId];
     bool wasInitiator = localEphKeyPair != null;
     if (localEphKeyPair == null) {
@@ -3632,14 +3793,21 @@ class MessagingNotifier extends Notifier<MessagingState> {
       endpointId: 'mesh:$senderPeerId',
       sessionId: derivedKeys.sessionId,
       sessionSalt: derivedKeys.sessionSalt,
-      sendKey: derivedKeys.sendKey,
-      receiveKey: derivedKeys.receiveKey,
       remoteIdentityPublicKey: _hexEncode(handshake.identityPublicKey),
       remoteFingerprint: remoteFingerprint,
+      sendKey: derivedKeys.sendKey,
+      receiveKey: derivedKeys.receiveKey,
     );
+
+    await _cryptoService.initializeDoubleRatchet(
+      session: secSession,
+      handshakeLocalKeyPair: localEphKeyPair,
+      handshakeRemotePublicKeyBytes: handshake.ephemeralPublicKey,
+      isDeviceA: derivedKeys.isDeviceA,
+    );
+
     _securitySessions[senderPeerId] = secSession;
 
-    final repo = ref.read(messagingRepositoryProvider);
     await repo.upsertPeer(
       senderPeerId,
       handshake.displayName,
@@ -3710,8 +3878,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
     }
 
     try {
-      final decryptedBytes = await _cryptoService.decryptBytes(
-        secretKey: session.receiveKey,
+      final decryptedBytes = await _cryptoService.decryptWithDoubleRatchet(
+        session: session,
+        incomingDhPublicKeyBytes: event.dhPublicKey,
+        incomingSequence: event.sequence,
+        incomingPreviousChainLength: event.previousChainLength ?? 0,
         nonce: event.nonce,
         ciphertext: event.ciphertext,
         mac: event.mac,
@@ -3721,11 +3892,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final plaintext = _service.codec.decodePlaintext(decryptedBytes);
       VantraLogger.log('[VANTRA][MESSAGING] MESSAGE RECONSTRUCTED messageId=${plaintext.messageId} senderId=${plaintext.senderId} receiverId=${plaintext.receiverId} timestamp=${plaintext.timestampMs}');
 
-      if (!session.isValidInboundSequence(plaintext.sequence, plaintext.sessionId)) {
-        VantraLogger.log('[VANTRA][SECURITY] REPLAY / INVALID SEQUENCE: messageId=${plaintext.messageId}, seq=${plaintext.sequence} <= receiveSequence=${session.receiveSequence}. Discarded.');
+      if (plaintext.sessionId != session.sessionId) {
+        VantraLogger.log('[VANTRA][SECURITY] SESSION ID MISMATCH: messageId=${plaintext.messageId}, expected=${session.sessionId}, actual=${plaintext.sessionId}. Discarded.');
         return;
       }
-      session.updateReceiveSequence(plaintext.sequence);
 
       final repository = ref.read(messagingRepositoryProvider);
       

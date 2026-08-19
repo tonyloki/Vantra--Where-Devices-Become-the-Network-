@@ -105,6 +105,8 @@ class ProtobufCodec implements ProtocolCodec {
           nonce: encrypted.nonce,
           ciphertext: encrypted.ciphertext,
           mac: encrypted.mac,
+          dhPublicKey: encrypted.dhPublicKey,
+          previousChainLength: encrypted.previousChainLength ?? 0,
         );
       case DomainProtocolError error:
         pbEnvelope.error = ProtocolErrorPayload(
@@ -241,6 +243,8 @@ class ProtobufCodec implements ProtocolCodec {
           nonce: Uint8List.fromList(enc.nonce),
           ciphertext: Uint8List.fromList(enc.ciphertext),
           mac: Uint8List.fromList(enc.mac),
+          dhPublicKey: enc.dhPublicKey.isNotEmpty ? Uint8List.fromList(enc.dhPublicKey) : null,
+          previousChainLength: enc.previousChainLength,
         );
 
       case VantraWireEnvelope_Payload.error:

@@ -44,6 +44,8 @@ class DomainEncryptedEnvelope extends DomainWireEnvelope {
   final Uint8List nonce;
   final Uint8List ciphertext;
   final Uint8List mac;
+  final Uint8List? dhPublicKey;
+  final int? previousChainLength;
 
   const DomainEncryptedEnvelope({
     required super.protocolVersion,
@@ -53,6 +55,8 @@ class DomainEncryptedEnvelope extends DomainWireEnvelope {
     required this.nonce,
     required this.ciphertext,
     required this.mac,
+    this.dhPublicKey,
+    this.previousChainLength,
   });
 }
 

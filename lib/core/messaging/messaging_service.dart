@@ -47,6 +47,8 @@ class EncryptedMessageEvent {
   final Uint8List nonce;
   final Uint8List ciphertext;
   final Uint8List mac;
+  final Uint8List? dhPublicKey;
+  final int? previousChainLength;
 
   const EncryptedMessageEvent({
     required this.endpointId,
@@ -57,6 +59,8 @@ class EncryptedMessageEvent {
     required this.nonce,
     required this.ciphertext,
     required this.mac,
+    this.dhPublicKey,
+    this.previousChainLength,
   });
 
   String get nonceHex => nonce.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
@@ -159,6 +163,8 @@ class MessagingService {
     required Uint8List nonce,
     required Uint8List ciphertext,
     required Uint8List mac,
+    Uint8List? dhPublicKey,
+    int? previousChainLength,
     int protocolVersion = kCurrentProtocolVersion,
   }) async {
     final envelope = DomainEncryptedEnvelope(
@@ -169,6 +175,8 @@ class MessagingService {
       nonce: nonce,
       ciphertext: ciphertext,
       mac: mac,
+      dhPublicKey: dhPublicKey,
+      previousChainLength: previousChainLength,
     );
     VantraLogger.log('[VANTRA][PROTO] ENCRYPTED ENVELOPE BUILT messageId=$messageId sessionIdPresent=true sequence=$sequence');
 
@@ -254,6 +262,8 @@ class MessagingService {
             nonce: enc.nonce,
             ciphertext: enc.ciphertext,
             mac: enc.mac,
+            dhPublicKey: enc.dhPublicKey,
+            previousChainLength: enc.previousChainLength,
           ));
 
         case DomainProtocolError err:

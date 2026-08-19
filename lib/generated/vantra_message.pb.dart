@@ -382,6 +382,8 @@ class EncryptedEnvelope extends $pb.GeneratedMessage {
     $core.List<$core.int>? nonce,
     $core.List<$core.int>? ciphertext,
     $core.List<$core.int>? mac,
+    $core.List<$core.int>? dhPublicKey,
+    $core.int? previousChainLength,
   }) {
     final result = create();
     if (messageId != null) result.messageId = messageId;
@@ -390,6 +392,9 @@ class EncryptedEnvelope extends $pb.GeneratedMessage {
     if (nonce != null) result.nonce = nonce;
     if (ciphertext != null) result.ciphertext = ciphertext;
     if (mac != null) result.mac = mac;
+    if (dhPublicKey != null) result.dhPublicKey = dhPublicKey;
+    if (previousChainLength != null)
+      result.previousChainLength = previousChainLength;
     return result;
   }
 
@@ -418,6 +423,10 @@ class EncryptedEnvelope extends $pb.GeneratedMessage {
         5, _omitFieldNames ? '' : 'ciphertext', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(
         6, _omitFieldNames ? '' : 'mac', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        7, _omitFieldNames ? '' : 'dhPublicKey', $pb.PbFieldType.OY)
+    ..aI(8, _omitFieldNames ? '' : 'previousChainLength',
+        fieldType: $pb.PbFieldType.OU3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -492,6 +501,24 @@ class EncryptedEnvelope extends $pb.GeneratedMessage {
   $core.bool hasMac() => $_has(5);
   @$pb.TagNumber(6)
   void clearMac() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.List<$core.int> get dhPublicKey => $_getN(6);
+  @$pb.TagNumber(7)
+  set dhPublicKey($core.List<$core.int> value) => $_setBytes(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasDhPublicKey() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearDhPublicKey() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.int get previousChainLength => $_getIZ(7);
+  @$pb.TagNumber(8)
+  set previousChainLength($core.int value) => $_setUnsignedInt32(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasPreviousChainLength() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearPreviousChainLength() => $_clearField(8);
 }
 
 enum VantraPlaintext_Body {

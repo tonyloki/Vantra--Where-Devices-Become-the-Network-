@@ -84,6 +84,18 @@ class PeerDao extends DatabaseAccessor<AppDatabase> with _$PeerDaoMixin {
     return rowsAffected > 0;
   }
 
+  Future<bool> updatePeerVerification(String peerId, String verifiedPublicKey) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final rowsAffected = await (update(peers)..where((t) => t.peerId.equals(peerId))).write(
+      PeersCompanion(
+        trustState: const Value(PeerTrustState.verified),
+        verifiedPublicKey: Value(verifiedPublicKey),
+        updatedAt: Value(now),
+      ),
+    );
+    return rowsAffected > 0;
+  }
+
   Future<List<Peer>> listPeers() {
     return (select(peers)..orderBy([(t) => OrderingTerm(expression: t.lastSeen, mode: OrderingMode.desc)])).get();
   }

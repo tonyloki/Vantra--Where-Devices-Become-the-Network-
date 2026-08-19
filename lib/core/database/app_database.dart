@@ -20,7 +20,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration {
@@ -54,6 +54,9 @@ class AppDatabase extends _$AppDatabase {
         }
         if (from < 6) {
           await m.addColumn(messages, messages.sha256);
+        }
+        if (from < 7) {
+          await m.addColumn(peers, peers.verifiedPublicKey);
         }
       },
       beforeOpen: (details) async {

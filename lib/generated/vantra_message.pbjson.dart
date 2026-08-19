@@ -205,6 +205,14 @@ const EncryptedEnvelope$json = {
     {'1': 'nonce', '3': 4, '4': 1, '5': 12, '10': 'nonce'},
     {'1': 'ciphertext', '3': 5, '4': 1, '5': 12, '10': 'ciphertext'},
     {'1': 'mac', '3': 6, '4': 1, '5': 12, '10': 'mac'},
+    {'1': 'dh_public_key', '3': 7, '4': 1, '5': 12, '10': 'dhPublicKey'},
+    {
+      '1': 'previous_chain_length',
+      '3': 8,
+      '4': 1,
+      '5': 13,
+      '10': 'previousChainLength'
+    },
   ],
 };
 
@@ -213,7 +221,8 @@ final $typed_data.Uint8List encryptedEnvelopeDescriptor = $convert.base64Decode(
     'ChFFbmNyeXB0ZWRFbnZlbG9wZRIdCgptZXNzYWdlX2lkGAEgASgJUgltZXNzYWdlSWQSHQoKc2'
     'Vzc2lvbl9pZBgCIAEoCVIJc2Vzc2lvbklkEhoKCHNlcXVlbmNlGAMgASgEUghzZXF1ZW5jZRIU'
     'CgVub25jZRgEIAEoDFIFbm9uY2USHgoKY2lwaGVydGV4dBgFIAEoDFIKY2lwaGVydGV4dBIQCg'
-    'NtYWMYBiABKAxSA21hYw==');
+    'NtYWMYBiABKAxSA21hYxIiCg1kaF9wdWJsaWNfa2V5GAcgASgMUgtkaFB1YmxpY0tleRIyChVw'
+    'cmV2aW91c19jaGFpbl9sZW5ndGgYCCABKA1SE3ByZXZpb3VzQ2hhaW5MZW5ndGg=');
 
 @$core.Deprecated('Use vantraPlaintextDescriptor instead')
 const VantraPlaintext$json = {

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'canonical_encoder.dart';
+import 'security_session.dart';
 
 class DerivedSessionKeys {
   final String sessionId;
@@ -358,6 +359,322 @@ class CryptoService {
       messageId: messageId,
     );
     return utf8.decode(bytes);
+  }
+
+  /// Initializes the Double Ratchet state for a SecuritySession
+  Future<void> initializeDoubleRatchet({
+    required SecuritySession session,
+    required SimpleKeyPair handshakeLocalKeyPair,
+    required List<int> handshakeRemotePublicKeyBytes,
+    required bool isDeviceA,
+  }) async {
+    session.isDeviceA = isDeviceA;
+
+    // 1. Perform ECDH to get handshake shared secret
+    final handshakeSharedSecret = await _x25519.sharedSecretKey(
+      keyPair: handshakeLocalKeyPair,
+      remotePublicKey: SimplePublicKey(handshakeRemotePublicKeyBytes, type: KeyPairType.x25519),
+    );
+
+    // 2. Derive initial root key
+    final initialRoot = await deriveInitialRootKey(handshakeSharedSecret);
+    session.rootKey = initialRoot;
+    final handshakeSharedSecretData = await handshakeSharedSecret.extract();
+    final hssFp = await computeFingerprint(handshakeSharedSecretData.bytes);
+    final irData = await initialRoot.extract();
+    final irFp = await computeFingerprint(irData.bytes);
+    print('[VANTRA][DR_DIAG] initializeDoubleRatchet: isDeviceA=$isDeviceA, handshakeSharedSecretFingerprint=$hssFp, initialRootFp=$irFp');
+
+    // 3. Initialize DH ratchet state
+    final remoteDhPub = SimplePublicKey(handshakeRemotePublicKeyBytes, type: KeyPairType.x25519);
+    session.remoteDhPublicKey = remoteDhPub;
+
+    if (isDeviceA) {
+      // Alice is Device A: generates new DH key pair and derives sending chain key
+      final localDhKeyPair = await generateEphemeralKeyPair();
+      session.localDhKeyPair = localDhKeyPair;
+
+      final dhOutput = await computeDH(localDhKeyPair, handshakeRemotePublicKeyBytes);
+      final derived = await kdfRK(initialRoot, dhOutput);
+      session.rootKey = derived.key;
+      session.sendingChainKey = derived.value;
+      session.ns = 1;
+    } else {
+      // Bob is Device B: keeps handshake local key pair as the active DH key pair
+      session.localDhKeyPair = handshakeLocalKeyPair;
+      session.receivingChainKey = null; // Derived on Bob's first incoming message
+      session.ns = 1;
+    }
+    session.nr = 0;
+    session.pn = 0;
+  }
+
+  /// Derives initial 32-byte root key from the handshake ECDH shared secret using HKDF-SHA256
+  Future<SecretKey> deriveInitialRootKey(SecretKey handshakeSharedSecret) async {
+    final hkdf = Hkdf(
+      hmac: Hmac.sha256(),
+      outputLength: 32,
+    );
+    return hkdf.deriveKey(
+      secretKey: handshakeSharedSecret,
+      nonce: const [],
+      info: utf8.encode('VANTRA_DR_INITIAL_ROOT'),
+    );
+  }
+
+  /// KDF-RK step: derives a new root key and chain key from root key and DH output
+  Future<MapEntry<SecretKey, SecretKey>> kdfRK(SecretKey rootKey, SecretKey dhOutput) async {
+    final dhData = await dhOutput.extract();
+    final dhFp = await computeFingerprint(dhData.bytes);
+    final rootData = await rootKey.extract();
+    final rootFp = await computeFingerprint(rootData.bytes);
+
+    final hkdf = Hkdf(
+      hmac: Hmac.sha256(),
+      outputLength: 64, // 32 bytes next root key + 32 bytes chain key
+    );
+    final derived = await hkdf.deriveKey(
+      secretKey: rootKey,
+      nonce: dhData.bytes,
+      info: utf8.encode('VANTRA_DR_ROOT_RATCHET'),
+    );
+    final derivedData = await derived.extract();
+
+    final nextRootKeyBytes = derivedData.bytes.sublist(0, 32);
+    final chainKeyBytes = derivedData.bytes.sublist(32, 64);
+
+    final nextRootFp = await computeFingerprint(nextRootKeyBytes);
+    final chainKeyFp = await computeFingerprint(chainKeyBytes);
+    print('[VANTRA][DR_DIAG] kdfRK: inputRootFp=$rootFp, inputDhFp=$dhFp, nextRootFp=$nextRootFp, chainKeyFp=$chainKeyFp');
+
+    return MapEntry(
+      SecretKey(nextRootKeyBytes),
+      SecretKey(chainKeyBytes),
+    );
+  }
+
+  /// KDF-CK step: derives a new chain key and message key from a chain key using HMAC-SHA256
+  Future<MapEntry<SecretKey, SecretKey>> kdfCK(SecretKey chainKey) async {
+    final hmac = Hmac.sha256();
+    
+    // Derive message key: HMAC(chainKey, [0x01])
+    final msgMac = await hmac.calculateMac(
+      const [0x01],
+      secretKey: chainKey,
+    );
+    
+    // Derive next chain key: HMAC(chainKey, [0x02])
+    final nextChainMac = await hmac.calculateMac(
+      const [0x02],
+      secretKey: chainKey,
+    );
+    
+    return MapEntry(
+      SecretKey(nextChainMac.bytes),
+      SecretKey(msgMac.bytes),
+    );
+  }
+
+  /// Computes ECDH shared secret key from a local X25519 keypair and remote X25519 public key bytes
+  Future<SecretKey> computeDH(SimpleKeyPair localKeyPair, List<int> remotePublicKeyBytes) async {
+    final remotePublicKey = SimplePublicKey(
+      remotePublicKeyBytes,
+      type: KeyPairType.x25519,
+    );
+    return _x25519.sharedSecretKey(
+      keyPair: localKeyPair,
+      remotePublicKey: remotePublicKey,
+    );
+  }
+
+  /// Encrypts a message payload using the Double Ratchet state inside a SecuritySession
+  Future<EncryptedPayloadResult> encryptWithDoubleRatchet({
+    required SecuritySession session,
+    required String messageId,
+    required Uint8List plaintextBytes,
+  }) async {
+    if (session.sendingChainKey == null) {
+      final sendKeyBytes = await session.sendKey.extractBytes();
+      if (sendKeyBytes.isNotEmpty) {
+        final encrypted = await encryptBytes(
+          secretKey: session.sendKey,
+          sessionSalt: session.sessionSalt,
+          sequence: session.ns,
+          messageId: messageId,
+          plaintextBytes: plaintextBytes,
+        );
+        session.ns++;
+        return encrypted;
+      }
+      throw Exception("No sending chain key derived. Cannot encrypt.");
+    }
+
+    // 1. Ratchet sending chain key to get message key
+    final derived = await kdfCK(session.sendingChainKey!);
+    session.sendingChainKey = derived.key;
+    final messageKey = derived.value;
+    session.sentMessageKeys[messageId] = messageKey;
+
+    final ckData = await session.sendingChainKey!.extract();
+    final ckFp = await computeFingerprint(ckData.bytes);
+    final msgKeyData = await messageKey.extract();
+    final msgKeyFp = await computeFingerprint(msgKeyData.bytes);
+    print('[VANTRA][DR_DIAG] encryptWithDoubleRatchet: nextCkFp=$ckFp, derivedMsgKeyFp=$msgKeyFp, sequence=${session.ns}');
+
+    // 2. Encrypt bytes using the derived messageKey
+    final sequenceNumber = session.ns;
+    session.ns++;
+
+    final encrypted = await encryptBytes(
+      secretKey: messageKey,
+      sessionSalt: session.sessionSalt,
+      sequence: sequenceNumber,
+      messageId: messageId,
+      plaintextBytes: plaintextBytes,
+    );
+
+    return encrypted;
+  }
+
+  /// Decrypts a message payload using the Double Ratchet state inside a SecuritySession.
+  /// Handles out-of-order skipped message keys caching, DH ratchet rotations, and limits.
+  Future<Uint8List> decryptWithDoubleRatchet({
+    required SecuritySession session,
+    required Uint8List? incomingDhPublicKeyBytes,
+    required int incomingSequence,
+    required int incomingPreviousChainLength,
+    required Uint8List nonce,
+    required Uint8List ciphertext,
+    required Uint8List mac,
+    required String messageId,
+  }) async {
+    // 0. Fallback to legacy symmetric decryption if no DH key is provided
+    final recvKeyBytes = await session.receiveKey.extractBytes();
+    if ((incomingDhPublicKeyBytes == null ||
+         incomingDhPublicKeyBytes.isEmpty) &&
+        recvKeyBytes.isNotEmpty) {
+      return decryptBytes(
+        secretKey: session.receiveKey,
+        nonce: nonce,
+        ciphertext: ciphertext,
+        mac: mac,
+        messageId: messageId,
+      );
+    }
+
+    // 1. Check if the key is in the skippedMessageKeys cache
+    final remotePubHex = incomingDhPublicKeyBytes != null
+        ? incomingDhPublicKeyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+        : session.getRemotePublicKeyHex();
+    final cacheKey = "$remotePubHex:$incomingSequence";
+
+    if (session.skippedMessageKeys.containsKey(cacheKey)) {
+      final msgKey = session.skippedMessageKeys[cacheKey]!;
+      session.skippedMessageKeys.remove(cacheKey);
+      session.skippedMessageKeysTimestamps.remove(cacheKey);
+
+      return decryptBytes(
+        secretKey: msgKey,
+        nonce: nonce,
+        ciphertext: ciphertext,
+        mac: mac,
+        messageId: messageId,
+      );
+    }
+
+    // 2. Perform DH Ratchet step if incoming DH key differs
+    if (incomingDhPublicKeyBytes != null &&
+        incomingDhPublicKeyBytes.isNotEmpty &&
+        (session.remoteDhPublicKey == null ||
+         !_compareLists(session.remoteDhPublicKey!.bytes, incomingDhPublicKeyBytes))) {
+      
+      // A new DH public key is received. First ratchet skipped keys on the old receiving chain.
+      await _skipMessageKeys(session, incomingPreviousChainLength);
+
+      // Perform DH Ratchet
+      session.pn = session.ns;
+      session.ns = 1;
+      session.nr = 0;
+      session.remoteDhPublicKey = SimplePublicKey(incomingDhPublicKeyBytes, type: KeyPairType.x25519);
+
+      // Derive new receiving chain key: rootKey, receivingChainKey = KDF_RK(rootKey, DH(localDhKeyPair, remoteDhPublicKey))
+      final dhOutputRecv = await computeDH(session.localDhKeyPair!, incomingDhPublicKeyBytes);
+      final recvDhData = await dhOutputRecv.extract();
+      final recvDhFp = await computeFingerprint(recvDhData.bytes);
+      print('[VANTRA][DR_DIAG] Bob decrypt DH: recvDhFp=$recvDhFp');
+
+      final derivedRecv = await kdfRK(session.rootKey!, dhOutputRecv);
+      session.rootKey = derivedRecv.key;
+      session.receivingChainKey = derivedRecv.value;
+
+      // Generate a NEW local DH keypair
+      final newLocalDhKeyPair = await generateEphemeralKeyPair();
+      session.localDhKeyPair = newLocalDhKeyPair;
+
+      // Derive new sending chain key: rootKey, sendingChainKey = KDF_RK(rootKey, DH(localDhKeyPair, remoteDhPublicKey))
+      final dhOutputSend = await computeDH(newLocalDhKeyPair, incomingDhPublicKeyBytes);
+      final derivedSend = await kdfRK(session.rootKey!, dhOutputSend);
+      session.rootKey = derivedSend.key;
+      session.sendingChainKey = derivedSend.value;
+    }
+
+    // 3. Ratchet skipped message keys on the current receiving chain up to the incoming sequence number
+    await _skipMessageKeys(session, incomingSequence);
+
+    // 4. Derive message key from the current receiving chain
+    if (session.receivingChainKey == null) {
+      throw Exception("No receiving chain key derived. Cannot decrypt.");
+    }
+    final derived = await kdfCK(session.receivingChainKey!);
+    session.receivingChainKey = derived.key;
+    final messageKey = derived.value;
+
+    final ckData = await session.receivingChainKey!.extract();
+    final ckFp = await computeFingerprint(ckData.bytes);
+    final msgKeyData = await messageKey.extract();
+    final msgKeyFp = await computeFingerprint(msgKeyData.bytes);
+    print('[VANTRA][DR_DIAG] decryptWithDoubleRatchet: nextCkFp=$ckFp, derivedMsgKeyFp=$msgKeyFp, sequence=$incomingSequence');
+
+    session.nr++;
+
+    // 5. Decrypt message using message key
+    return decryptBytes(
+      secretKey: messageKey,
+      nonce: nonce,
+      ciphertext: ciphertext,
+      mac: mac,
+      messageId: messageId,
+    );
+  }
+
+  /// Helper to store skipped message keys in the cache up to a certain sequence number
+  Future<void> _skipMessageKeys(SecuritySession session, int untilSequence) async {
+    if (session.receivingChainKey == null) return;
+
+    // Resource exhaustion guard: limit maximum skipped keys to 100
+    if (untilSequence - (session.nr + 1) > 100) {
+      throw Exception("Too many skipped messages: target=$untilSequence, current=${session.nr}");
+    }
+
+    while (session.nr + 1 < untilSequence) {
+      final derived = await kdfCK(session.receivingChainKey!);
+      session.receivingChainKey = derived.key;
+      final msgKey = derived.value;
+
+      final remotePubHex = session.getRemotePublicKeyHex();
+      final cacheKey = "$remotePubHex:${session.nr + 1}";
+      session.addSkippedKey(cacheKey, msgKey);
+
+      session.nr++;
+    }
+  }
+
+  bool _compareLists(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   int _compareBytes(List<int> a, List<int> b) {

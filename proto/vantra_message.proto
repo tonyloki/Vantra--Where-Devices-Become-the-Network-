@@ -41,6 +41,8 @@ message EncryptedEnvelope {
   bytes nonce = 4;      // 12 bytes
   bytes ciphertext = 5; // Encrypted bytes of VantraPlaintext
   bytes mac = 6;        // 16 bytes Poly1305 tag
+  bytes dh_public_key = 7;
+  uint32 previous_chain_length = 8;
 }
 
 // 3. Plaintext Payload (Encrypted inside EncryptedEnvelope.ciphertext)

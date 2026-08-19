@@ -4,7 +4,6 @@ import 'package:vantra/core/messaging/messaging_provider.dart';
 import 'package:vantra/core/models/conversation_summary.dart';
 import 'package:vantra/core/models/peer_profile.dart';
 import 'package:vantra/core/models/peer_session.dart';
-import 'package:vantra/core/models/peer_trust_state.dart';
 import 'package:vantra/core/networking/transport_provider.dart';
 import 'peer_discovery_service.dart';
 
@@ -40,6 +39,7 @@ final allPeersStreamProvider = StreamProvider<List<PeerProfile>>((ref) {
         lastKnownEndpointId: p.lastKnownEndpointId,
         publicKey: p.publicKey,
         fingerprint: p.fingerprint,
+        verifiedPublicKey: p.verifiedPublicKey,
         trustState: p.trustState,
         protocolVersion: p.protocolVersion,
         lastSeen: p.lastSeen,
@@ -67,6 +67,7 @@ final trustedPeersStreamProvider = StreamProvider<List<PeerProfile>>((ref) {
         lastKnownEndpointId: p.lastKnownEndpointId,
         publicKey: p.publicKey,
         fingerprint: p.fingerprint,
+        verifiedPublicKey: p.verifiedPublicKey,
         trustState: p.trustState,
         protocolVersion: p.protocolVersion,
         lastSeen: p.lastSeen,
@@ -94,6 +95,7 @@ final blockedPeersStreamProvider = StreamProvider<List<PeerProfile>>((ref) {
         lastKnownEndpointId: p.lastKnownEndpointId,
         publicKey: p.publicKey,
         fingerprint: p.fingerprint,
+        verifiedPublicKey: p.verifiedPublicKey,
         trustState: p.trustState,
         protocolVersion: p.protocolVersion,
         lastSeen: p.lastSeen,
@@ -121,6 +123,7 @@ final peerProfileStreamProvider = StreamProvider.family<PeerProfile?, String>((r
       lastKnownEndpointId: p.lastKnownEndpointId,
       publicKey: p.publicKey,
       fingerprint: p.fingerprint,
+      verifiedPublicKey: p.verifiedPublicKey,
       trustState: p.trustState,
       protocolVersion: p.protocolVersion,
       lastSeen: p.lastSeen,

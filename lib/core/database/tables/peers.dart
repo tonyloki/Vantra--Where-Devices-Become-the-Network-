@@ -25,6 +25,7 @@ class Peers extends Table {
   TextColumn get lastKnownEndpointId => text().nullable()();
   TextColumn get publicKey => text().nullable()();
   TextColumn get fingerprint => text().nullable()();
+  TextColumn get verifiedPublicKey => text().nullable()();
   TextColumn get trustState => text()
       .map(const PeerTrustStateConverter())
       .withDefault(const Constant('untrusted'))();

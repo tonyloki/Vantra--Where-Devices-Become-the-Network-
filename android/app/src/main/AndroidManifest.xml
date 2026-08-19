@@ -22,6 +22,9 @@
     <!-- Nearby WiFi devices — required on API 32+ -->
     <uses-permission android:minSdkVersion="32" android:name="android.permission.NEARBY_WIFI_DEVICES" />
 
+    <!-- Camera — required for QR code scanning (Phase 20) -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <application
         android:label="vantra"
         android:name="${applicationName}"

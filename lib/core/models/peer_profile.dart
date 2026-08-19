@@ -16,6 +16,8 @@ class PeerProfile {
   final SessionStatus sessionStatus;
   final bool isSecure;
 
+  final String? verifiedPublicKey;
+
   const PeerProfile({
     required this.peerId,
     required this.displayName,
@@ -23,6 +25,7 @@ class PeerProfile {
     this.lastKnownEndpointId,
     this.publicKey,
     this.fingerprint,
+    this.verifiedPublicKey,
     this.trustState = PeerTrustState.untrusted,
     this.protocolVersion,
     required this.lastSeen,
@@ -42,7 +45,8 @@ class PeerProfile {
 
   bool get isOnline => sessionStatus == SessionStatus.connected;
   bool get isBlocked => trustState == PeerTrustState.distrusted;
-  bool get isTrusted => trustState == PeerTrustState.trusted;
+  bool get isTrusted => trustState == PeerTrustState.trusted || trustState == PeerTrustState.verified;
+  bool get isVerified => trustState == PeerTrustState.verified;
 
   PeerProfile copyWith({
     String? peerId,
@@ -51,6 +55,7 @@ class PeerProfile {
     String? lastKnownEndpointId,
     String? publicKey,
     String? fingerprint,
+    String? verifiedPublicKey,
     PeerTrustState? trustState,
     int? protocolVersion,
     int? lastSeen,
@@ -66,6 +71,7 @@ class PeerProfile {
       lastKnownEndpointId: lastKnownEndpointId ?? this.lastKnownEndpointId,
       publicKey: publicKey ?? this.publicKey,
       fingerprint: fingerprint ?? this.fingerprint,
+      verifiedPublicKey: verifiedPublicKey ?? this.verifiedPublicKey,
       trustState: trustState ?? this.trustState,
       protocolVersion: protocolVersion ?? this.protocolVersion,
       lastSeen: lastSeen ?? this.lastSeen,

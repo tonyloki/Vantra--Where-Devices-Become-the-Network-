@@ -902,7 +902,7 @@ void main() {
             final decoded = codec.decodeWireEnvelope(wire);
             if (decoded is DomainEncryptedEnvelope) {
               final decryptedOfferBytes = await cryptoService.decryptBytes(
-                secretKey: secSession.sendKey,
+                secretKey: secSession.getSendKeyForMessage(decoded.messageId),
                 nonce: decoded.nonce,
                 ciphertext: decoded.ciphertext,
                 mac: decoded.mac,
@@ -1159,7 +1159,7 @@ void main() {
             final decoded = codec.decodeWireEnvelope(wire);
             if (decoded is DomainEncryptedEnvelope) {
               final decryptedBytes = await cryptoService.decryptBytes(
-                secretKey: secSession.sendKey,
+                secretKey: secSession.getSendKeyForMessage(decoded.messageId),
                 nonce: decoded.nonce,
                 ciphertext: decoded.ciphertext,
                 mac: decoded.mac,
@@ -1315,7 +1315,7 @@ void main() {
             final decoded = codec.decodeWireEnvelope(wire);
             if (decoded is DomainEncryptedEnvelope) {
               final decryptedBytes = await cryptoService.decryptBytes(
-                secretKey: secSession.sendKey,
+                secretKey: secSession.getSendKeyForMessage(decoded.messageId),
                 nonce: decoded.nonce,
                 ciphertext: decoded.ciphertext,
                 mac: decoded.mac,
@@ -2937,7 +2937,7 @@ void main() {
       final offerWire = fakeTransport.sentPayloads[0];
       final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
       final decryptedOffer = await cryptoService.decryptBytes(
-        secretKey: secSession.sendKey,
+        secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId),
         nonce: offerEnvelope.nonce,
         ciphertext: offerEnvelope.ciphertext,
         mac: offerEnvelope.mac,
@@ -3076,7 +3076,7 @@ void main() {
       for (final wire in fakeTransport.sentPayloads) {
         try {
           final decoded = codec.decodeWireEnvelope(wire) as DomainEncryptedEnvelope;
-          final decrypted = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: decoded.nonce, ciphertext: decoded.ciphertext, mac: decoded.mac, messageId: decoded.messageId);
+          final decrypted = await cryptoService.decryptBytes(secretKey: secSession.getSendKeyForMessage(decoded.messageId), nonce: decoded.nonce, ciphertext: decoded.ciphertext, mac: decoded.mac, messageId: decoded.messageId);
           final plaintext = codec.decodePlaintext(decrypted);
           if (plaintext is DomainMediaControl && plaintext.type == DomainMediaControlType.offer) {
             offerCount++;
@@ -3169,7 +3169,7 @@ void main() {
 
       final offerWire = fakeTransport.sentPayloads[0];
       final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
-      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId), nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
       final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
 
       // ACCEPT
@@ -3269,7 +3269,7 @@ void main() {
 
       final offerWire = fakeTransport.sentPayloads[0];
       final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
-      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId), nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
       final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
 
       // ACCEPT
@@ -3394,7 +3394,7 @@ void main() {
 
       final offerWire = fakeTransport.sentPayloads[0];
       final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
-      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId), nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
       final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
 
       // ACCEPT
@@ -3521,7 +3521,7 @@ void main() {
 
       final offerWire = fakeTransport.sentPayloads[0];
       final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
-      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId), nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
       final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
 
       // ACCEPT
@@ -3641,7 +3641,7 @@ void main() {
 
       final offerWire = fakeTransport.sentPayloads[0];
       final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
-      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId), nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
       final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
 
       // ACCEPT
@@ -3802,7 +3802,7 @@ void main() {
 
         final offerWire = fakeTransport.sentPayloads[0];
         final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
-        final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+        final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId), nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
         final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
 
         // ACCEPT
@@ -3923,7 +3923,7 @@ void main() {
 
       final offerWire = fakeTransport.sentPayloads[0];
       final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
-      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.sendKey, nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
+      final decryptedOffer = await cryptoService.decryptBytes(secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId), nonce: offerEnvelope.nonce, ciphertext: offerEnvelope.ciphertext, mac: offerEnvelope.mac, messageId: offerEnvelope.messageId);
       final offerPlaintext = codec.decodePlaintext(decryptedOffer) as DomainMediaControl;
 
       // Reject it
@@ -4023,7 +4023,7 @@ void main() {
       final offerWire = fakeTransport.sentPayloads[0];
       final offerEnvelope = codec.decodeWireEnvelope(offerWire) as DomainEncryptedEnvelope;
       final decryptedOffer = await cryptoService.decryptBytes(
-        secretKey: secSession.sendKey,
+        secretKey: secSession.getSendKeyForMessage(offerEnvelope.messageId),
         nonce: offerEnvelope.nonce,
         ciphertext: offerEnvelope.ciphertext,
         mac: offerEnvelope.mac,
