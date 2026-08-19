@@ -2074,10 +2074,15 @@ void main() {
         mac: Uint8List.fromList(enc3.mac),
       )));
 
-      await Future.delayed(const Duration(milliseconds: 100));
+      dynamic finalMsg;
+      for (int i = 0; i < 20; i++) {
+        finalMsg = await repo.getMessageById('offer-30');
+        if (finalMsg?.status == MessageStatus.received) {
+          break;
+        }
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
 
-      // 4. Verify message in DB is received and media file exists
-      final finalMsg = await repo.getMessageById('offer-30');
       expect(finalMsg, isNotNull);
       expect(finalMsg?.status, MessageStatus.received);
       expect(finalMsg?.mediaPath, isNotNull);

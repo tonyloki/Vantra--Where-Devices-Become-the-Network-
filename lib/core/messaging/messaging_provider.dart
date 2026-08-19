@@ -29,6 +29,7 @@ import 'package:vantra/core/peers/peer_discovery_service.dart';
 import 'message.dart';
 import 'messaging_repository.dart';
 import 'messaging_service.dart';
+import 'transfer_speed_tracker.dart';
 
 class ConnectionRequestInfo {
   final String endpointId;
@@ -156,6 +157,44 @@ final conversationStreamProvider = StreamProvider.family<List<VantraMessage>, St
   return repository.watchConversation(localIdentity.peerId, remotePeerId);
 });
 
+class TransferProgressState {
+  final double progress;
+  final String speed;
+  final String eta;
+
+  const TransferProgressState({
+    this.progress = 0.0,
+    this.speed = '',
+    this.eta = '',
+  });
+}
+
+class TransferProgressMapNotifier extends Notifier<Map<String, TransferProgressState>> {
+  @override
+  Map<String, TransferProgressState> build() {
+    return const {};
+  }
+
+  void updateProgress(String transferId, TransferProgressState progressState) {
+    state = {
+      ...state,
+      transferId: progressState,
+    };
+  }
+
+  void removeProgress(String transferId) {
+    if (state.containsKey(transferId)) {
+      final copy = Map<String, TransferProgressState>.from(state);
+      copy.remove(transferId);
+      state = copy;
+    }
+  }
+}
+
+final transferProgressMapProvider = NotifierProvider<TransferProgressMapNotifier, Map<String, TransferProgressState>>(() {
+  return TransferProgressMapNotifier();
+});
+
 final messagingStateProvider = NotifierProvider<MessagingNotifier, MessagingState>(() {
   return MessagingNotifier();
 });
@@ -192,6 +231,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Set<String> _inflightSends = {};
   final Map<String, PendingIncomingOffer> _pendingIncomingOffers = {};
   
+  // Phase 19 Transfer UX structures
+  final Set<String> _cancelledTransfers = {};
+  final Map<String, TransferSpeedTracker> _speedTrackers = {};
+  
   // Phase 18 Large Media Streaming structures
   final Map<String, RandomAccessFile> _activeReceiveFiles = {};
   final Map<String, Set<int>> _receivedChunkIndices = {};
@@ -199,6 +242,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Map<String, int> _receiveChunkSizes = {};
 
   double getTransferProgress(String transferId) => _transferProgress[transferId] ?? 0.0;
+  String getTransferSpeed(String transferId) => _speedTrackers[transferId]?.speedLabel ?? '';
+  String getTransferEta(String transferId) => _speedTrackers[transferId]?.etaLabel ?? '';
 
   Future<void> _cleanupReceiveTransfer(String transferId, {bool deleteTempFile = false, String? tempFilePath}) async {
     final raf = _activeReceiveFiles.remove(transferId);
@@ -211,6 +256,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final timer = _receiveTimeoutTimers.remove(transferId);
     timer?.cancel();
     _receiveChunkSizes.remove(transferId);
+    _speedTrackers.remove(transferId);
+    _cancelledTransfers.remove(transferId);
+    ref.read(transferProgressMapProvider.notifier).removeProgress(transferId);
 
     if (deleteTempFile && tempFilePath != null) {
       try {
@@ -225,6 +273,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   Future<void> _cleanupTempDir(String transferId, bool isImage) async {
     try {
+      _speedTrackers.remove(transferId);
+      _cancelledTransfers.remove(transferId);
+      _transferProgress.remove(transferId);
+      ref.read(transferProgressMapProvider.notifier).removeProgress(transferId);
+
       final appDir = await getApplicationDocumentsDirectory();
       final dirPrefix = isImage ? 'media' : 'files';
       final tempFilePath = path.join(appDir.path, dirPrefix, 'temp', '$transferId.tmp');
@@ -674,16 +727,36 @@ class MessagingNotifier extends Notifier<MessagingState> {
       } else if (plaintext is DomainMediaControl) {
         if (plaintext.type == DomainMediaControlType.offer) {
           await _handleIncomingOffer(peerId, event.endpointId, session, plaintext);
-        } else if (plaintext.type == DomainMediaControlType.accept || plaintext.type == DomainMediaControlType.reject) {
+        } else if (plaintext.type == DomainMediaControlType.accept ||
+            plaintext.type == DomainMediaControlType.reject ||
+            plaintext.type == DomainMediaControlType.cancel) {
           final completer = _mediaCompleters[plaintext.transferId];
           if (completer != null && !completer.isCompleted) {
             completer.complete(plaintext);
+          }
+          if (plaintext.type == DomainMediaControlType.cancel) {
+            VantraLogger.log('[VANTRA][MESSAGING] Received CANCEL control message for transferId=${plaintext.transferId}');
+            final msg = await repository.getMessageByTransferId(plaintext.transferId);
+            if (msg != null) {
+              final isImage = msg.type == 'IMAGE';
+              await _cleanupTempDir(plaintext.transferId, isImage);
+              await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+            }
+            _cancelledTransfers.add(plaintext.transferId);
+            _speedTrackers.remove(plaintext.transferId);
+            _transferProgress.remove(plaintext.transferId);
+            ref.read(transferProgressMapProvider.notifier).removeProgress(plaintext.transferId);
           }
         }
       } else if (plaintext is DomainMediaChunk) {
         final msg = await repository.getMessageByTransferId(plaintext.transferId);
         if (msg == null) {
           VantraLogger.log('[VANTRA][MESSAGING] Error: Message metadata missing for transferId=${plaintext.transferId}');
+          return;
+        }
+
+        if (msg.status == MessageStatus.failed) {
+          VantraLogger.log('[VANTRA][MESSAGING] Discarding chunk for cancelled/failed transferId=${plaintext.transferId}');
           return;
         }
 
@@ -780,6 +853,26 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
         // 4. Update progress metrics
         _transferProgress[plaintext.transferId] = receivedIndices.length / totalChunks;
+        final tracker = _speedTrackers.putIfAbsent(plaintext.transferId, () => TransferSpeedTracker(totalBytes: advertisedSize));
+        int receivedBytes = 0;
+        for (final idx in receivedIndices) {
+          if (idx == totalChunks - 1) {
+            receivedBytes += advertisedSize - (totalChunks - 1) * chunkSize;
+          } else {
+            receivedBytes += chunkSize;
+          }
+        }
+        tracker.record(receivedBytes);
+
+        ref.read(transferProgressMapProvider.notifier).updateProgress(
+          plaintext.transferId,
+          TransferProgressState(
+            progress: receivedIndices.length / totalChunks,
+            speed: tracker.speedLabel,
+            eta: tracker.etaLabel,
+          ),
+        );
+
         state = state.copyWith();
 
         // 5. Completion Check
@@ -2098,12 +2191,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
         _mediaCompleters.remove(msg.transferId);
       }
 
-      if (response.type == DomainMediaControlType.reject) {
-        VantraLogger.log('[VANTRA][MESSAGING] Receiver rejected transferId=${msg.transferId}');
+      if (response.type == DomainMediaControlType.reject || response.type == DomainMediaControlType.cancel) {
+        final isCancel = response.type == DomainMediaControlType.cancel;
+        VantraLogger.log('[VANTRA][MESSAGING] Transfer failed or cancelled: transferId=${msg.transferId}');
         print('[VANTRA][MEDIA][CHUNK_PIPELINE_STOPPED]\n'
               'messageId=${msg.messageId}\n'
               'transferId=${msg.transferId}\n'
-              'reason=Receiver rejected transfer');
+              'reason=${isCancel ? 'Cancelled by receiver' : 'Receiver rejected transfer'}');
         await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
         _inflightSends.remove(msg.messageId);
         return false;
@@ -2115,6 +2209,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
       final accessFile = await file.open(mode: FileMode.read);
       try {
         for (var i = startIndex; i < totalChunks; i++) {
+          if (_cancelledTransfers.contains(msg.transferId)) {
+            VantraLogger.log('[VANTRA][MESSAGING] Chunk streaming aborted for transferId=${msg.transferId} because it was cancelled');
+            print('[VANTRA][MEDIA][CHUNK_PIPELINE_STOPPED]\n'
+                  'messageId=${msg.messageId}\n'
+                  'transferId=${msg.transferId}\n'
+                  'reason=Cancelled by user');
+            await repository.updateMessageStatus(msg.messageId, MessageStatus.failed);
+            _inflightSends.remove(msg.messageId);
+            return false;
+          }
+
           final activeSession = state.sessions[msg.receiverId];
           if (activeSession == null || activeSession.status != SessionStatus.connected) {
             throw Exception('Disconnected during chunk stream');
@@ -2170,6 +2275,19 @@ class MessagingNotifier extends Notifier<MessagingState> {
                 'chunkIndex=$i');
 
           _transferProgress[msg.transferId!] = (i + 1) / totalChunks;
+          final tracker = _speedTrackers.putIfAbsent(msg.transferId!, () => TransferSpeedTracker(totalBytes: msg.fileSize ?? 0));
+          final bytesSentTotal = (i * chunkSize) + chunkData.length;
+          tracker.record(bytesSentTotal);
+
+          ref.read(transferProgressMapProvider.notifier).updateProgress(
+            msg.transferId!,
+            TransferProgressState(
+              progress: (i + 1) / totalChunks,
+              speed: tracker.speedLabel,
+              eta: tracker.etaLabel,
+            ),
+          );
+
           state = state.copyWith();
           await Future.delayed(const Duration(milliseconds: 5));
         }
@@ -2391,6 +2509,89 @@ class MessagingNotifier extends Notifier<MessagingState> {
     ));
 
     await _flushQueue(peerId, 'retryMessage');
+  }
+
+  Future<void> cancelTransfer(String messageId, String peerId) async {
+    VantraLogger.log('[VANTRA][MESSAGING] cancelTransfer: messageId=$messageId, peerId=$peerId');
+    final repository = ref.read(messagingRepositoryProvider);
+    final msg = await repository.getMessageById(messageId);
+    if (msg == null) return;
+
+    final transferId = msg.transferId;
+    if (transferId == null) return;
+
+    _cancelledTransfers.add(transferId);
+    _speedTrackers.remove(transferId);
+    _transferProgress.remove(transferId);
+
+    // Clean up our local state/files if we were receiving
+    final isImage = msg.type == 'IMAGE';
+    await _cleanupTempDir(transferId, isImage);
+
+    // Update state provider to clear progress
+    ref.read(transferProgressMapProvider.notifier).removeProgress(transferId);
+
+    // Update database status
+    await repository.updateMessageStatus(messageId, MessageStatus.failed);
+
+    // Send cancel message if active transport exists
+    final activeSession = state.sessions[peerId];
+    final secSession = _securitySessions[peerId];
+    if (activeSession != null && activeSession.status == SessionStatus.connected && secSession != null) {
+      await _sendMediaCancel(activeSession.endpointId, secSession, transferId);
+    }
+
+    // Also resolve any completer we might be waiting on
+    final completer = _mediaCompleters[transferId];
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(DomainMediaControl(
+        messageId: const Uuid().v4(),
+        sessionId: secSession?.sessionId ?? '',
+        sequence: 0,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        type: DomainMediaControlType.cancel,
+        transferId: transferId,
+      ));
+    }
+  }
+
+  Future<void> _sendMediaCancel(String endpointId, SecuritySession session, String transferId) async {
+    final msgId = const Uuid().v4();
+    final seq = session.nextSendSequence();
+
+    final localId = ref.read(localIdentityStateProvider);
+    final cancelDomainMsg = DomainMediaControl(
+      messageId: msgId,
+      sessionId: session.sessionId,
+      sequence: seq,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+      senderId: localId.peerId,
+      receiverId: session.peerId,
+      type: DomainMediaControlType.cancel,
+      transferId: transferId,
+    );
+
+    final bytes = _service.codec.encodePlaintext(cancelDomainMsg);
+    final encrypted = await _cryptoService.encryptBytes(
+      secretKey: session.sendKey,
+      sessionSalt: session.sessionSalt,
+      sequence: seq,
+      messageId: msgId,
+      plaintextBytes: bytes,
+    );
+
+    await _service.sendEncryptedMessage(
+      endpointId: endpointId,
+      messageId: msgId,
+      sessionId: session.sessionId,
+      sequence: seq,
+      nonce: Uint8List.fromList(encrypted.nonce),
+      ciphertext: Uint8List.fromList(encrypted.ciphertext),
+      mac: Uint8List.fromList(encrypted.mac),
+      protocolVersion: kCurrentProtocolVersion,
+    );
   }
 
   Future<void> setPeerTrustState(String peerId, PeerTrustState newState) async {

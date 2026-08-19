@@ -661,12 +661,18 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                               ),
                                             ),
                                     ),
-                                    if (msg.status == MessageStatus.sending ||
-                                        (msg.status == MessageStatus.pending &&
-                                            ref.watch(messagingStateProvider.notifier).getTransferProgress(msg.transferId ?? '') > 0)) ...[
+                                    if (msg.status == MessageStatus.sending || msg.status == MessageStatus.pending) ...[
                                       Consumer(
                                         builder: (context, ref, child) {
-                                          final progress = ref.watch(messagingStateProvider.notifier).getTransferProgress(msg.transferId ?? '');
+                                          final progressState = ref.watch(
+                                            transferProgressMapProvider.select(
+                                              (map) => map[msg.transferId ?? ''] ?? const TransferProgressState(),
+                                            ),
+                                          );
+                                          final progress = progressState.progress;
+                                          final speed = progressState.speed;
+                                          final eta = progressState.eta;
+
                                           return Container(
                                             width: 200,
                                             height: 150,
@@ -674,24 +680,94 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                               color: Colors.black54,
                                               borderRadius: BorderRadius.circular(12),
                                             ),
-                                            child: Center(
-                                              child: Column(
-                                                mainAxisAlignment: MainAxisAlignment.center,
-                                                children: [
-                                                  CircularProgressIndicator(
-                                                    value: progress,
-                                                    color: VantraTheme.primary,
+                                            child: Stack(
+                                              children: [
+                                                Center(
+                                                  child: Column(
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    children: [
+                                                      CircularProgressIndicator(
+                                                        value: progress,
+                                                        color: VantraTheme.primary,
+                                                        backgroundColor: Colors.white12,
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Text(
+                                                        '${(progress * 100).toInt()}%',
+                                                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                                      ),
+                                                      if (speed.isNotEmpty) ...[
+                                                        const SizedBox(height: 4),
+                                                        Text(
+                                                          speed,
+                                                          style: const TextStyle(color: Colors.white70, fontSize: 10),
+                                                        ),
+                                                      ],
+                                                      if (eta.isNotEmpty) ...[
+                                                        const SizedBox(height: 2),
+                                                        Text(
+                                                          eta,
+                                                          style: const TextStyle(color: Colors.white60, fontSize: 9),
+                                                        ),
+                                                      ],
+                                                    ],
                                                   ),
-                                                  const SizedBox(height: 8),
-                                                  Text(
-                                                    '${(progress * 100).toInt()}%',
-                                                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                                ),
+                                                Positioned(
+                                                  top: 4,
+                                                  right: 4,
+                                                  child: GestureDetector(
+                                                    onTap: () {
+                                                      ref.read(messagingStateProvider.notifier).cancelTransfer(msg.messageId, widget.peerId);
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        const SnackBar(content: Text('Cancelling transfer...')),
+                                                      );
+                                                    },
+                                                    child: Container(
+                                                      padding: const EdgeInsets.all(4),
+                                                      decoration: const BoxDecoration(
+                                                        color: Colors.black38,
+                                                        shape: BoxShape.circle,
+                                                      ),
+                                                      child: const Icon(
+                                                        Icons.close_rounded,
+                                                        color: Colors.white,
+                                                        size: 16,
+                                                      ),
+                                                    ),
                                                   ),
-                                                ],
-                                              ),
+                                                ),
+                                              ],
                                             ),
                                           );
                                         },
+                                      ),
+                                    ],
+                                    if (msg.status == MessageStatus.failed) ...[
+                                      Container(
+                                        width: 200,
+                                        height: 150,
+                                        decoration: BoxDecoration(
+                                          color: Colors.black.withOpacity(0.74),
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: Center(
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              const Icon(
+                                                Icons.refresh_rounded,
+                                                color: Colors.white,
+                                                size: 32,
+                                              ),
+                                              const SizedBox(height: 8),
+                                              const Text(
+                                                'Failed • Tap to retry',
+                                                style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
                                       ),
                                     ],
                                   ],
@@ -791,46 +867,100 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                           ),
                                         ],
                                       ),
-                                      if (msg.status == MessageStatus.sending ||
-                                          (msg.status == MessageStatus.pending &&
-                                              ref.watch(messagingStateProvider.notifier).getTransferProgress(msg.transferId ?? '') > 0)) ...[
-                                        const SizedBox(height: 8),
-                                        Consumer(
-                                          builder: (context, ref, child) {
-                                            final progress = ref.watch(messagingStateProvider.notifier).getTransferProgress(msg.transferId ?? '');
-                                            return Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                LinearProgressIndicator(
-                                                  value: progress,
-                                                  color: isMe ? Colors.white : VantraTheme.primary,
-                                                  backgroundColor: Colors.white12,
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Row(
-                                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                                  children: [
-                                                    Text(
-                                                      '${(progress * 100).toInt()}%',
-                                                      style: TextStyle(
-                                                        color: isMe ? Colors.white70 : VantraTheme.textSecondary,
-                                                        fontSize: 10,
-                                                      ),
-                                                    ),
-                                                    Text(
-                                                      msg.status == MessageStatus.sending ? 'Transferring...' : 'Pending...',
-                                                      style: TextStyle(
-                                                        color: isMe ? Colors.white70 : VantraTheme.textSecondary,
-                                                        fontSize: 10,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ],
-                                            );
-                                          },
-                                        ),
-                                      ],
+                                      if (msg.status == MessageStatus.sending || msg.status == MessageStatus.pending) ...[
+                                         const SizedBox(height: 8),
+                                         Consumer(
+                                           builder: (context, ref, child) {
+                                             final progressState = ref.watch(
+                                             transferProgressMapProvider.select(
+                                               (map) => map[msg.transferId ?? ''] ?? const TransferProgressState(),
+                                             ),
+                                           );
+                                             final progress = progressState.progress;
+                                             final speed = progressState.speed;
+                                             final eta = progressState.eta;
+
+                                             return Column(
+                                               crossAxisAlignment: CrossAxisAlignment.start,
+                                               children: [
+                                                 Row(
+                                                   children: [
+                                                     Expanded(
+                                                       child: LinearProgressIndicator(
+                                                         value: progress,
+                                                         color: isMe ? Colors.white : VantraTheme.primary,
+                                                         backgroundColor: Colors.white12,
+                                                       ),
+                                                     ),
+                                                     const SizedBox(width: 8),
+                                                     GestureDetector(
+                                                       onTap: () {
+                                                         ref.read(messagingStateProvider.notifier).cancelTransfer(msg.messageId, widget.peerId);
+                                                         ScaffoldMessenger.of(context).showSnackBar(
+                                                           const SnackBar(content: Text('Cancelling transfer...')),
+                                                         );
+                                                       },
+                                                       child: Container(
+                                                         padding: const EdgeInsets.all(2),
+                                                         decoration: BoxDecoration(
+                                                           color: Colors.white10,
+                                                           borderRadius: BorderRadius.circular(4),
+                                                         ),
+                                                         child: const Icon(
+                                                           Icons.close_rounded,
+                                                           color: Colors.white70,
+                                                           size: 14,
+                                                         ),
+                                                       ),
+                                                     ),
+                                                   ],
+                                                 ),
+                                                 const SizedBox(height: 4),
+                                                 Row(
+                                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                   children: [
+                                                     Text(
+                                                       '${(progress * 100).toInt()}%' + (speed.isNotEmpty ? ' • $speed' : ''),
+                                                       style: TextStyle(
+                                                         color: isMe ? Colors.white70 : VantraTheme.textSecondary,
+                                                         fontSize: 10,
+                                                       ),
+                                                     ),
+                                                     Text(
+                                                       eta.isNotEmpty ? eta : (msg.status == MessageStatus.sending ? 'Transferring...' : 'Pending...'),
+                                                       style: TextStyle(
+                                                         color: isMe ? Colors.white70 : VantraTheme.textSecondary,
+                                                         fontSize: 10,
+                                                       ),
+                                                     ),
+                                                   ],
+                                                 ),
+                                               ],
+                                             );
+                                           },
+                                         ),
+                                       ],
+                                       if (msg.status == MessageStatus.failed) ...[
+                                         const SizedBox(height: 8),
+                                         Row(
+                                           children: [
+                                             const Icon(
+                                               Icons.refresh_rounded,
+                                               color: VantraTheme.redBlocked,
+                                               size: 14,
+                                             ),
+                                             const SizedBox(width: 4),
+                                             Text(
+                                               'Failed • Tap to retry',
+                                               style: TextStyle(
+                                                 color: isMe ? Colors.white70 : VantraTheme.redBlocked,
+                                                 fontSize: 11,
+                                                 fontWeight: FontWeight.bold,
+                                               ),
+                                             ),
+                                           ],
+                                         ),
+                                       ],
                                     ],
                                   ),
                                 ),
