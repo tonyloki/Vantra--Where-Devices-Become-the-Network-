@@ -2,9 +2,11 @@
 
 > Where Devices Become the Network.
 
-![Vantra Logo](lib/Assets/Logo.png)
+<p align="center">
+  <img src="lib/Assets/Logo.png" alt="Vantra Logo" width="180" />
+</p>
 
-VANTRA is a decentralized, offline-first peer-to-peer (P2P) communication platform designed to allow nearby Android devices to discover each other, establish secure connections, and exchange messages and large media files without Internet or cellular networks.
+VANTRA is a decentralized, offline-first peer-to-peer (P2P) communication platform designed to allow nearby Android devices to discover each other, establish secure connections, and exchange messages, real-time voice calls, and large media files without Internet or cellular networks.
 
 ---
 
@@ -17,13 +19,54 @@ In a world dependent on centralized internet service providers and cellular towe
 
 ---
 
-## Solution
+## Technical Requirements
 
-VANTRA implements a robust multi-hop mesh network:
-- **Zero-Config Discovery:** Nearby devices automatically find each other and establish local connection topologies.
-- **End-to-End Cryptography:** Handshakes verify identity and establish session keys, ensuring confidentiality, integrity, and forward secrecy.
-- **Multi-Hop Mesh Routing:** Packets are automatically relayed via intermediate nodes, allowing end-to-end delivery between devices out of physical radio range.
-- **Direct-to-Disk Media Streaming:** Supports transferring large files (up to 500 MB) with a bounded memory footprint.
+### Supported Platforms
+*   **Android:** Android 8.0 (API Level 26) or higher.
+*   **Hardware Radios:** Wi-Fi (with Wi-Fi Direct support) and Bluetooth (supporting BLE).
+
+### Core Permissions
+To advertise, discover, establish connections, and support call/voice features offline, Vantra requests:
+*   `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` (Required for Bluetooth and Wi-Fi Direct discovery).
+*   `NEARBY_WIFI_DEVICES` (Android 13+).
+*   `BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT`, `BLUETOOTH_SCAN` (Android 12+).
+*   `RECORD_AUDIO` (For voice recording and audio calling).
+*   `READ_EXTERNAL_STORAGE` / `WRITE_EXTERNAL_STORAGE` (For direct-to-disk media streaming).
+
+---
+
+## Core System Features
+
+### 1. Direct P2P Connectivity & Autoreconnection
+*   Uses Google Nearby Connections (P2P_CLUSTER strategy) combining Bluetooth Low Energy (BLE) for high-speed discovery and Wi-Fi Direct for high-bandwidth data transfers.
+*   Background auto-advertising and auto-discovery, allowing trusted peers to auto-reconnect and re-establish secure channels when in radio range.
+
+### 2. Cryptographic Security & Ephemeral Exchange
+*   **Cryptographic Identity:** Every device generates a persistent Ed25519 identity keypair.
+*   **Double Ratchet Protocol:** Signal-style per-message forward secrecy and post-compromise security using root, sending, and receiving KDF chains.
+*   **Session Handshake:** Diffie-Hellman ephemeral exchange (X25519) combined with Ed25519 signatures to derive unique session keys and prevent Man-in-the-Middle (MITM) attacks.
+*   **AEAD Encryption:** Secure payload encryption using ChaCha20-Poly1305.
+
+### 3. Multi-Hop Mesh Routing (A ── B ── C)
+*   **Reactive Route Discovery:** Lightweight AODV-style path requests (RREQ) and route replies (RREP) to discover and route envelopes to non-adjacent peers.
+*   **Dynamic Failure Recovery:** Backwards Route Error (RERR) propagation when intermediate links break, triggering source-level path invalidation and rediscovery.
+*   **Reliable Relaying:** Deduplication filters to ignore already-forwarded packet IDs, hop-level retry queues, and multi-hop routing ACKs.
+
+### 4. Direct-to-Disk Large Media Streaming
+*   Handles large transfers (up to 500 MB) with a bounded memory footprint (constant memory usage <= 1 MB).
+*   Dynamic chunking (e.g., 64 KB or 128 KB blocks) and direct RandomAccessFile stream-writing to prevent RAM congestion.
+*   **SHA-256 Verification:** Verifies file hashes on completion before renaming temporary blocks, ensuring data integrity.
+*   **UX Indicators:** Displays ETA, average speeds using moving window averages, progress bars, and retry/cancel actions.
+
+### 5. Group Messaging Protocol
+*   **Schema-Safe Groups:** Local SQLite representation using Drift DAOs (`Groups` and `GroupMembers` tables) maintaining synchronized membership states.
+*   **Pairwise Fan-out:** Group messages are encrypted pairwise using each member's double-ratchet session and delivered over direct or mesh routes.
+*   **Interception Envelopes:** Group invite offers (`application/vantra-group-invite`) are dynamically intercepted and processed in the background.
+
+### 6. Voice Messages & Audio Calls
+*   **Voice Recorder Widget:** Visual audio amplitude waves, dynamic recording timers, and intuitive slide-to-cancel gestures.
+*   **Low-Latency Call Streaming:** Encrypted real-time audio frame chunks (`AudioFrame`) bypassed SQLite to prevent event loop bottlenecks.
+*   **State Machine:** Interactive overlays (`IncomingCallPage` and `ActiveCallPage`) coordinating mute, speaker, call timer, and hang-up control signaling.
 
 ---
 
@@ -42,7 +85,7 @@ VANTRA implements a robust multi-hop mesh network:
 
 ---
 
-## Architecture
+## System Architecture
 
 VANTRA features a highly decoupled, layered architecture to isolate presentation, application state, domain protocols, cryptographic security, and transport layers:
 
@@ -99,7 +142,10 @@ graph TD
 
 ---
 
-## Flowchart: Connection & Secure Session Handshake
+## Detailed Feature Workflows
+
+### 1. Connection & Secure Session Handshake
+This flowchart illustrates the discovery suffix resolution, role negotiation, ephemeral cryptographic exchange, and capabilities handshake:
 
 ```mermaid
 graph TD
@@ -110,7 +156,7 @@ graph TD
     Initiator --> ConnectSuccess{Connection Established?}
     Responder --> ConnectSuccess
     
-    ConnectSuccess -->|Yes| SecureHandshake[Exchange IDENTITY_SECURE<br/>Min/Max supported version & Ephemeral X25519]
+    ConnectSuccess -->|Yes| SecureHandshake[Exchange IdentitySecurePayload: Min/Max Version & Ephemeral X25519]
     ConnectSuccess -->|No| Disconnect([Disconnect])
     
     SecureHandshake --> SigVerify{Verify Ed25519 signature}
@@ -119,18 +165,34 @@ graph TD
     
     KeyDerivation --> VersionNegotiate{Negotiated Version?}
     VersionNegotiate -->|V2| CapExchange[Send Encrypted CapabilitiesExchange]
-    VersionNegotiate -->|V1| Connected[Status: Connected<br/>Capabilities default to text]
+    VersionNegotiate -->|V1| Connected[Status: Connected - Capabilities default to text]
     
     CapExchange --> CapMatch{Intersects capabilities?}
     CapMatch -->|Yes| Connected
     CapMatch -->|No| Disconnect
 ```
 
----
+### 2. Signal Double Ratchet Session Key Rotation
+Every roundtrip of communication updates the session keys using root, sending, and receiving key derivation chains:
 
-## Workflow: E2E Mesh Relaying & Large Media Streaming
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alice as Alice (Sender)
+    actor Bob as Bob (Receiver)
 
-### Mesh Message Relaying (A -> B -> C)
+    Note over Alice, Bob: Ephemeral X25519 DH Ratchet step
+    Alice->>Bob: Encrypted Message (DH ephemeral public key A1, Sequence=0)
+    Note over Bob: Decrypts with DH(A1, Bob private key)<br/>Advances root and receiving chain key
+    Note over Bob: Generates new ephemeral key B1
+    Bob->>Alice: Encrypted Response (DH ephemeral B1, Sequence=0)
+    Note over Alice: Decrypts with DH(B1, Alice private key A1)<br/>Advances root and receiving chain key
+    Note over Alice: Generates new ephemeral key A2
+```
+
+### 3. Multi-Hop Mesh Message Relaying (A ── B ── C)
+Alice sends a message to Charlie who is out of range, relaying the encrypted envelope through Bob:
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -147,7 +209,9 @@ sequenceDiagram
     Bob->>Alice: Routing ACK
 ```
 
-### Direct-to-Disk Media Streaming (V2)
+### 4. Direct-to-Disk Media Chunk Streaming
+Pipes data directly from/to the filesystem during sending and receiving, keeping memory consumption low:
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -169,6 +233,51 @@ sequenceDiagram
     Note over Bob: Close .tmp file & Verify SHA-256 hash
     Note over Bob: Hash Match -> Atomically rename to target folder
     Bob->>Alice: Delivery ACK (originalMessageId, status: delivered)
+```
+
+### 5. Audio Call Signaling & low-latency streaming
+Low-latency real-time voice call setup, active session UI synchronizations, and frame transmission:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller as Caller
+    actor Receiver as Receiver
+
+    Caller->>Receiver: Call Control: Type = Offer, SessionId
+    Note over Receiver: Triggers IncomingCallPage UI Overlay
+    Receiver->>Caller: Call Control: Type = Accept
+    Note over Caller: Triggers ActiveCallPage UI Overlay
+    Note over Receiver: Triggers ActiveCallPage UI Overlay
+    
+    loop Real-time low-latency audio stream
+        Caller->>Receiver: Call Control: Type = AudioFrame (Payload bytes)
+        Receiver->>Caller: Call Control: Type = AudioFrame (Payload bytes)
+    end
+    
+    Caller->>Receiver: Call Control: Type = HangUp
+    Note over Receiver: Ends session, closes UI overlay
+```
+
+### 6. Group Creation, Invitation & Message Fan-out
+Creates a decentralized group, invites members over direct or multi-hop routes, and distributes group messages:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Creator as Creator (A)
+    actor MemberB as Member B
+    actor MemberC as Member C
+
+    Creator->>Creator: Generate GroupId & save locally
+    Creator->>MemberB: MediaControl.OFFER (mimeType: application/vantra-group-invite, groupId, memberIds)
+    Note over MemberB: Intercepts Group Invite -> saves group locally
+    Creator->>MemberC: MediaControl.OFFER (mimeType: application/vantra-group-invite, groupId, memberIds)
+    Note over MemberC: Intercepts Group Invite -> saves group locally
+    
+    Note over Creator: Creator sends group message
+    Creator->>MemberB: Pairwise Encrypted Message (receiverId: groupId)
+    Creator->>MemberC: Pairwise Encrypted Message (receiverId: groupId)
 ```
 
 ---
@@ -200,3 +309,73 @@ sequenceDiagram
     *   **Phase 20:** Voice Messages (Dynamic record timers, play/pause state bubbles, level indicators)
     *   **Phase 21:** Audio Calls (Equalizer waveform overlays, Speaker/Mute/Hangup signaling controls, status machines)
     *   **Phase 22:** Group Messaging (Pairwise Double-Ratchet message distribution, synchronized group lists, invite interception)
+
+---
+
+## Database Schema Layout (Drift SQLite)
+
+```
+┌────────────────────────────────────────────────────────┐
+│                        messages                        │
+├────────────────────────────────────────────────────────┤
+│ localId (Int, PK, AutoInc)                             │
+│ messageId (Text, Unique)                               │
+│ senderId (Text)                                        │
+│ receiverId (Text)                                      │
+│ text (Text)                                            │
+│ timestamp (Int)                                        │
+│ type (Text)                                            │
+│ status (Text)                                          │
+│ isRead (Bool)                                          │
+│ mediaPath, mimeType, fileName, fileSize (Nullable)     │
+│ transferId, sha256, duration, groupId (Nullable)       │
+└────────────────────────────────────────────────────────┘
+                           │
+                           ▼ (groupId maps to Groups)
+┌────────────────────────────────────────────────────────┐
+│                         groups                         │
+├────────────────────────────────────────────────────────┤
+│ groupId (Text, PK)                                     │
+│ name (Text)                                            │
+│ creatorId (Text)                                       │
+│ createdAt (Int)                                        │
+└────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│                     group_members                      │
+├────────────────────────────────────────────────────────┤
+│ groupId (Text)                                         │
+│ peerId (Text)                                          │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Testing & Verification
+
+Vantra includes a highly comprehensive suite of over 190 tests covering all security, routing, calling, media streaming, and persistence layers.
+
+### Run the Full Test Suite
+To verify all components locally, execute:
+```bash
+flutter test
+```
+
+### Run Specific Test Modules
+*   **Mesh Multi-Hop Features:**
+    ```bash
+    flutter test test/mesh_features_test.dart
+    ```
+*   **Audio Call Signaling:**
+    ```bash
+    flutter test test/call_signaling_test.dart
+    ```
+*   **Group messaging:**
+    ```bash
+    flutter test test/group_messaging_test.dart
+    ```
+*   **Media Streaming:**
+    ```bash
+    flutter test test/media_streaming_test.dart
+    ```
