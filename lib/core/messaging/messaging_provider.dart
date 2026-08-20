@@ -323,6 +323,62 @@ class MessagingNotifier extends Notifier<MessagingState> {
     return true;
   }
 
+  int _traceCounter = 0;
+  final Map<String, int> _ephemeralGenCounts = {};
+
+  void _printHandshakeTrace(String label, {String? endpointId, String? peerId}) {
+    _traceCounter++;
+    final epId = endpointId ?? state.activeEndpointId ?? 'none';
+    final resolvedPeerId = peerId ?? (epId != 'none' ? state.endpointToPeerId[epId] : null) ?? 'none';
+    final sess = resolvedPeerId != 'none' ? state.sessions[resolvedPeerId] : null;
+    final secSess = resolvedPeerId != 'none' ? _securitySessions[resolvedPeerId] : null;
+    final epKeyExists = epId != 'none' && _pendingEphemeralKeys[epId] != null;
+    final timerExists = epId != 'none' && _handshakeTimers[epId] != null;
+    
+    // Hash codes of instances
+    final serviceHash = identityHashCode(_service);
+    final cryptoHash = identityHashCode(_cryptoService);
+    final notifierHash = identityHashCode(this);
+
+    final activeSubs = [
+      _connectionSub,
+      _encryptedMessageSub,
+      _secureIdentitySub,
+      _discoveredPeersSub,
+      _routedEnvelopeSub,
+      _routeRequestSub,
+      _routeReplySub,
+      _routeErrorSub,
+    ].where((sub) => sub != null).length;
+
+    final peerToEpId = state.endpointToPeerId.entries
+        .where((e) => e.value == resolvedPeerId)
+        .map((e) => e.key)
+        .firstOrNull ?? 'none';
+
+    print(
+      '[VANTRA][HANDSHAKE_TRACE]\n'
+      'traceId=$_traceCounter\n'
+      'label=$label\n'
+      'endpointId=$epId\n'
+      'peerId=$resolvedPeerId\n'
+      'sessionStatus=${sess?.status.name ?? "none"}\n'
+      'isSecure=${sess?.isSecure ?? false}\n'
+      'sessionEndpointId=${sess?.endpointId ?? "none"}\n'
+      'securitySessionEndpointId=${secSess?.endpointId ?? "none"}\n'
+      'pendingEphemeralKeyExists=$epKeyExists\n'
+      'handshakeTimerExists=$timerExists\n'
+      'enabledCapabilities=${sess?.enabledCapabilities?.map((c) => c.name).toList() ?? "none"}\n'
+      'endpointToPeerId=${state.endpointToPeerId[epId] ?? "none"}\n'
+      'peerToEndpointId=$peerToEpId\n'
+      'activeEndpointId=${state.activeEndpointId ?? "none"}\n'
+      'notifierInstance=$notifierHash\n'
+      'serviceInstance=$serviceHash\n'
+      'cryptoInstance=$cryptoHash\n'
+      'activeSubscriptionsCount=$activeSubs'
+    );
+  }
+
   // Connection Request Idempotency Tracking
   final Set<String> _acceptedEndpoints = {};
   final Set<String> _rejectedEndpoints = {};
@@ -525,6 +581,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         VantraLogger.log('[VANTRA][CRYPTO] DECRYPT SUCCESS messageId=${event.messageId} plaintextLength=${decryptedBytes.length}');
       } catch (e) {
         VantraLogger.log('[VANTRA][CRYPTO] DECRYPT FAILED messageId=${event.messageId} errorType=${e.runtimeType}');
+        print('[VANTRA][DECRYPT_FAILURE] Decryption failed for messageId=${event.messageId}: $e');
         rethrow;
       }
 
@@ -580,6 +637,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       );
     } catch (e, stack) {
       VantraLogger.log('[VANTRA][SECURITY] DECRYPT / INTEGRITY CHECK FAILED for message ${event.messageId}: $e', e, stack);
+      print('[VANTRA][DECRYPT_FAILURE] Decryption failed/aborted for messageId=${event.messageId}: $e');
     }
   }
 
@@ -753,6 +811,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
         remoteCapabilities: plaintext.supportedCapabilities,
       );
 
+      print('[VANTRA][CAPABILITY_TRACE] RECEIVED CapabilitiesExchange:\n'
+            'localCapabilities=${localCapabilities.map((c) => c.name).toList()}\n'
+            'remoteCapabilities=${plaintext.supportedCapabilities.map((c) => c.name).toList()}\n'
+            'negotiatedCapabilities=${negotiatedCapabilities.map((c) => c.name).toList()}\n'
+            'sessionStatus=${baseSession.status.name}\n'
+            'isSecure=${baseSession.isSecure}\n'
+            'sessionEndpointId=${baseSession.endpointId}\n'
+            'securitySessionEndpointId=${secSession.endpointId}');
+
       state = state.copyWith(
         sessions: {
           ...state.sessions,
@@ -765,6 +832,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
         activeEndpointId: endpointId,
         connectionStatus: ConnectionStatus.connected,
       );
+
+      print('[HANDSHAKE_TIMER][CANCEL] endpointId=$endpointId reason=capabilities_negotiation_complete sessionStatus=${readySession.status.name} isSecure=${readySession.isSecure}');
+      _handshakeTimers[endpointId]?.cancel();
+      _handshakeTimers.remove(endpointId);
+
+      _printHandshakeTrace('CapabilitiesExchange received and verified', endpointId: endpointId, peerId: peerId);
 
       print('[VANTRA][SESSION][HANDSHAKE] stage=PEER_READY peerId=$peerId endpoint=$endpointId');
       print('[VANTRA][SESSION][SECURE] Capability negotiation complete. Peer $peerId is now ready for communication.');
@@ -1563,6 +1636,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final candidateName = index != -1 ? update.endpointName.substring(0, index) : update.endpointName;
     final candidatePeerId = index != -1 ? update.endpointName.substring(index + 1) : null;
 
+    _printHandshakeTrace('_handleConnectionUpdate start', endpointId: update.endpointId, peerId: candidatePeerId);
+
     if (update.status == ConnectionStatus.connected) {
       _aliveEndpoints.add(update.endpointId);
       print('[VANTRA][SESSION][HANDSHAKE] stage=CONNECTED peerId=$candidatePeerId endpoint=${update.endpointId}');
@@ -1570,34 +1645,53 @@ class MessagingNotifier extends Notifier<MessagingState> {
       print('[VANTRA][CONNECTION] CONNECTION_CONNECTED: endpointId=${update.endpointId}');
       print('[VANTRA][NEARBY] CONNECTION_ESTABLISHED endpoint=${update.endpointId}');
 
-      // Arm 15-second handshake watchdog timer
-      _handshakeTimers[update.endpointId]?.cancel();
-      _handshakeTimers[update.endpointId] = Timer(const Duration(seconds: 15), () async {
-        print('[VANTRA][CONNECTION] HANDSHAKE_TIMEOUT endpointId=${update.endpointId}');
-        final pId = state.endpointToPeerId[update.endpointId];
-        if (pId != null) {
-          final sess = state.sessions[pId];
-          final currentSecSession = _securitySessions[pId];
-          print('[VANTRA][PIPELINE] ENDPOINT_STATE endpoint=${update.endpointId} peerId=$pId activeEndpoint=${state.activeEndpointId} sessionEndpoint=${sess?.endpointId} secSessionEndpoint=${currentSecSession?.endpointId}');
-          if ((sess != null && sess.endpointId != update.endpointId) ||
-              (currentSecSession != null && currentSecSession.endpointId != update.endpointId)) {
-            print('[VANTRA][PIPELINE] Ignoring stale handshake timeout for endpoint ${update.endpointId} because active session is on endpoint ${sess?.endpointId ?? currentSecSession?.endpointId}');
-            return;
+      _printHandshakeTrace('ConnectionStatus.connected received', endpointId: update.endpointId, peerId: candidatePeerId);
+
+      // Arm 15-second handshake watchdog timer if not already securely connected
+      final pId = candidatePeerId ?? state.endpointToPeerId[update.endpointId];
+      final existingSession = pId != null ? state.sessions[pId] : null;
+      final isAlreadyConnected = existingSession != null &&
+          existingSession.status == SessionStatus.connected &&
+          existingSession.isSecure;
+
+      if (!isAlreadyConnected) {
+        print('[HANDSHAKE_TIMER][CANCEL] endpointId=${update.endpointId} reason=new_timer_rearming_on_connected sessionStatus=${existingSession?.status.name ?? "none"} isSecure=${existingSession?.isSecure ?? false}');
+        _handshakeTimers[update.endpointId]?.cancel();
+        
+        print('[HANDSHAKE_TIMER][CREATE] endpointId=${update.endpointId} reason=connected_status_received sessionStatus=${existingSession?.status.name ?? "none"} isSecure=${existingSession?.isSecure ?? false}');
+        _handshakeTimers[update.endpointId] = Timer(const Duration(seconds: 15), () async {
+          final pId = state.endpointToPeerId[update.endpointId];
+          final sess = pId != null ? state.sessions[pId] : null;
+          final currentSecSession = pId != null ? _securitySessions[pId] : null;
+          print('[HANDSHAKE_TIMER][FIRE] endpointId=${update.endpointId} sessionStatus=${sess?.status.name ?? "none"} isSecure=${sess?.isSecure ?? false} sessionEndpointId=${sess?.endpointId ?? "none"} securitySessionEndpointId=${currentSecSession?.endpointId ?? "none"} enabledCapabilities=${sess?.enabledCapabilities?.map((c) => c.name).toList() ?? "none"}');
+
+          print('[VANTRA][CONNECTION] HANDSHAKE_TIMEOUT endpointId=${update.endpointId}');
+          if (pId != null) {
+            final sess = state.sessions[pId];
+            final currentSecSession = _securitySessions[pId];
+            print('[VANTRA][PIPELINE] ENDPOINT_STATE endpoint=${update.endpointId} peerId=$pId activeEndpoint=${state.activeEndpointId} sessionEndpoint=${sess?.endpointId} secSessionEndpoint=${currentSecSession?.endpointId}');
+            if ((sess != null && sess.endpointId != update.endpointId) ||
+                (currentSecSession != null && currentSecSession.endpointId != update.endpointId)) {
+              print('[VANTRA][PIPELINE] Ignoring stale handshake timeout for endpoint ${update.endpointId} because active session is on endpoint ${sess?.endpointId ?? currentSecSession?.endpointId}');
+              return;
+            }
+            _activeConnectLocks.remove(pId);
+            print('[VANTRA][PIPELINE] STATE_INVALIDATION source=watchdog_timer_lock endpoint=${update.endpointId} peerId=$pId reason=Cleared active connect lock');
+            if (sess != null && !sess.isSecure) {
+              print('[VANTRA][SECURITY] Handshake timed out for peer $pId. Destroying session and disconnecting.');
+              print('[VANTRA][SESSION] SESSION_INVALIDATED peerId=$pId reason=Handshake timeout');
+              print('[VANTRA][PIPELINE] STATE_INVALIDATION source=watchdog_timer endpoint=${update.endpointId} peerId=$pId reason=Handshake timeout');
+              _securitySessions.remove(pId);
+              _pendingEphemeralKeys.remove(update.endpointId);
+              try {
+                await ref.read(transportProvider).disconnect(update.endpointId);
+              } catch (_) {}
+            }
           }
-          _activeConnectLocks.remove(pId);
-          print('[VANTRA][PIPELINE] STATE_INVALIDATION source=watchdog_timer_lock endpoint=${update.endpointId} peerId=$pId reason=Cleared active connect lock');
-          if (sess != null && !sess.isSecure) {
-            print('[VANTRA][SECURITY] Handshake timed out for peer $pId. Destroying session and disconnecting.');
-            print('[VANTRA][SESSION] SESSION_INVALIDATED peerId=$pId reason=Handshake timeout');
-            print('[VANTRA][PIPELINE] STATE_INVALIDATION source=watchdog_timer endpoint=${update.endpointId} peerId=$pId reason=Handshake timeout');
-            _securitySessions.remove(pId);
-            _pendingEphemeralKeys.remove(update.endpointId);
-            try {
-              await ref.read(transportProvider).disconnect(update.endpointId);
-            } catch (_) {}
-          }
-        }
-      });
+        });
+      } else {
+        print('[VANTRA][CONNECTION] Skipping watchdog arming: Already securely connected');
+      }
 
       if (candidatePeerId != null) {
         final existingSession = state.sessions[candidatePeerId];
@@ -1654,8 +1748,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
       print('[VANTRA][PIPELINE] CONNECTION_CONNECTED endpoint=${update.endpointId} peerId=$candidatePeerId');
 
       final transport = ref.read(transportProvider);
-      final isFake = transport.runtimeType.toString().contains('Fake');
-      if (isFake) {
+      final typeString = transport.runtimeType.toString();
+      final isTest = typeString.contains('Fake') || typeString.contains('Mock');
+      if (isTest) {
         print('[VANTRA][SECURITY] STATE: CONNECTED (endpointId=${update.endpointId}). Initiating handshake immediately (test environment).');
         print('[VANTRA][CONNECTION] HANDSHAKE_STARTED: endpointId=${update.endpointId}');
         _initiateSecureHandshake(update.endpointId);
@@ -1670,6 +1765,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
     } else if (update.status == ConnectionStatus.connecting) {
       _aliveEndpoints.add(update.endpointId);
+      _printHandshakeTrace('ConnectionStatus.connecting received', endpointId: update.endpointId, peerId: candidatePeerId);
       print('[VANTRA][PIPELINE] CONNECTION_CONNECTING endpoint=${update.endpointId} peerId=$candidatePeerId');
       print('[VANTRA][CONNECTION] REQUEST_RECEIVED: endpointId=${update.endpointId}, peerName=$candidateName, direction=${update.isIncoming ? "incoming" : "outgoing"}');
       print('[VANTRA][SECURITY] STATE: CONNECTING (endpointId=${update.endpointId}, isIncoming=${update.isIncoming}, token=${update.authenticationToken})');
@@ -1800,7 +1896,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
       print('[VANTRA][SECURITY] STATE: DISCONNECTED/REJECTED/ERROR (endpointId=${update.endpointId}, status=${update.status.name})');
       _acceptedEndpoints.remove(update.endpointId);
       _rejectedEndpoints.remove(update.endpointId);
+
+      print('[HANDSHAKE_TIMER][CANCEL] endpointId=${update.endpointId} reason=disconnected_status_received sessionStatus=none isSecure=false');
       _handshakeTimers.remove(update.endpointId)?.cancel();
+
+      _printHandshakeTrace('ConnectionStatus.${update.status.name} received', endpointId: update.endpointId, peerId: candidatePeerId);
 
       final peerId = state.endpointToPeerId[update.endpointId] ?? candidatePeerId;
       if (peerId != null) {
@@ -1988,9 +2088,14 @@ class MessagingNotifier extends Notifier<MessagingState> {
       return;
     }
 
-    // 1. Generate fresh ephemeral X25519 keypair
-    final ephemeralKeyPair = await _cryptoService.generateEphemeralKeyPair();
-    _pendingEphemeralKeys[endpointId] = ephemeralKeyPair;
+    // 1. Get or generate ephemeral X25519 keypair
+    var ephemeralKeyPair = _pendingEphemeralKeys[endpointId];
+    if (ephemeralKeyPair == null) {
+      ephemeralKeyPair = await _cryptoService.generateEphemeralKeyPair();
+      _pendingEphemeralKeys[endpointId] = ephemeralKeyPair;
+    } else {
+      print('[VANTRA][SECURITY] Using existing ephemeral keypair for handshake to $endpointId');
+    }
 
     final ephPub = await ephemeralKeyPair.extractPublicKey();
     final idPubBytes = _hexDecode(localId.identityPublicKey);
