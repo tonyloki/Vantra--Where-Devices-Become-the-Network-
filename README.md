@@ -38,6 +38,7 @@ VANTRA implements a robust multi-hop mesh network:
 | **Serialization** | Protocol Buffers (Protobuf) | Compact binary wire framing and serialization |
 | **Identity & Exchange** | Ed25519 & X25519 | Cryptographic identities and ephemeral key exchange |
 | **Cipher AEAD** | ChaCha20-Poly1305 | Authenticated encryption with Associated Data (AAD) binding |
+| **Real-time Audio** | audioplayers & record | Voice message recording, playback, and low-latency audio streaming |
 
 ---
 
@@ -55,11 +56,11 @@ graph TD
     classDef db fill:#EC407A,stroke:#D81B60,stroke-width:2px,color:#fff;
 
     subgraph Presentation ["Presentation Layer"]
-        UI["ChatPage / ConversationsPage<br/>ContactsPage / SplashPage"]:::pres
+        UI["ChatPage / ConversationsPage<br/>ActiveCallPage / CreateGroupPage"]:::pres
     end
 
     subgraph State ["Application State Layer"]
-        Riverpod["MessagingNotifier<br/>(Riverpod Providers)"]:::app
+        Riverpod["MessagingNotifier / CallNotifier<br/>(Riverpod Providers)"]:::app
     end
 
     subgraph Domain ["Domain & Wire Format Layer"]
@@ -76,7 +77,7 @@ graph TD
 
     subgraph Storage ["Local Persistence Data Layer"]
         Repo["MessagingRepository"]:::db
-        Drift["Drift ORM / SQLite<br/>(transferId, sha256, filePath)"]:::db
+        Drift["Drift ORM / SQLite<br/>(Messages, Groups, GroupMembers)"]:::db
     end
 
     subgraph Transport ["Transport Layer"]
@@ -174,7 +175,7 @@ sequenceDiagram
 
 ## Phase Status
 
-*   **Current Phase:** Phase 19: Media Transfer Progress UI
+*   **Current Phase:** Phase 23: Android Background & Lifecycle
 *   **Completed Phases:**
     *   **Phase 0:** Scaffold Foundation & Project Setup
     *   **Phase 1:** Direct P2P Connectivity & Raw Byte Transfer (Nearby Connections)
@@ -195,3 +196,7 @@ sequenceDiagram
     *   **Phase 16:** Real Mesh Routing (A -> B -> C) & Route Table Schema
     *   **Phase 17:** Mesh Reliability, RERR Route Invalidation & Hop-Level Retries
     *   **Phase 18:** Large Media Streaming (Direct to Disk), sliding window validation, & fallback chunk sizing
+    *   **Phase 19:** Media Transfer Progress UI (ETA, Speeds, Retry/Cancel)
+    *   **Phase 20:** Voice Messages (Dynamic record timers, play/pause state bubbles, level indicators)
+    *   **Phase 21:** Audio Calls (Equalizer waveform overlays, Speaker/Mute/Hangup signaling controls, status machines)
+    *   **Phase 22:** Group Messaging (Pairwise Double-Ratchet message distribution, synchronized group lists, invite interception)

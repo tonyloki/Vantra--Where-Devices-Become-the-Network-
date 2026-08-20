@@ -46,3 +46,9 @@ app.*.map.json
 
 # Local tooling binaries
 /tools/
+
+# Custom rules / Antigravity files
+.agent/
+media/
+agent.yml
+agent.yaml

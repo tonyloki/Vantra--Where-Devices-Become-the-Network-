@@ -2,8 +2,8 @@
 
 ## Phase Status
 
-*   **Current Phase:** Phase 18: Large Media Streaming (Direct to Disk)
-*   **Status:** Capabilities-based V2 version negotiation, connection recovery protection, direct-to-disk random-access media streaming (OFFER/ACCEPT protocol), SHA-256 integrity checks, and sliding window sequence verification completed.
+*   **Current Phase:** Phase 23: Android Background & Lifecycle
+*   **Status:** Capabilities-based V2 version negotiation, connection recovery protection, direct-to-disk media streaming, mesh routing, voice recorder, voice message playback, audio call signaling, and group messaging protocol completed.
 
 ---
 

@@ -7,11 +7,11 @@ This document maps out the remaining phases of the Vantra project (Phase 16 thro
 ## Roadmap Overview
 
 ```
-                      CURRENT POSITION
-                             │
-     [Hardening & Optimization Completed — 154 Tests Passing]
-                             │
-                             ▼
+                                                            CURRENT POSITION
+                                                                   │
+                                                [Phase 22 Complete — 194 Tests Passing]
+                                                                   │
+                                                                   ▼
  ┌────────────────────────────────────────────────────────┐
  │            MESH ROUTING & RELIABILITY LAYERS           │
  │  Phase 16: Real Mesh Routing (A → B → C)               │
@@ -162,8 +162,8 @@ A ─── B ─── C     ==>  A sends to C via B (A has no direct link to C
 - [x] **Voice Message Schema & Pipeline (Phase 22A):** Update Messages table with duration and handle voice messages as media.
 - [x] **Call Protocol & Signaling (Phase 22B):** Define call control/frame messages and update Protobuf codec.
 - [x] **Real-time Call State & UI (Phase 22B):** Implement CallNotifier and incoming/active call screens.
-- [ ] **Group Schema & Control (Phase 22C):** Add groups/group_members tables and group control protocol.
-- [ ] **Group Fan-out & UI (Phase 22C):** Implement E2E fan-out routing and group chat UI.
+- [x] **Group Schema & Control (Phase 22C):** Add groups/group_members tables and group control protocol.
+- [x] **Group Fan-out & UI (Phase 22C):** Implement E2E fan-out routing and group chat UI.
 
 ---
 
