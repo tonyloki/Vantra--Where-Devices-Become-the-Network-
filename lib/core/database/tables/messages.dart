@@ -39,4 +39,6 @@ class Messages extends Table {
   IntColumn get height => integer().nullable()();
   TextColumn get transferId => text().nullable()();
   TextColumn get sha256 => text().nullable()();
+  IntColumn get duration => integer().nullable()();
+  TextColumn get groupId => text().nullable()();
 }

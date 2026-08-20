@@ -21,6 +21,12 @@ import 'features/profile/profile_page.dart';
 import 'features/poc/poc_page.dart';
 import 'features/peers/verify_identity_page.dart';
 import 'features/peers/show_my_qr_page.dart';
+import 'features/messaging/create_group_page.dart';
+import 'features/messaging/group_chat_page.dart';
+import 'package:vantra/core/calls/call_session.dart';
+import 'package:vantra/core/calls/call_provider.dart';
+import 'features/calls/incoming_call_page.dart';
+import 'features/calls/active_call_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -82,6 +88,17 @@ final GoRouter _router = GoRouter(
       },
     ),
     GoRoute(
+      path: '/create_group',
+      builder: (context, state) => const CreateGroupPage(),
+    ),
+    GoRoute(
+      path: '/group_chat/:groupId',
+      builder: (context, state) {
+        final groupId = state.pathParameters['groupId'] ?? 'unknown';
+        return GroupChatPage(groupId: groupId);
+      },
+    ),
+    GoRoute(
       path: '/profile',
       builder: (context, state) => const ProfilePage(),
     ),
@@ -131,11 +148,18 @@ class GlobalConnectionListener extends ConsumerWidget {
     final state = ref.watch(messagingStateProvider);
     final request = state.activeConnectionRequest;
     final mismatch = state.identityMismatchRequest;
+    final callSession = ref.watch(callStateProvider);
 
     return Stack(
       children: [
         child,
-        if (request != null)
+        if (callSession != null)
+          Positioned.fill(
+            child: callSession.status == CallStatus.incoming
+                ? IncomingCallPage(peerId: callSession.peerId)
+                : ActiveCallPage(session: callSession),
+          ),
+        if (request != null && callSession == null)
           Positioned.fill(
             child: Material(
               color: Colors.black87,
@@ -263,7 +287,7 @@ class GlobalConnectionListener extends ConsumerWidget {
               ),
             ),
           )
-        else if (mismatch != null)
+        else if (mismatch != null && callSession == null)
           Positioned.fill(
             child: Material(
               color: Colors.black87,

@@ -173,6 +173,7 @@ class DomainMediaControl extends DomainPlaintext {
   final String? caption;
   final int? nextExpectedChunk;
   final String? sha256;
+  final int? duration;
 
   const DomainMediaControl({
     required super.messageId,
@@ -193,6 +194,7 @@ class DomainMediaControl extends DomainPlaintext {
     this.caption,
     this.nextExpectedChunk,
     this.sha256,
+    this.duration,
   });
 }
 

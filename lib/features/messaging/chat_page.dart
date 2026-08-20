@@ -16,6 +16,9 @@ import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/peers/peer_provider.dart';
 import 'package:vantra/core/themes/vantra_theme.dart';
 import 'package:vantra/core/utils/logger.dart';
+import 'widgets/voice_recorder_widget.dart';
+import 'widgets/voice_message_bubble.dart';
+import 'package:vantra/core/calls/call_provider.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
   final String peerId;
@@ -31,6 +34,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   final ScrollController _scrollController = ScrollController();
   bool? _wasBlocked;
   bool? _wasConnectedSecure;
+  bool _isRecordingVoice = false;
 
   @override
   void initState() {
@@ -484,6 +488,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             onPressed: () => context.push('/peer/${widget.peerId}'),
           ),
           IconButton(
+            key: const Key('chat_call_button'),
+            icon: const Icon(Icons.phone_outlined),
+            tooltip: 'Secure Voice Call',
+            onPressed: (isConnected && !isBlocked)
+                ? () {
+                    ref.read(callStateProvider.notifier).initiateCall(widget.peerId);
+                  }
+                : null,
+          ),
+          IconButton(
             icon: const Icon(Icons.info_outline_rounded),
             tooltip: 'Peer Profile',
             onPressed: () => context.push('/peer/${widget.peerId}'),
@@ -784,6 +798,49 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                   ),
                                 ),
                               ],
+                            ] else if (msg.type == 'VOICE') ...[
+                              if (msg.mediaPath != null) ...[
+                                VoiceMessageBubble(
+                                  filePath: msg.mediaPath!,
+                                  durationMs: msg.duration ?? 0,
+                                  isMe: isMe,
+                                ),
+                              ] else ...[
+                                const Padding(
+                                  padding: EdgeInsets.all(8.0),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(color: VantraTheme.primaryAccent, strokeWidth: 2),
+                                      ),
+                                      SizedBox(width: 8),
+                                      Text('Downloading voice message...', style: TextStyle(color: VantraTheme.textSecondary, fontSize: 13)),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              if (msg.status == MessageStatus.sending || msg.status == MessageStatus.pending) ...[
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                                  child: Consumer(
+                                    builder: (context, ref, child) {
+                                      final progressState = ref.watch(
+                                        transferProgressMapProvider.select(
+                                          (map) => map[msg.transferId ?? ''] ?? const TransferProgressState(),
+                                        ),
+                                      );
+                                      return LinearProgressIndicator(
+                                        value: progressState.progress,
+                                        color: isMe ? Colors.white : VantraTheme.primary,
+                                        backgroundColor: Colors.white12,
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
                             ] else if (msg.type == 'FILE') ...[
                               GestureDetector(
                                 onTap: msg.mediaPath != null
@@ -1046,68 +1103,120 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               child: SafeArea(
                 child: Row(
                   children: [
-                    IconButton(
-                      key: const Key('chat_attach_button'),
-                      icon: const Icon(Icons.add_photo_alternate_rounded, color: VantraTheme.primaryAccent),
-                      onPressed: ((isConnected || isTrusted) && !isBlocked) ? _pickAndPreviewImage : null,
-                    ),
-                    IconButton(
-                      key: const Key('chat_attach_file_button'),
-                      icon: const Icon(Icons.attach_file_rounded, color: VantraTheme.primaryAccent),
-                      onPressed: ((isConnected || isTrusted) && !isBlocked) ? _pickAndPreviewFile : null,
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: VantraTheme.background,
-                          borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: Colors.white10, width: 0.5),
+                    if (_isRecordingVoice) ...[
+                      Expanded(
+                        child: VoiceRecorderWidget(
+                          onRecordComplete: (filePath, durationMs) {
+                            ref.read(messagingStateProvider.notifier).sendVoiceMessage(widget.peerId, filePath, durationMs);
+                            setState(() {
+                              _isRecordingVoice = false;
+                            });
+                          },
+                          onRecordingStarted: () {
+                            setState(() {
+                              _isRecordingVoice = true;
+                            });
+                          },
+                          onRecordingCancelled: () {
+                            setState(() {
+                              _isRecordingVoice = false;
+                            });
+                          },
                         ),
-                        child: TextField(
-                          key: const Key('chat_input_field'),
-                          controller: _controller,
-                          enabled: (isConnected || isTrusted) && !isBlocked,
-                          textCapitalization: TextCapitalization.sentences,
-                          style: const TextStyle(color: VantraTheme.textPrimary),
-                          decoration: InputDecoration(
-                            hintText: isBlocked
-                                ? 'Peer is blocked'
-                                : (isConnected || isTrusted)
-                                    ? 'Type an encrypted message...'
-                                    : 'Disconnected',
-                            hintStyle: const TextStyle(color: VantraTheme.textMuted),
-                            border: InputBorder.none,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      ),
+                    ] else ...[
+                      IconButton(
+                        key: const Key('chat_attach_button'),
+                        icon: const Icon(Icons.add_photo_alternate_rounded, color: VantraTheme.primaryAccent),
+                        onPressed: ((isConnected || isTrusted) && !isBlocked) ? _pickAndPreviewImage : null,
+                      ),
+                      IconButton(
+                        key: const Key('chat_attach_file_button'),
+                        icon: const Icon(Icons.attach_file_rounded, color: VantraTheme.primaryAccent),
+                        onPressed: ((isConnected || isTrusted) && !isBlocked) ? _pickAndPreviewFile : null,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: VantraTheme.background,
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: Colors.white10, width: 0.5),
+                          ),
+                          child: TextField(
+                            key: const Key('chat_input_field'),
+                            controller: _controller,
+                            enabled: (isConnected || isTrusted) && !isBlocked,
+                            textCapitalization: TextCapitalization.sentences,
+                            style: const TextStyle(color: VantraTheme.textPrimary),
+                            onChanged: (text) {
+                              setState(() {});
+                            },
+                            decoration: InputDecoration(
+                              hintText: isBlocked
+                                  ? 'Peer is blocked'
+                                  : (isConnected || isTrusted)
+                                      ? 'Type an encrypted message...'
+                                      : 'Disconnected',
+                              hintStyle: const TextStyle(color: VantraTheme.textMuted),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Container(
-                      decoration: const BoxDecoration(
-                        color: VantraTheme.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: IconButton(
-                        key: const Key('chat_send_button'),
-                        icon: const Icon(
-                          Icons.send_rounded,
-                          color: Colors.white,
+                      const SizedBox(width: 10),
+                      if ((isConnected || isTrusted) && !isBlocked) ...[
+                        if (_controller.text.trim().isEmpty) ...[
+                          VoiceRecorderWidget(
+                            onRecordComplete: (filePath, durationMs) {
+                              ref.read(messagingStateProvider.notifier).sendVoiceMessage(widget.peerId, filePath, durationMs);
+                              setState(() {
+                                _isRecordingVoice = false;
+                              });
+                            },
+                            onRecordingStarted: () {
+                              setState(() {
+                                _isRecordingVoice = true;
+                              });
+                            },
+                            onRecordingCancelled: () {
+                              setState(() {
+                                _isRecordingVoice = false;
+                              });
+                            },
+                          ),
+                          const SizedBox(width: 10),
+                        ],
+                      ],
+                      Container(
+                        decoration: BoxDecoration(
+                          color: ((isConnected || isTrusted) && !isBlocked && _controller.text.trim().isNotEmpty)
+                              ? VantraTheme.primary
+                              : Colors.white10,
+                          shape: BoxShape.circle,
                         ),
-                        onPressed: ((isConnected || isTrusted) && !isBlocked)
-                            ? () {
-                                final text = _controller.text.trim();
-                                final statusName = session?.status.name ?? 'disconnected';
-                                VantraLogger.log('[VANTRA][CHAT] SEND PRESSED peerId=${widget.peerId} textLength=${text.length} connectionStatus=$statusName');
-                                if (text.isNotEmpty) {
-                                  _controller.clear();
-                                  ref.read(messagingStateProvider.notifier).sendTextMessage(widget.peerId, text);
+                        child: IconButton(
+                          key: const Key('chat_send_button'),
+                          icon: const Icon(
+                            Icons.send_rounded,
+                            color: Colors.white,
+                          ),
+                          onPressed: ((isConnected || isTrusted) && !isBlocked && _controller.text.trim().isNotEmpty)
+                              ? () {
+                                  final text = _controller.text.trim();
+                                  final statusName = session?.status.name ?? 'disconnected';
+                                  VantraLogger.log('[VANTRA][CHAT] SEND PRESSED peerId=${widget.peerId} textLength=${text.length} connectionStatus=$statusName');
+                                  if (text.isNotEmpty) {
+                                    _controller.clear();
+                                    ref.read(messagingStateProvider.notifier).sendTextMessage(widget.peerId, text);
+                                    setState(() {});
+                                  }
                                 }
-                              }
-                            : null,
+                              : null,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),

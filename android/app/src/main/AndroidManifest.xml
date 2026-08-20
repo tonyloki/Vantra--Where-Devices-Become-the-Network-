@@ -25,6 +25,10 @@
     <!-- Camera — required for QR code scanning (Phase 20) -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Microphone — required for voice messages and audio calls (Phase 22) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <application
         android:label="vantra"
         android:name="${applicationName}"

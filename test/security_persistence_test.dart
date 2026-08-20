@@ -162,8 +162,9 @@ void main() {
       expect(sentAckEnvelope.messageId, isNot(equals(incomingMessageId))); // ACK unique ID invariant!
 
       // Decrypt ACK using remote keys
+      final secSession = notifier.securitySessions[remotePeerId]!;
       final decryptedAckBytes = await cryptoService.decryptBytes(
-        secretKey: remoteDerivedKeys.receiveKey,
+        secretKey: secSession.getSendKeyForMessage(sentAckEnvelope.messageId),
         nonce: sentAckEnvelope.nonce,
         ciphertext: sentAckEnvelope.ciphertext,
         mac: sentAckEnvelope.mac,

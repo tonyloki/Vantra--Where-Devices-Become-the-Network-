@@ -33,6 +33,8 @@ class MessagingRepository {
       height: Value(msg.height),
       transferId: Value(msg.transferId),
       sha256: Value(msg.sha256),
+      duration: Value(msg.duration),
+      groupId: Value(msg.groupId),
     );
     await _db.messageDao.insertMessage(companion);
   }
@@ -66,6 +68,8 @@ class MessagingRepository {
         height: Value(msg.height),
         transferId: Value(msg.transferId),
         sha256: Value(msg.sha256),
+        duration: Value(msg.duration),
+        groupId: Value(msg.groupId),
       );
       await _db.messageDao.insertMessage(companion);
       VantraLogger.log('[VANTRA][PERSISTENCE] PERSISTENCE INSERT SUCCESS: messageId=${msg.messageId}');
@@ -108,7 +112,8 @@ class MessagingRepository {
   }
 
   /// Subscribes to all conversation summaries reactively
-  Stream<List<ConversationSummary>> watchConversationSummaries(
+  /// Subscribes to peer-only conversation summaries reactively
+  Stream<List<ConversationSummary>> watchPeerConversationSummaries(
     String localPeerId,
     Map<String, PeerSession> activeSessions,
   ) {
@@ -116,7 +121,7 @@ class MessagingRepository {
 
     final latestMessagesStream = _db.customSelect(
       'SELECT * FROM messages WHERE local_id IN ( '
-      '  SELECT MAX(local_id) FROM messages GROUP BY '
+      '  SELECT MAX(local_id) FROM messages WHERE group_id IS NULL GROUP BY '
       '  CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END'
       ')',
       variables: [Variable.withString(localPeerId)],
@@ -127,7 +132,7 @@ class MessagingRepository {
 
     final unreadCountsStream = _db.customSelect(
       'SELECT sender_id, COUNT(*) as unread_count FROM messages '
-      'WHERE receiver_id = ? AND is_read = 0 GROUP BY sender_id',
+      'WHERE receiver_id = ? AND group_id IS NULL AND is_read = 0 GROUP BY sender_id',
       variables: [Variable.withString(localPeerId)],
       readsFrom: {_db.messages},
     ).watch().map((rows) {
@@ -174,6 +179,7 @@ class MessagingRepository {
               unreadCount: 0,
               isOnline: isOnline,
               isSecure: activeSession?.isSecure == true,
+              isGroup: false,
             ));
           } else {
             final unreadCount = unreadCounts[peer.peerId] ?? 0;
@@ -198,14 +204,214 @@ class MessagingRepository {
               unreadCount: unreadCount,
               isOnline: isOnline,
               isSecure: activeSession?.isSecure == true,
+              isGroup: false,
             ));
           }
         }
 
-        summaries.sort((a, b) => b.lastMessageTimestamp.compareTo(a.lastMessageTimestamp));
         return summaries;
       },
     );
+  }
+
+  /// Subscribes to group-only conversation summaries reactively
+  Stream<List<ConversationSummary>> watchGroupConversationSummaries() {
+    final groupsStream = _db.groupDao.watchGroups();
+
+    final latestGroupMessagesStream = _db.customSelect(
+      'SELECT * FROM messages WHERE local_id IN ( '
+      '  SELECT MAX(local_id) FROM messages WHERE group_id IS NOT NULL GROUP BY group_id'
+      ')',
+      readsFrom: {_db.messages},
+    ).watch().map((rows) {
+      return rows.map((row) => _db.messages.map(row.data)).toList();
+    });
+
+    final groupUnreadCountsStream = _db.customSelect(
+      'SELECT group_id, COUNT(*) as unread_count FROM messages '
+      'WHERE group_id IS NOT NULL AND is_read = 0 GROUP BY group_id',
+      readsFrom: {_db.messages},
+    ).watch().map((rows) {
+      return {
+        for (final row in rows)
+          row.read<String>('group_id'): row.read<int>('unread_count')
+      };
+    });
+
+    return _combineLatest3<List<Group>, List<Message>, Map<String, int>, List<ConversationSummary>>(
+      groupsStream,
+      latestGroupMessagesStream,
+      groupUnreadCountsStream,
+      (groupList, latestMessages, unreadCounts) {
+        final summaries = <ConversationSummary>[];
+
+        final latestMap = <String, Message>{};
+        for (final msg in latestMessages) {
+          if (msg.groupId != null) {
+            latestMap[msg.groupId!] = msg;
+          }
+        }
+
+        for (final group in groupList) {
+          final lastMsg = latestMap[group.groupId];
+          if (lastMsg == null) {
+            summaries.add(ConversationSummary(
+              peerId: group.groupId,
+              displayName: group.name,
+              lastMessageText: 'Group created',
+              lastMessageTimestamp: group.createdAt,
+              lastMessageStatus: MessageStatus.received,
+              isOutgoing: false,
+              unreadCount: 0,
+              isGroup: true,
+            ));
+          } else {
+            final unreadCount = unreadCounts[group.groupId] ?? 0;
+
+            String previewText = lastMsg.messageText;
+            if (lastMsg.type == 'IMAGE') {
+              previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📷 Photo';
+            } else if (lastMsg.type == 'FILE') {
+              previewText = lastMsg.messageText.isNotEmpty ? lastMsg.messageText : '📁 File: ${lastMsg.fileName ?? "Attachment"}';
+            }
+
+            summaries.add(ConversationSummary(
+              peerId: group.groupId,
+              displayName: group.name,
+              lastMessageText: previewText,
+              lastMessageTimestamp: lastMsg.timestamp,
+              lastMessageStatus: lastMsg.status,
+              isOutgoing: false,
+              unreadCount: unreadCount,
+              isGroup: true,
+            ));
+          }
+        }
+
+        return summaries;
+      },
+    );
+  }
+
+  /// Subscribes to all conversation summaries reactively (combining peers and groups)
+  Stream<List<ConversationSummary>> watchConversationSummaries(
+    String localPeerId,
+    Map<String, PeerSession> activeSessions,
+  ) {
+    final peerSummaries = watchPeerConversationSummaries(localPeerId, activeSessions);
+    final groupSummaries = watchGroupConversationSummaries();
+
+    return _combineLatest2<List<ConversationSummary>, List<ConversationSummary>, List<ConversationSummary>>(
+      peerSummaries,
+      groupSummaries,
+      (peers, groups) {
+        final all = [...peers, ...groups];
+        all.sort((a, b) => b.lastMessageTimestamp.compareTo(a.lastMessageTimestamp));
+        return all;
+      },
+    );
+  }
+
+  // --- Group Accessors ---
+
+  Future<void> createGroup(String groupId, String name, String creatorId, List<String> memberIds) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db.groupDao.insertOrUpdateGroup(Group(
+      groupId: groupId,
+      name: name,
+      creatorId: creatorId,
+      createdAt: now,
+    ));
+    for (final memberId in memberIds) {
+      await _db.groupDao.insertOrUpdateGroupMember(GroupMembersCompanion.insert(
+        groupId: groupId,
+        peerId: memberId,
+      ));
+    }
+  }
+
+  Future<Group?> getGroup(String groupId) {
+    return _db.groupDao.getGroup(groupId);
+  }
+
+  Future<List<GroupMember>> getGroupMembers(String groupId) {
+    return _db.groupDao.getGroupMembers(groupId);
+  }
+
+  Stream<List<Group>> watchGroups() {
+    return _db.groupDao.watchGroups();
+  }
+
+  Stream<Group?> watchGroup(String groupId) {
+    return _db.groupDao.watchGroup(groupId);
+  }
+
+  /// Subscribes to a group conversation stream (ordered by local sequence id)
+  Stream<List<VantraMessage>> watchGroupConversation(String groupId) {
+    return (_db.select(_db.messages)
+          ..where((t) => t.groupId.equals(groupId))
+          ..orderBy([(t) => OrderingTerm(expression: t.localId)]))
+        .watch()
+        .map((list) {
+      return list.map((dbMsg) => _mapToDomain(dbMsg)).toList();
+    });
+  }
+
+  Future<List<VantraMessage>> getGroupMessages(String groupId) async {
+    final list = await (_db.select(_db.messages)
+          ..where((t) => t.groupId.equals(groupId))
+          ..orderBy([(t) => OrderingTerm(expression: t.localId)]))
+        .get();
+    return list.map((dbMsg) => _mapToDomain(dbMsg)).toList();
+  }
+
+  Stream<T> _combineLatest2<A, B, T>(
+    Stream<A> streamA,
+    Stream<B> streamB,
+    T Function(A a, B b) combiner,
+  ) {
+    final controller = StreamController<T>.broadcast();
+    StreamSubscription<A>? subA;
+    StreamSubscription<B>? subB;
+
+    A? latestA;
+    B? latestB;
+
+    bool hasA = false;
+    bool hasB = false;
+
+    void emitIfReady() {
+      if (hasA && hasB) {
+        if (!controller.isClosed) {
+          controller.add(combiner(latestA as A, latestB as B));
+        }
+      }
+    }
+
+    controller.onListen = () {
+      subA = streamA.listen((val) {
+        latestA = val;
+        hasA = true;
+        emitIfReady();
+      }, onError: (Object err, StackTrace st) {
+        if (!controller.isClosed) controller.addError(err, st);
+      });
+
+      subB = streamB.listen((val) {
+        latestB = val;
+        hasB = true;
+        emitIfReady();
+      }, onError: (Object err, StackTrace st) {
+        if (!controller.isClosed) controller.addError(err, st);
+      });
+    };
+
+    controller.onCancel = () {
+      subA?.cancel();
+      subB?.cancel();
+    };
+
+    return controller.stream;
   }
 
   Stream<T> _combineLatest3<A, B, C, T>(
@@ -415,6 +621,8 @@ class MessagingRepository {
       height: dbMsg.height,
       transferId: dbMsg.transferId,
       sha256: dbMsg.sha256,
+      duration: dbMsg.duration,
+      groupId: dbMsg.groupId,
     );
   }
 

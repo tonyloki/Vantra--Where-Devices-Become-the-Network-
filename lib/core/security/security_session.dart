@@ -61,6 +61,33 @@ class SecuritySession {
   int nextSendSequence() => ns;
 
   final Map<String, SecretKey> sentMessageKeys = {};
+  final Map<String, DateTime> sentMessageKeysTimestamps = {};
+
+  void addSentMessageKey(String messageId, SecretKey key) {
+    evictExpiredSentKeys();
+    if (sentMessageKeys.length >= 100) {
+      final sortedKeys = sentMessageKeysTimestamps.keys.toList()
+        ..sort((a, b) => sentMessageKeysTimestamps[a]!.compareTo(sentMessageKeysTimestamps[b]!));
+      if (sortedKeys.isNotEmpty) {
+        final oldestKey = sortedKeys.first;
+        sentMessageKeys.remove(oldestKey);
+        sentMessageKeysTimestamps.remove(oldestKey);
+      }
+    }
+    sentMessageKeys[messageId] = key;
+    sentMessageKeysTimestamps[messageId] = DateTime.now();
+  }
+
+  void evictExpiredSentKeys() {
+    final now = DateTime.now();
+    sentMessageKeysTimestamps.removeWhere((key, timestamp) {
+      if (now.difference(timestamp).inHours >= 1) {
+        sentMessageKeys.remove(key);
+        return true;
+      }
+      return false;
+    });
+  }
 
   SecretKey getSendKeyForMessage(String messageId) {
     return sentMessageKeys[messageId] ?? sendKey;

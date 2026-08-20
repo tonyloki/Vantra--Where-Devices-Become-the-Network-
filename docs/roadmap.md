@@ -147,18 +147,23 @@ A ─── B ─── C     ==>  A sends to C via B (A has no direct link to C
 
 ---
 
-## Phase 22: Group Messaging 👥
+## Phase 22: Group Messaging, Voice Messages & Audio Calls 👥🎙️📞
 
-**Goal:** Build secure, multi-peer group chat rooms across the mesh.
+**Goal:** Build secure multi-peer group chat rooms, real-time voice call streaming, and voice messages across the mesh.
 
 ### 1. Key Invariants
-- **Consistent Group Membership:** Group membership states must be synchronized across all members.
 - **E2E Group Security:** Group messages must be encrypted such that only current authorized members can decrypt them.
+- **Consistent Group Membership:** Group membership states must be synchronized across all members.
+- **Voice Messages Integrity:** Voice messages must be recorded, persisted, streamed, and validated using SHA-256 integrity checks, exactly like other media.
+- **Low-Latency Calls:** Audio call packets must be encrypted and streamed in real-time frame chunks with minimal buffering.
 
 ### 2. Implementation Checklist
-- [ ] **Group Schema:** Create tables for group metadata, active member lists, and cryptographic group keys.
-- [ ] **Sender Keys Protocol:** Implement group encryption where each member distributes a signature/encryption key (Sender Key) to other members of the group.
-- [ ] **Membership Changes:** Implement protocols to distribute fresh group keys when members are added or removed.
+- [x] **Voice Recording & Playback (Phase 22A):** Integrate recording/playback packages and add mic permission.
+- [x] **Voice Message Schema & Pipeline (Phase 22A):** Update Messages table with duration and handle voice messages as media.
+- [x] **Call Protocol & Signaling (Phase 22B):** Define call control/frame messages and update Protobuf codec.
+- [x] **Real-time Call State & UI (Phase 22B):** Implement CallNotifier and incoming/active call screens.
+- [ ] **Group Schema & Control (Phase 22C):** Add groups/group_members tables and group control protocol.
+- [ ] **Group Fan-out & UI (Phase 22C):** Implement E2E fan-out routing and group chat UI.
 
 ---
 

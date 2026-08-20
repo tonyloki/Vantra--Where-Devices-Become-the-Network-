@@ -513,7 +513,7 @@ class CryptoService {
     final derived = await kdfCK(session.sendingChainKey!);
     session.sendingChainKey = derived.key;
     final messageKey = derived.value;
-    session.sentMessageKeys[messageId] = messageKey;
+    session.addSentMessageKey(messageId, messageKey);
 
     final ckData = await session.sendingChainKey!.extract();
     final ckFp = await computeFingerprint(ckData.bytes);
@@ -548,10 +548,14 @@ class CryptoService {
     required Uint8List mac,
     required String messageId,
   }) async {
-    // 0. Fallback to legacy symmetric decryption if no DH key is provided
+    // 0. Fallback to legacy symmetric decryption if no DH key is provided, or if the incoming key matches the handshake key and receiving chain key is null.
     final recvKeyBytes = await session.receiveKey.extractBytes();
-    if ((incomingDhPublicKeyBytes == null ||
-         incomingDhPublicKeyBytes.isEmpty) &&
+    final bool isHandshakeKey = incomingDhPublicKeyBytes != null &&
+        session.remoteDhPublicKey != null &&
+        _compareLists(session.remoteDhPublicKey!.bytes, incomingDhPublicKeyBytes);
+    if (((incomingDhPublicKeyBytes == null ||
+          incomingDhPublicKeyBytes.isEmpty) ||
+         (isHandshakeKey && session.receivingChainKey == null)) &&
         recvKeyBytes.isNotEmpty) {
       return decryptBytes(
         secretKey: session.receiveKey,

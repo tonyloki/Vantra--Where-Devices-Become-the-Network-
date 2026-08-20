@@ -379,15 +379,17 @@ class ProtobufCodec implements ProtocolCodec {
               .toList(),
         );
       case DomainMediaControl mediaCtrl:
+        final mime = mediaCtrl.mimeType ?? '';
+        final isAudio = mime.startsWith('audio/') || mediaCtrl.duration != null;
         pbPlaintext.mediaControl = MediaControl(
           type: _mapToProtoMediaControlType(mediaCtrl.type),
           transferId: mediaCtrl.transferId,
           fileName: mediaCtrl.fileName ?? '',
           fileSize: Int64(mediaCtrl.fileSize ?? 0),
-          mimeType: mediaCtrl.mimeType ?? '',
+          mimeType: mime,
           totalChunks: mediaCtrl.totalChunks ?? 0,
           chunkSize: mediaCtrl.chunkSize ?? 0,
-          width: mediaCtrl.width ?? 0,
+          width: isAudio ? (mediaCtrl.duration ?? 0) : (mediaCtrl.width ?? 0),
           height: mediaCtrl.height ?? 0,
           caption: mediaCtrl.caption ?? '',
           nextExpectedChunk: mediaCtrl.nextExpectedChunk ?? 0,
@@ -484,6 +486,7 @@ class ProtobufCodec implements ProtocolCodec {
 
       case VantraPlaintext_Body.mediaControl:
         final ctrl = pbPlaintext.mediaControl;
+        final isAudio = ctrl.mimeType.startsWith('audio/');
         return DomainMediaControl(
           messageId: pbPlaintext.messageId,
           sessionId: pbPlaintext.sessionId,
@@ -498,11 +501,12 @@ class ProtobufCodec implements ProtocolCodec {
           mimeType: ctrl.mimeType.isNotEmpty ? ctrl.mimeType : null,
           totalChunks: ctrl.totalChunks != 0 ? ctrl.totalChunks : null,
           chunkSize: ctrl.chunkSize != 0 ? ctrl.chunkSize : null,
-          width: ctrl.width != 0 ? ctrl.width : null,
+          width: isAudio ? null : (ctrl.width != 0 ? ctrl.width : null),
           height: ctrl.height != 0 ? ctrl.height : null,
           caption: ctrl.caption.isNotEmpty ? ctrl.caption : null,
           nextExpectedChunk: ctrl.nextExpectedChunk != 0 ? ctrl.nextExpectedChunk : null,
           sha256: ctrl.sha256.isNotEmpty ? ctrl.sha256 : null,
+          duration: isAudio ? (ctrl.width != 0 ? ctrl.width : null) : null,
         );
 
       case VantraPlaintext_Body.mediaChunk:

@@ -15,6 +15,8 @@ class ConversationSummary {
   final bool isOnline;
   final bool isSecure;
 
+  final bool isGroup;
+
   const ConversationSummary({
     required this.peerId,
     required this.displayName,
@@ -28,6 +30,7 @@ class ConversationSummary {
     required this.unreadCount,
     this.isOnline = false,
     this.isSecure = false,
+    this.isGroup = false,
   });
 
   String get effectiveName {

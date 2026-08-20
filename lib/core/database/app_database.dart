@@ -3,16 +3,19 @@ import 'package:drift_flutter/drift_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:vantra/core/database/tables/messages.dart';
 import 'package:vantra/core/database/tables/peers.dart';
+import 'package:vantra/core/database/tables/groups.dart';
+import 'package:vantra/core/database/tables/group_members.dart';
 import 'package:vantra/core/database/daos/message_dao.dart';
 import 'package:vantra/core/database/daos/peer_dao.dart';
+import 'package:vantra/core/database/daos/group_dao.dart';
 import 'package:vantra/core/models/message_status.dart';
 import 'package:vantra/core/models/peer_trust_state.dart';
 
 part 'app_database.g.dart';
 
 @DriftDatabase(
-  tables: [Messages, Peers],
-  daos: [MessageDao, PeerDao],
+  tables: [Messages, Peers, Groups, GroupMembers],
+  daos: [MessageDao, PeerDao, GroupDao],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
@@ -20,7 +23,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration {
@@ -57,6 +60,11 @@ class AppDatabase extends _$AppDatabase {
         }
         if (from < 7) {
           await m.addColumn(peers, peers.verifiedPublicKey);
+        }
+        if (from < 8) {
+          await m.addColumn(messages, messages.groupId);
+          await m.createTable(groups);
+          await m.createTable(groupMembers);
         }
       },
       beforeOpen: (details) async {

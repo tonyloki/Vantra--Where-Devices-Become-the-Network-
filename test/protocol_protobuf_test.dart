@@ -193,5 +193,40 @@ void main() {
       final encoded = codec.encodePlaintext(invalid);
       expect(() => codec.decodePlaintext(encoded), throwsA(isA<ProtocolValidationException>()));
     });
+    test('MediaControl plaintext with duration round-trips exactly (reusing width field)', () {
+      final msgId = const Uuid().v4();
+      final sessId = const Uuid().v4();
+      final transId = const Uuid().v4();
+
+      final original = DomainMediaControl(
+        messageId: msgId,
+        sessionId: sessId,
+        sequence: 3,
+        timestampMs: 1786280002000,
+        senderId: 'alice',
+        receiverId: 'bob',
+        type: DomainMediaControlType.offer,
+        transferId: transId,
+        fileName: 'voice_message.aac',
+        fileSize: 10240,
+        mimeType: 'audio/aac',
+        totalChunks: 1,
+        chunkSize: 10240,
+        duration: 3500, // 3.5 seconds
+        sha256: 'abc123hash',
+      );
+
+      final encoded = codec.encodePlaintext(original);
+      final decoded = codec.decodePlaintext(encoded);
+
+      expect(decoded, isA<DomainMediaControl>());
+      final ctrl = decoded as DomainMediaControl;
+      expect(ctrl.messageId, msgId);
+      expect(ctrl.transferId, transId);
+      expect(ctrl.fileName, 'voice_message.aac');
+      expect(ctrl.mimeType, 'audio/aac');
+      expect(ctrl.duration, 3500);
+      expect(ctrl.width, isNull); // width should be null for audio mime type
+    });
   });
 }

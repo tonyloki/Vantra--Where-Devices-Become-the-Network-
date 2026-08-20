@@ -126,6 +126,11 @@ class ConversationsPage extends ConsumerWidget {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.group_add_rounded),
+            tooltip: 'Create Group',
+            onPressed: () => context.push('/create_group'),
+          ),
+          IconButton(
             icon: const Icon(Icons.person_outline_rounded),
             tooltip: 'My Profile',
             onPressed: () => context.push('/profile'),
@@ -196,7 +201,13 @@ class ConversationsPage extends ConsumerWidget {
                 summary: summary,
                 formattedTime: _formatTimestamp(summary.lastMessageTimestamp),
                 statusIcon: _buildStatusIcon(summary.lastMessageStatus),
-                onTap: () => context.push('/chat/${summary.peerId}'),
+                onTap: () {
+                  if (summary.isGroup) {
+                    context.push('/group_chat/${summary.peerId}');
+                  } else {
+                    context.push('/chat/${summary.peerId}');
+                  }
+                },
                 onLongPress: () => _showConversationOptions(context, ref, summary),
               );
             },
@@ -312,27 +323,31 @@ class _ConversationTile extends StatelessWidget {
           children: [
             Stack(
               children: [
-                CircleAvatar(
+                 CircleAvatar(
                   radius: 24,
-                  backgroundColor: summary.isTrusted
-                      ? VantraTheme.greenVerified.withValues(alpha: 0.15)
-                      : summary.isBlocked
-                          ? VantraTheme.redBlocked.withValues(alpha: 0.15)
-                          : VantraTheme.primary.withValues(alpha: 0.15),
-                  child: Text(
-                    summary.effectiveName.isNotEmpty ? summary.effectiveName[0].toUpperCase() : '?',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: summary.isTrusted
-                          ? VantraTheme.greenVerified
+                  backgroundColor: summary.isGroup
+                      ? VantraTheme.primary.withValues(alpha: 0.15)
+                      : (summary.isTrusted
+                          ? VantraTheme.greenVerified.withValues(alpha: 0.15)
                           : summary.isBlocked
-                              ? VantraTheme.redBlocked
-                              : VantraTheme.primaryAccent,
-                    ),
-                  ),
+                              ? VantraTheme.redBlocked.withValues(alpha: 0.15)
+                              : VantraTheme.primary.withValues(alpha: 0.15)),
+                  child: summary.isGroup
+                      ? const Icon(Icons.group_rounded, color: VantraTheme.primaryAccent, size: 24)
+                      : Text(
+                          summary.effectiveName.isNotEmpty ? summary.effectiveName[0].toUpperCase() : '?',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: summary.isTrusted
+                                ? VantraTheme.greenVerified
+                                : summary.isBlocked
+                                    ? VantraTheme.redBlocked
+                                    : VantraTheme.primaryAccent,
+                          ),
+                        ),
                 ),
-                if (summary.isOnline)
+                if (summary.isOnline && !summary.isGroup)
                   Positioned(
                     right: 0,
                     bottom: 0,
