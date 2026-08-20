@@ -476,7 +476,16 @@ class MessagingNotifier extends Notifier<MessagingState> {
   }
 
   Future<void> _handleIncomingEncryptedMessage(EncryptedMessageEvent event) async {
-    final peerId = state.endpointToPeerId[event.endpointId];
+    var peerId = state.endpointToPeerId[event.endpointId];
+    if (peerId == null) {
+      // Fallback: check if we have a matching security session for this endpointId
+      for (final entry in _securitySessions.entries) {
+        if (entry.value.endpointId == event.endpointId) {
+          peerId = entry.key;
+          break;
+        }
+      }
+    }
     if (peerId == null) {
       VantraLogger.log('[VANTRA][SECURITY] INBOUND DROP: Unknown endpoint ${event.endpointId}');
       return;
@@ -1400,33 +1409,30 @@ class MessagingNotifier extends Notifier<MessagingState> {
         .where((c) => remoteCapabilities.contains(c))
         .toList();
 
-    // 4. Update database peer record
-    await repo.upsertPeer(
-      identity.peerId,
-      identity.displayName,
-      endpointId: identity.endpointId,
-      publicKey: identity.identityPublicKeyHex,
-      fingerprint: remoteFingerprint,
-      trustState: trustState,
-      protocolVersion: negotiatedVersion,
-    );
+    final existingSession = state.sessions[identity.peerId];
+    final isAlreadyConnected = existingSession != null && existingSession.status == SessionStatus.connected;
 
     final updatedSession = PeerSession(
       peerId: identity.peerId,
       displayName: identity.displayName,
       endpointId: identity.endpointId,
-      status: isV1 ? SessionStatus.connected : SessionStatus.handshaking,
+      status: isAlreadyConnected
+          ? SessionStatus.connected
+          : (isV1 ? SessionStatus.connected : SessionStatus.handshaking),
       publicKey: identity.identityPublicKeyHex,
       fingerprint: remoteFingerprint,
       trustState: trustState,
       isSecure: true,
       negotiatedVersion: negotiatedVersion,
-      enabledCapabilities: isV1 ? negotiatedCapabilities : null,
+      enabledCapabilities: isAlreadyConnected
+          ? existingSession.enabledCapabilities
+          : (isV1 ? negotiatedCapabilities : null),
       remoteMinVersion: remoteMin,
       remoteMaxVersion: remoteMax,
       remoteCapabilities: remoteCapabilities,
     );
 
+    // Sync in-memory state immediately (synchronously) before any asynchronous DB writes
     state = state.copyWith(
       sessions: {
         ...state.sessions,
@@ -1436,6 +1442,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
         ...state.endpointToPeerId,
         identity.endpointId: identity.peerId,
       },
+    );
+
+    // 4. Update database peer record
+    await repo.upsertPeer(
+      identity.peerId,
+      identity.displayName,
+      endpointId: identity.endpointId,
+      publicKey: identity.identityPublicKeyHex,
+      fingerprint: remoteFingerprint,
+      trustState: trustState,
+      protocolVersion: negotiatedVersion,
     );
 
     print('[VANTRA][SECURITY] STATE: SECURE with peer ${identity.peerId} (SessionId: ${derivedKeys.sessionId}, NegotiatedVersion: $negotiatedVersion)');
