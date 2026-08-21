@@ -385,6 +385,8 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Set<String> _activeConnectLocks = {};
   final Set<String> _aliveEndpoints = {};
   final Map<String, Timer> _handshakeTimers = {};
+  final Map<String, Timer> _lockReleaseTimers = {};
+  final Map<String, String> _endpointNames = {};
 
   StreamSubscription? _discoveredPeersSub;
   final Map<String, DateTime> _lastConnectAttempt = {};
@@ -507,6 +509,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
       _receiveTimeoutTimers.clear();
       _receiveChunkSizes.clear();
+
+      for (final t in _lockReleaseTimers.values) {
+        t.cancel();
+      }
+      _lockReleaseTimers.clear();
     });
 
     // Persistent Recovery on App Boot
@@ -833,9 +840,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         connectionStatus: ConnectionStatus.connected,
       );
 
-      print('[HANDSHAKE_TIMER][CANCEL] endpointId=$endpointId reason=capabilities_negotiation_complete sessionStatus=${readySession.status.name} isSecure=${readySession.isSecure}');
-      _handshakeTimers[endpointId]?.cancel();
-      _handshakeTimers.remove(endpointId);
+      _completeSecureHandshake(endpointId, peerId, 'capabilities_exchange_success');
 
       _printHandshakeTrace('CapabilitiesExchange received and verified', endpointId: endpointId, peerId: peerId);
 
@@ -1421,6 +1426,24 @@ class MessagingNotifier extends Notifier<MessagingState> {
     print('[VANTRA][SECURITY] STATE: KEY_DERIVED');
     print('[VANTRA][SECURITY] KEY DERIVATION DETAILS: sharedSecretFingerprint=${derivedKeys.sharedSecretFingerprint}, sessionId=${derivedKeys.sessionId}');
 
+    // Version range negotiation
+    final localMin = kMinSupportedProtocolVersion;
+    final localMax = kCurrentProtocolVersion;
+    final remoteMin = identity.minSupportedVersion ?? 1;
+    final remoteMax = identity.maxSupportedVersion ?? 1;
+
+    final start = localMin > remoteMin ? localMin : remoteMin;
+    final end = localMax < remoteMax ? localMax : remoteMax;
+
+    if (start > end) {
+      print('[VANTRA][SECURITY] Incompatible version range: local [$localMin..$localMax], remote [$remoteMin..$remoteMax]. Disconnecting.');
+      final transport = ref.read(transportProvider);
+      await transport.disconnect(identity.endpointId);
+      return;
+    }
+    final negotiatedVersion = end;
+    final isV1 = negotiatedVersion == 1;
+
     // 3. Establish secure session in memory
     final secSession = SecuritySession(
       peerId: identity.peerId,
@@ -1441,8 +1464,9 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     _securitySessions[identity.peerId] = secSession;
-    _handshakeTimers[identity.endpointId]?.cancel();
-    _activeConnectLocks.remove(identity.peerId);
+    if (isV1) {
+      _completeSecureHandshake(identity.endpointId, identity.peerId, 'secure_identity_v1');
+    }
     _reconnectBackoff.remove(identity.peerId);
     _lastConnectAttempt.remove(identity.peerId);
 
@@ -1452,24 +1476,6 @@ class MessagingNotifier extends Notifier<MessagingState> {
     print('[VANTRA][CRYPTO] SESSION READY endpointId=${identity.endpointId} sessionId=${derivedKeys.sessionId} securityState=SECURE');
     print('[VANTRA][CONNECTION] SESSION_READY: peerId=${identity.peerId}, endpointId=${identity.endpointId}, sessionId=${derivedKeys.sessionId}');
     print('[VANTRA][SESSION] peer=${identity.peerId} state=SECURE');
-
-    // Version range negotiation
-    final localMin = kMinSupportedProtocolVersion;
-    final localMax = kCurrentProtocolVersion;
-    final remoteMin = identity.minSupportedVersion ?? 1;
-    final remoteMax = identity.maxSupportedVersion ?? 1;
-
-    final start = localMin > remoteMin ? localMin : remoteMin;
-    final end = localMax < remoteMax ? localMax : remoteMax;
-
-    if (start > end) {
-      print('[VANTRA][SECURITY] Incompatible version range: local [$localMin..$localMax], remote [$remoteMin..$remoteMax]. Disconnecting.');
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
-      return;
-    }
-    final negotiatedVersion = end;
-    final isV1 = negotiatedVersion == 1;
 
     final localCapabilities = const [
       VantraCapability.text,
@@ -1610,15 +1616,39 @@ class MessagingNotifier extends Notifier<MessagingState> {
           _reconnectBackoff[peerId] = Duration(seconds: (backoff.inSeconds * 2).clamp(1, 60));
 
           print('[VANTRA][RETRY] peer=$peerId retry_in=${_reconnectBackoff[peerId]!.inSeconds}s');
+          print('[VANTRA][CONNECTION][DEBUG] CONNECT_REQUEST_START endpointId=${peer.endpointId} peerId=$peerId localRole=INITIATOR discovered=${_lastDiscoveredList.any((p) => p.endpointId == peer.endpointId)} connecting=${peer.isConnecting} connected=${peer.isConnected}');
           print('[VANTRA][CONNECTION] REQUEST_START: endpointId=${peer.endpointId}, localName=${localIdentity.displayName}:${localIdentity.peerId}, mode=AUTO_CONNECT');
           print('[VANTRA][NEARBY] CONNECT_ATTEMPT endpointId=${peer.endpointId}');
           ref.read(peerDiscoveryServiceProvider).connect(
             peer.endpointId,
             localName: '${localIdentity.displayName}:${localIdentity.peerId}',
           ).then((_) {
+            print('[VANTRA][CONNECTION][DEBUG] CONNECT_REQUEST_SUCCESS endpointId=${peer.endpointId} peerId=$peerId');
             print('[VANTRA][CONNECTION] REQUEST_SUCCESS: endpointId=${peer.endpointId}');
+            // FIX: If requestConnection() returned true but the native onConnectionInitiated
+            // callback never fires (transient Nearby rejection / stale native session),
+            // the lock would be held forever, permanently suppressing future retries.
+            // Release the lock after 12 seconds if the session is still not connected.
+            // The handshake watchdog fires at 15s independently; this release ensures
+            // the reconnect loop can try again on the next 2-second tick.
+            _lockReleaseTimers[peerId]?.cancel();
+            _lockReleaseTimers[peerId] = Timer(const Duration(seconds: 12), () {
+              _lockReleaseTimers.remove(peerId);
+              final currentSession = state.sessions[peerId];
+              final isNowConnected = currentSession != null &&
+                  (currentSession.status == SessionStatus.connected ||
+                   currentSession.status == SessionStatus.handshaking) &&
+                  currentSession.endpointId == peer.endpointId;
+              if (!isNowConnected) {
+                final wasRemoved = _activeConnectLocks.remove(peerId);
+                if (wasRemoved) {
+                  print('[VANTRA][CONNECTION][DEBUG] LOCK_RELEASED_TIMEOUT peerId=$peerId endpointId=${peer.endpointId} reason=native_callback_never_fired sessionStatus=${currentSession?.status.name ?? "none"}');
+                }
+              }
+            });
           }).catchError((e) {
             _activeConnectLocks.remove(peerId);
+            print('[VANTRA][CONNECTION][DEBUG] CONNECT_REQUEST_EXCEPTION endpointId=${peer.endpointId} peerId=$peerId error=$e');
             print('[VANTRA][CONNECTION] REQUEST_ERROR: endpointId=${peer.endpointId}, error=$e');
             print('[VANTRA][NEARBY] Auto-connect failed to connect for endpointId=${peer.endpointId}: $e');
           });
@@ -1632,9 +1662,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
     // Unconditional standard prints for diagnostic logging
     print('[VANTRA][SECURITY] CONNECTION UPDATE: endpointId=${update.endpointId}, status=${update.status.name}');
 
-    final index = update.endpointName.lastIndexOf(':');
-    final candidateName = index != -1 ? update.endpointName.substring(0, index) : update.endpointName;
-    final candidatePeerId = index != -1 ? update.endpointName.substring(index + 1) : null;
+    final resolvedEndpointName = update.endpointName.contains(':')
+        ? update.endpointName
+        : (_endpointNames[update.endpointId] ?? update.endpointName);
+    final index = resolvedEndpointName.lastIndexOf(':');
+    final candidateName = index != -1 ? resolvedEndpointName.substring(0, index) : resolvedEndpointName;
+    final candidatePeerId = index != -1 ? resolvedEndpointName.substring(index + 1) : null;
 
     _printHandshakeTrace('_handleConnectionUpdate start', endpointId: update.endpointId, peerId: candidatePeerId);
 
@@ -1765,6 +1798,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
     } else if (update.status == ConnectionStatus.connecting) {
       _aliveEndpoints.add(update.endpointId);
+      _endpointNames[update.endpointId] = update.endpointName;
       _printHandshakeTrace('ConnectionStatus.connecting received', endpointId: update.endpointId, peerId: candidatePeerId);
       print('[VANTRA][PIPELINE] CONNECTION_CONNECTING endpoint=${update.endpointId} peerId=$candidatePeerId');
       print('[VANTRA][CONNECTION] REQUEST_RECEIVED: endpointId=${update.endpointId}, peerName=$candidateName, direction=${update.isIncoming ? "incoming" : "outgoing"}');
@@ -1884,6 +1918,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         update.status == ConnectionStatus.rejected ||
         update.status == ConnectionStatus.error) {
       _aliveEndpoints.remove(update.endpointId);
+      _endpointNames.remove(update.endpointId);
       _invalidateRoutesViaEndpoint(update.endpointId);
       print('[VANTRA][CONNECTION] DISCONNECTED endpoint=${update.endpointId} reason=${update.status.name}');
       if (update.status == ConnectionStatus.disconnected) {
@@ -2071,6 +2106,22 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final repo = ref.read(messagingRepositoryProvider);
     await repo.updatePeerTrustState(peerId, PeerTrustState.distrusted);
     state = state.copyWith(clearIdentityMismatchRequest: true);
+  }
+
+  void _completeSecureHandshake(String endpointId, String peerId, String source) {
+    print('[VANTRA][HANDSHAKE][COMPLETE] endpoint=$endpointId peerId=$peerId source=$source');
+    
+    if (_handshakeTimers.containsKey(endpointId)) {
+      print('[VANTRA][HANDSHAKE][WATCHDOG_CANCEL] endpoint=$endpointId');
+      _handshakeTimers[endpointId]?.cancel();
+      _handshakeTimers.remove(endpointId);
+    }
+    
+    _activeConnectLocks.remove(peerId);
+    _lockReleaseTimers[peerId]?.cancel();
+    _lockReleaseTimers.remove(peerId);
+    
+    print('[VANTRA][HANDSHAKE][STATE_SYNC] sessionsCount=${state.sessions.length} endpointMappingsCount=${state.endpointToPeerId.length}');
   }
 
   Future<void> _initiateSecureHandshake(String endpointId) async {

@@ -238,7 +238,22 @@ class NearbyTransport implements Transport {
   Future<void> connect(String localName, String endpointId) async {
     VantraLogger.log('NearbyTransport: connect to $endpointId');
     print('[VANTRA][NEARBY][CONNECTION] endpoint=$endpointId CONNECTING');
+    print('[VANTRA][CONNECTION][DEBUG] CONNECT_REQUEST_START endpointId=$endpointId localName=$localName transportState=ready');
     print('[VANTRA][CONNECTION] REQUEST_START: endpointId=$endpointId, localName=$localName');
+
+    // FIX: Disconnect any stale native Nearby session for this endpoint before
+    // calling requestConnection(). If a prior requestConnection() returned true
+    // but its onConnectionInitiated callback was never delivered (e.g., due to a
+    // Nearby internal dedup or foreground/background transition), the native layer
+    // considers a session already in-flight and silently rejects a new request.
+    // Calling disconnectFromEndpoint first clears that stale state.
+    try {
+      await _nearby.disconnectFromEndpoint(endpointId);
+      print('[VANTRA][CONNECTION][DEBUG] STALE_DISCONNECT_OK endpointId=$endpointId');
+    } catch (_) {
+      // Not connected — expected for the first attempt; ignore silently.
+    }
+
     try {
       final result = await _nearby.requestConnection(
         localName,
@@ -246,6 +261,7 @@ class NearbyTransport implements Transport {
         onConnectionInitiated: (id, info) {
           VantraLogger.log('NearbyTransport: Connection initiated with $id (${info.endpointName})');
           print('[VANTRA][NEARBY][REQUEST] incoming endpoint=$id');
+          print('[VANTRA][CONNECTION][DEBUG] CONNECTION_INITIATED endpointId=$id peerName=${info.endpointName} isIncoming=${info.isIncomingConnection}');
           print('[VANTRA][CONNECTION] CALLBACK_STATUS=CONNECTING: endpointId=$id, peerId=null, state=connecting');
           print('[VANTRA][CONNECTION] REQUEST_RECEIVED: endpointId=$id, peerName=${info.endpointName}, direction=${info.isIncomingConnection ? "incoming" : "outgoing"}');
           print('[VANTRA][NEARBY] CONNECTION_INITIATED endpoint=$id name=${info.endpointName}');
@@ -260,10 +276,13 @@ class NearbyTransport implements Transport {
         },
         onConnectionResult: (id, status) {
           VantraLogger.log('NearbyTransport: Connection result for $id: $status');
+          // Log the EXACT native status code integer for diagnostic purposes
+          print('[VANTRA][CONNECTION][DEBUG] CONNECTION_RESULT endpointId=$id nativeStatus=${status.name} nativeStatusCode=${status.index}');
           print('[VANTRA][CONNECTION] CALLBACK_STATUS=${status.name}: endpointId=$id');
           print('[VANTRA][NEARBY] CONNECTION_RESULT endpoint=$id status=$status');
           if (status == Status.CONNECTED) {
             print('[VANTRA][NEARBY][CONNECTION] endpoint=$id CONNECTED');
+            print('[VANTRA][CONNECTION][DEBUG] CONNECTION_CONNECTED endpointId=$id');
             print('[VANTRA][CONNECTION] NATIVE_STATUS_CONNECTED: endpointId=$id');
             _connectionUpdateController.add(ConnectionUpdate(
               endpointId: id,
@@ -272,6 +291,7 @@ class NearbyTransport implements Transport {
             ));
           } else if (status == Status.REJECTED) {
             print('[VANTRA][NEARBY][REQUEST] rejected endpoint=$id');
+            print('[VANTRA][CONNECTION][DEBUG] CONNECTION_REJECTED endpointId=$id nativeStatus=${status.name}');
             _connectionUpdateController.add(ConnectionUpdate(
               endpointId: id,
               status: ConnectionStatus.rejected,
@@ -279,6 +299,7 @@ class NearbyTransport implements Transport {
             ));
           } else {
             print('[VANTRA][NEARBY][CONNECTION] endpoint=$id FAILED code=$status');
+            print('[VANTRA][CONNECTION][DEBUG] CONNECTION_FAILED endpointId=$id nativeStatus=${status.name} nativeStatusCode=${status.index}');
             _connectionUpdateController.add(ConnectionUpdate(
               endpointId: id,
               status: ConnectionStatus.error,
@@ -290,6 +311,7 @@ class NearbyTransport implements Transport {
         onDisconnected: (id) {
           VantraLogger.log('NearbyTransport: Disconnected from $id');
           print('[VANTRA][NEARBY][CONNECTION] endpoint=$id DISCONNECTED');
+          print('[VANTRA][CONNECTION][DEBUG] CONNECTION_DISCONNECTED endpointId=$id');
           print('[VANTRA][CONNECTION] CALLBACK_STATUS=DISCONNECTED: endpointId=$id');
           print('[VANTRA][PIPELINE] STATE_INVALIDATION source=onDisconnected_connect endpoint=$id peerId=unknown reason=Native disconnected callback');
           _connectionUpdateController.add(ConnectionUpdate(
@@ -301,16 +323,20 @@ class NearbyTransport implements Transport {
       );
       if (!result) {
         print('[VANTRA][NEARBY][CONNECTION] endpoint=$endpointId FAILED code=requestConnection_returned_false');
+        print('[VANTRA][CONNECTION][DEBUG] CONNECTION_FAILED endpointId=$endpointId nativeStatus=requestConnection_returned_false');
         print('[VANTRA][CONNECTION] REQUEST_ERROR: endpointId=$endpointId, error=requestConnection returned false');
         throw const VantraException('Failed to request connection');
       }
+      print('[VANTRA][CONNECTION][DEBUG] CONNECT_REQUEST_SUCCESS endpointId=$endpointId');
       print('[VANTRA][CONNECTION] REQUEST_SUCCESS: endpointId=$endpointId');
     } catch (e) {
       print('[VANTRA][NEARBY][CONNECTION] endpoint=$endpointId FAILED code=$e');
+      print('[VANTRA][CONNECTION][DEBUG] CONNECT_REQUEST_EXCEPTION endpointId=$endpointId error=$e');
       print('[VANTRA][CONNECTION] REQUEST_ERROR: endpointId=$endpointId, error=$e');
       rethrow;
     }
   }
+
 
   @override
   Future<void> acceptConnection(String endpointId) async {
