@@ -240,21 +240,8 @@ class NearbyTransport implements Transport {
     print('[VANTRA][NEARBY][CONNECTION] endpoint=$endpointId CONNECTING');
     print('[VANTRA][CONNECTION][DEBUG] CONNECT_REQUEST_START endpointId=$endpointId localName=$localName transportState=ready');
     print('[VANTRA][CONNECTION] REQUEST_START: endpointId=$endpointId, localName=$localName');
-
-    // FIX: Disconnect any stale native Nearby session for this endpoint before
-    // calling requestConnection(). If a prior requestConnection() returned true
-    // but its onConnectionInitiated callback was never delivered (e.g., due to a
-    // Nearby internal dedup or foreground/background transition), the native layer
-    // considers a session already in-flight and silently rejects a new request.
-    // Calling disconnectFromEndpoint first clears that stale state.
     try {
-      await _nearby.disconnectFromEndpoint(endpointId);
-      print('[VANTRA][CONNECTION][DEBUG] STALE_DISCONNECT_OK endpointId=$endpointId');
-    } catch (_) {
-      // Not connected — expected for the first attempt; ignore silently.
-    }
-
-    try {
+      print('[VANTRA][CONNECTION][NATIVE_REQUEST_START]\nendpointId=$endpointId');
       final result = await _nearby.requestConnection(
         localName,
         endpointId,
@@ -321,6 +308,7 @@ class NearbyTransport implements Transport {
           ));
         },
       );
+      print('[VANTRA][CONNECTION][NATIVE_REQUEST_RETURN]\nendpointId=$endpointId\nresult=$result');
       if (!result) {
         print('[VANTRA][NEARBY][CONNECTION] endpoint=$endpointId FAILED code=requestConnection_returned_false');
         print('[VANTRA][CONNECTION][DEBUG] CONNECTION_FAILED endpointId=$endpointId nativeStatus=requestConnection_returned_false');
