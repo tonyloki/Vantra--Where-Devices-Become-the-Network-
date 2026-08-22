@@ -14,6 +14,8 @@ import 'package:vantra/core/protocol/protocol_message.dart';
 import 'package:vantra/core/protocol/protocol_version.dart';
 import 'package:vantra/core/protocol/protobuf_codec.dart';
 import 'package:vantra/core/security/crypto_service.dart';
+import 'package:cryptography/cryptography.dart';
+import 'package:vantra/core/security/security_session.dart';
 import 'test_fakes.dart';
 
 void main() {
@@ -457,6 +459,311 @@ void main() {
         expect(notifier.securitySessions[remotePeerId], isNull);
       });
     });
+
+    testWidgets('Watchdog regression test A: SESSION_DERIVED alone does NOT cancel the initial watchdog', (WidgetTester tester) async {
+      await tester.runAsync(() async {
+        final mockTransport = FakeTransport();
+        final mockDb = AppDatabase.forTesting(NativeDatabase.memory());
+        final mockCrypto = DelayedCryptoService(delay: const Duration(milliseconds: 300));
+        final mockSecureStorage = FakeSecureStorageService();
+        final mockPrefs = await SharedPreferences.getInstance();
+
+        final mockContainer = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(mockPrefs),
+            transportProvider.overrideWithValue(mockTransport),
+            appDatabaseProvider.overrideWithValue(mockDb),
+            secureStorageServiceProvider.overrideWithValue(mockSecureStorage),
+            cryptoServiceProvider.overrideWithValue(mockCrypto),
+          ],
+        );
+        addTearDown(() async {
+          await mockDb.close();
+          mockContainer.dispose();
+        });
+
+        await mockContainer.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
+        final notifier = mockContainer.read(messagingStateProvider.notifier);
+
+        notifier.handshakeWatchdogDuration = const Duration(milliseconds: 150);
+
+        mockTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'RemotePeer:remote-peer-uuid',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final remoteIdentityKeyPair = await mockCrypto.generateIdentityKeyPair();
+        final remoteEphemeralKeyPair = await mockCrypto.generateEphemeralKeyPair();
+        final remoteIdPub = await remoteIdentityKeyPair.extractPublicKey();
+        final remoteEphPub = await remoteEphemeralKeyPair.extractPublicKey();
+        final remotePeerId = 'remote-peer-uuid';
+
+        final sigBytes = await mockCrypto.signHandshake(
+          identityKeyPair: remoteIdentityKeyPair,
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKeyBytes: remoteIdPub.bytes,
+          ephemeralPublicKeyBytes: remoteEphPub.bytes,
+        );
+
+        final handshakePayload = DomainHandshakePayload(
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+          ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+          signature: Uint8List.fromList(sigBytes),
+          minSupportedVersion: 2,
+          maxSupportedVersion: 2,
+        );
+
+        mockTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
+        
+        // Wait 100ms. Key derivation completes (logging SESSION_DERIVED), but Double Ratchet takes 300ms.
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        // The watchdog is still active.
+        expect(notifier.handshakeTimers.containsKey('QHZD'), isTrue);
+
+        // Wait another 100ms (total 200ms). The 150ms watchdog should fire and disconnect.
+        await Future.delayed(const Duration(milliseconds: 100));
+        expect(mockTransport.disconnectCalled, isTrue);
+        expect(mockTransport.disconnectedTarget, equals('QHZD'));
+      });
+    });
+
+    testWidgets('Watchdog regression test B: Successful Double Ratchet init cancels the watchdog', (WidgetTester tester) async {
+      await tester.runAsync(() async {
+        final mockTransport = FakeTransport();
+        final mockDb = AppDatabase.forTesting(NativeDatabase.memory());
+        final mockCrypto = CryptoService();
+        final mockSecureStorage = FakeSecureStorageService();
+        final mockPrefs = await SharedPreferences.getInstance();
+
+        final mockContainer = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(mockPrefs),
+            transportProvider.overrideWithValue(mockTransport),
+            appDatabaseProvider.overrideWithValue(mockDb),
+            secureStorageServiceProvider.overrideWithValue(mockSecureStorage),
+            cryptoServiceProvider.overrideWithValue(mockCrypto),
+          ],
+        );
+        addTearDown(() async {
+          await mockDb.close();
+          mockContainer.dispose();
+        });
+
+        await mockContainer.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
+        final notifier = mockContainer.read(messagingStateProvider.notifier);
+
+        notifier.handshakeWatchdogDuration = const Duration(milliseconds: 500);
+
+        mockTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'RemotePeer:remote-peer-uuid',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final remoteIdentityKeyPair = await mockCrypto.generateIdentityKeyPair();
+        final remoteEphemeralKeyPair = await mockCrypto.generateEphemeralKeyPair();
+        final remoteIdPub = await remoteIdentityKeyPair.extractPublicKey();
+        final remoteEphPub = await remoteEphemeralKeyPair.extractPublicKey();
+        final remotePeerId = 'remote-peer-uuid';
+
+        final sigBytes = await mockCrypto.signHandshake(
+          identityKeyPair: remoteIdentityKeyPair,
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKeyBytes: remoteIdPub.bytes,
+          ephemeralPublicKeyBytes: remoteEphPub.bytes,
+        );
+
+        final handshakePayload = DomainHandshakePayload(
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+          ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+          signature: Uint8List.fromList(sigBytes),
+          minSupportedVersion: 2,
+          maxSupportedVersion: 2,
+        );
+
+        mockTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
+        await Future.delayed(const Duration(milliseconds: 150));
+
+        // Watchdog should be cancelled
+        expect(notifier.handshakeTimers.containsKey('QHZD'), isFalse);
+        expect(notifier.securitySessions[remotePeerId], isNotNull);
+
+        // Advance beyond watchdog duration and verify no disconnect occurs
+        await Future.delayed(const Duration(milliseconds: 400));
+        expect(mockTransport.disconnectCalled, isFalse);
+      });
+    });
+
+    testWidgets('Watchdog regression test C: Double Ratchet failure is visible and cleans up', (WidgetTester tester) async {
+      await tester.runAsync(() async {
+        final mockTransport = FakeTransport();
+        final mockDb = AppDatabase.forTesting(NativeDatabase.memory());
+        final mockCrypto = FailingCryptoService();
+        final mockSecureStorage = FakeSecureStorageService();
+        final mockPrefs = await SharedPreferences.getInstance();
+
+        final mockContainer = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(mockPrefs),
+            transportProvider.overrideWithValue(mockTransport),
+            appDatabaseProvider.overrideWithValue(mockDb),
+            secureStorageServiceProvider.overrideWithValue(mockSecureStorage),
+            cryptoServiceProvider.overrideWithValue(mockCrypto),
+          ],
+        );
+        addTearDown(() async {
+          await mockDb.close();
+          mockContainer.dispose();
+        });
+
+        await mockContainer.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
+        final notifier = mockContainer.read(messagingStateProvider.notifier);
+
+        mockTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'RemotePeer:remote-peer-uuid',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final remoteIdentityKeyPair = await mockCrypto.generateIdentityKeyPair();
+        final remoteEphemeralKeyPair = await mockCrypto.generateEphemeralKeyPair();
+        final remoteIdPub = await remoteIdentityKeyPair.extractPublicKey();
+        final remoteEphPub = await remoteEphemeralKeyPair.extractPublicKey();
+        final remotePeerId = 'remote-peer-uuid';
+
+        final sigBytes = await mockCrypto.signHandshake(
+          identityKeyPair: remoteIdentityKeyPair,
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKeyBytes: remoteIdPub.bytes,
+          ephemeralPublicKeyBytes: remoteEphPub.bytes,
+        );
+
+        final handshakePayload = DomainHandshakePayload(
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+          ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+          signature: Uint8List.fromList(sigBytes),
+          minSupportedVersion: 2,
+          maxSupportedVersion: 2,
+        );
+
+        mockTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Should clean up and disconnect immediately
+        expect(mockTransport.disconnectCalled, isTrue);
+        expect(mockTransport.disconnectedTarget, equals('QHZD'));
+        expect(notifier.securitySessions[remotePeerId], isNull);
+      });
+    });
+
+    testWidgets('Watchdog regression test D: Secure registered session cannot be destroyed by stale watchdog', (WidgetTester tester) async {
+      await tester.runAsync(() async {
+        final mockTransport = FakeTransport();
+        final mockDb = AppDatabase.forTesting(NativeDatabase.memory());
+        final mockCrypto = CryptoService();
+        final mockSecureStorage = FakeSecureStorageService();
+        final mockPrefs = await SharedPreferences.getInstance();
+
+        final mockContainer = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(mockPrefs),
+            transportProvider.overrideWithValue(mockTransport),
+            appDatabaseProvider.overrideWithValue(mockDb),
+            secureStorageServiceProvider.overrideWithValue(mockSecureStorage),
+            cryptoServiceProvider.overrideWithValue(mockCrypto),
+          ],
+        );
+        addTearDown(() async {
+          await mockDb.close();
+          mockContainer.dispose();
+        });
+
+        await mockContainer.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
+        final notifier = mockContainer.read(messagingStateProvider.notifier);
+
+        notifier.handshakeWatchdogDuration = const Duration(milliseconds: 100);
+
+        mockTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'RemotePeer:remote-peer-uuid',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // Artificially populate a secure session and mapping
+        final remotePeerId = 'remote-peer-uuid';
+        final mockSession = SecuritySession(
+          peerId: remotePeerId,
+          endpointId: 'QHZD',
+          sessionId: 'mock-session-id',
+          sessionSalt: [],
+          remoteIdentityPublicKey: 'mock-key',
+          remoteFingerprint: 'mock-fp',
+          sendKey: SecretKey([]),
+          receiveKey: SecretKey([]),
+        );
+        notifier.securitySessions[remotePeerId] = mockSession;
+
+        // Wait for the watchdog to fire (150ms)
+        await Future.delayed(const Duration(milliseconds: 150));
+
+        // It should skip disconnecting because currentSecSession is not null
+        expect(mockTransport.disconnectCalled, isFalse);
+      });
+    });
   });
+}
+
+class DelayedCryptoService extends CryptoService {
+  final Duration delay;
+  DelayedCryptoService({required this.delay});
+
+  @override
+  Future<void> initializeDoubleRatchet({
+    required SecuritySession session,
+    required SimpleKeyPair handshakeLocalKeyPair,
+    required List<int> handshakeRemotePublicKeyBytes,
+    required bool isDeviceA,
+  }) async {
+    await Future.delayed(delay);
+    await super.initializeDoubleRatchet(
+      session: session,
+      handshakeLocalKeyPair: handshakeLocalKeyPair,
+      handshakeRemotePublicKeyBytes: handshakeRemotePublicKeyBytes,
+      isDeviceA: isDeviceA,
+    );
+  }
+}
+
+class FailingCryptoService extends CryptoService {
+  @override
+  Future<void> initializeDoubleRatchet({
+    required SecuritySession session,
+    required SimpleKeyPair handshakeLocalKeyPair,
+    required List<int> handshakeRemotePublicKeyBytes,
+    required bool isDeviceA,
+  }) async {
+    throw Exception("Simulated Double Ratchet failure");
+  }
 }
 
