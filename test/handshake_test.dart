@@ -257,5 +257,206 @@ void main() {
       expect(state.sessions['immediate-peer-id'], isNotNull);
       expect(state.sessions['immediate-peer-id']!.endpointId, equals('QHZD'));
     });
+
+    testWidgets('Watchdog regression test: initial handshake and capability watchdog lifecycle', (WidgetTester tester) async {
+      await tester.runAsync(() async {
+        // Set up fresh mock context
+        final mockTransport = FakeTransport();
+        final mockDb = AppDatabase.forTesting(NativeDatabase.memory());
+        final mockCrypto = CryptoService();
+        final mockSecureStorage = FakeSecureStorageService();
+        final mockPrefs = await SharedPreferences.getInstance();
+
+        final mockContainer = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(mockPrefs),
+            transportProvider.overrideWithValue(mockTransport),
+            appDatabaseProvider.overrideWithValue(mockDb),
+            secureStorageServiceProvider.overrideWithValue(mockSecureStorage),
+          ],
+        );
+        addTearDown(() async {
+          await mockDb.close();
+          mockContainer.dispose();
+        });
+
+        await mockContainer.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
+        final notifier = mockContainer.read(messagingStateProvider.notifier);
+
+        // Configure watchdog timers for testing: initial handshake is short (200ms), capability watchdog is longer (2s)
+        notifier.handshakeWatchdogDuration = const Duration(milliseconds: 200);
+        notifier.capabilityWatchdogDuration = const Duration(seconds: 2);
+
+        // 1. CONNECTED arms initial watchdog.
+        mockTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'RemotePeer:remote-peer-uuid',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        expect(notifier.handshakeTimers.containsKey('QHZD'), isTrue);
+        expect(notifier.capabilityWatchdogTimers.containsKey('QHZD'), isFalse);
+
+        // 2. KEY_DERIVED registers secure session.
+        final remoteIdentityKeyPair = await mockCrypto.generateIdentityKeyPair();
+        final remoteEphemeralKeyPair = await mockCrypto.generateEphemeralKeyPair();
+        final remoteIdPub = await remoteIdentityKeyPair.extractPublicKey();
+        final remoteEphPub = await remoteEphemeralKeyPair.extractPublicKey();
+        final remotePeerId = 'remote-peer-uuid';
+
+        final sigBytes = await mockCrypto.signHandshake(
+          identityKeyPair: remoteIdentityKeyPair,
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKeyBytes: remoteIdPub.bytes,
+          ephemeralPublicKeyBytes: remoteEphPub.bytes,
+        );
+
+        final handshakePayload = DomainHandshakePayload(
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+          ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+          signature: Uint8List.fromList(sigBytes),
+          minSupportedVersion: 2,
+          maxSupportedVersion: 2,
+        );
+
+        // Trigger handshake payload (key derivation)
+        mockTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // 3. Initial watchdog is cancelled.
+        // 4. Capability watchdog is started.
+        expect(notifier.handshakeTimers.containsKey('QHZD'), isFalse);
+        expect(notifier.capabilityWatchdogTimers.containsKey('QHZD'), isTrue);
+        expect(notifier.securitySessions[remotePeerId], isNotNull);
+
+        // 5. Advancing beyond the original watchdog duration (200ms) does NOT disconnect.
+        await Future.delayed(const Duration(milliseconds: 250));
+        expect(mockTransport.disconnectCalled, isFalse);
+
+        // 6. Successful CapabilitiesExchange cancels capability watchdog.
+        final secSession = notifier.securitySessions[remotePeerId]!;
+        final capabilitiesPayload = DomainCapabilitiesExchange(
+          messageId: const Uuid().v4(),
+          sessionId: secSession.sessionId,
+          sequence: 1,
+          timestampMs: DateTime.now().millisecondsSinceEpoch,
+          senderId: remotePeerId,
+          receiverId: mockContainer.read(localIdentityStateProvider).peerId,
+          minSupportedVersion: 2,
+          maxSupportedVersion: 2,
+          supportedCapabilities: const [VantraCapability.text],
+        );
+
+        final encBytes = await mockCrypto.encryptBytes(
+          secretKey: secSession.receiveKey,
+          sessionSalt: secSession.sessionSalt,
+          sequence: 1,
+          messageId: capabilitiesPayload.messageId,
+          plaintextBytes: codec.encodePlaintext(capabilitiesPayload),
+        );
+
+        final encryptedEnvelope = DomainEncryptedEnvelope(
+          protocolVersion: kCurrentProtocolVersion,
+          messageId: capabilitiesPayload.messageId,
+          sessionId: secSession.sessionId,
+          sequence: 1,
+          nonce: Uint8List.fromList(encBytes.nonce),
+          ciphertext: Uint8List.fromList(encBytes.ciphertext),
+          mac: Uint8List.fromList(encBytes.mac),
+        );
+
+        mockTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(encryptedEnvelope));
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Watchdog must be cancelled
+        expect(notifier.capabilityWatchdogTimers.containsKey('QHZD'), isFalse);
+        expect(mockContainer.read(messagingStateProvider).sessions[remotePeerId]!.status, equals(SessionStatus.connected));
+
+        // 7. Advancing beyond capability watchdog after successful negotiation does NOT disconnect.
+        await Future.delayed(const Duration(milliseconds: 2500));
+        expect(mockTransport.disconnectCalled, isFalse);
+      });
+    });
+
+    testWidgets('Watchdog regression test: capability watchdog timeout performs cleanup', (WidgetTester tester) async {
+      await tester.runAsync(() async {
+        final mockTransport = FakeTransport();
+        final mockDb = AppDatabase.forTesting(NativeDatabase.memory());
+        final mockCrypto = CryptoService();
+        final mockSecureStorage = FakeSecureStorageService();
+        final mockPrefs = await SharedPreferences.getInstance();
+
+        final mockContainer = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(mockPrefs),
+            transportProvider.overrideWithValue(mockTransport),
+            appDatabaseProvider.overrideWithValue(mockDb),
+            secureStorageServiceProvider.overrideWithValue(mockSecureStorage),
+          ],
+        );
+        addTearDown(() async {
+          await mockDb.close();
+          mockContainer.dispose();
+        });
+
+        await mockContainer.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
+        final notifier = mockContainer.read(messagingStateProvider.notifier);
+
+        // For this test, initial handshake watchdog is long (5s), capability watchdog is short (200ms)
+        notifier.handshakeWatchdogDuration = const Duration(seconds: 5);
+        notifier.capabilityWatchdogDuration = const Duration(milliseconds: 200);
+
+        mockTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'RemotePeer:remote-peer-uuid',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final remoteIdentityKeyPair = await mockCrypto.generateIdentityKeyPair();
+        final remoteEphemeralKeyPair = await mockCrypto.generateEphemeralKeyPair();
+        final remoteIdPub = await remoteIdentityKeyPair.extractPublicKey();
+        final remoteEphPub = await remoteEphemeralKeyPair.extractPublicKey();
+        final remotePeerId = 'remote-peer-uuid';
+
+        final sigBytes = await mockCrypto.signHandshake(
+          identityKeyPair: remoteIdentityKeyPair,
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKeyBytes: remoteIdPub.bytes,
+          ephemeralPublicKeyBytes: remoteEphPub.bytes,
+        );
+
+        final handshakePayload = DomainHandshakePayload(
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemotePeer',
+          identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+          ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+          signature: Uint8List.fromList(sigBytes),
+          minSupportedVersion: 2,
+          maxSupportedVersion: 2,
+        );
+
+        mockTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakePayload));
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        expect(notifier.capabilityWatchdogTimers.containsKey('QHZD'), isTrue);
+
+        // 8. Capability timeout before negotiation still performs the expected cleanup (disconnects QHZD)
+        await Future.delayed(const Duration(milliseconds: 250));
+        expect(mockTransport.disconnectCalled, isTrue);
+        expect(mockTransport.disconnectedTarget, equals('QHZD'));
+        expect(notifier.securitySessions[remotePeerId], isNull);
+      });
+    });
   });
 }
+

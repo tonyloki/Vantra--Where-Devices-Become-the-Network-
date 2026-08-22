@@ -388,6 +388,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
   final Map<String, Timer> _lockReleaseTimers = {};
   final Map<String, String> _endpointNames = {};
   final Map<String, int> _connectAttemptTokens = {};
+  final Map<String, Timer> _capabilityWatchdogTimers = {};
+  
+  @visibleForTesting
+  Duration handshakeWatchdogDuration = const Duration(seconds: 15);
+  @visibleForTesting
+  Duration capabilityWatchdogDuration = const Duration(seconds: 15);
 
   StreamSubscription? _discoveredPeersSub;
   final Map<String, DateTime> _lastConnectAttempt = {};
@@ -516,6 +522,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
       }
       _lockReleaseTimers.clear();
       _connectAttemptTokens.clear();
+      for (final t in _capabilityWatchdogTimers.values) {
+        t.cancel();
+      }
+      _capabilityWatchdogTimers.clear();
     });
 
     // Persistent Recovery on App Boot
@@ -529,6 +539,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
   @visibleForTesting
   Set<String> get activeConnectLocks => _activeConnectLocks;
+
+  @visibleForTesting
+  Map<String, Timer> get handshakeTimers => _handshakeTimers;
+
+  @visibleForTesting
+  Map<String, Timer> get capabilityWatchdogTimers => _capabilityWatchdogTimers;
 
   void setActiveConversation(String? peerId) {
     if (peerId != null) {
@@ -1425,9 +1441,6 @@ class MessagingNotifier extends Notifier<MessagingState> {
       return;
     }
 
-    print('[VANTRA][SECURITY] STATE: KEY_DERIVED');
-    print('[VANTRA][SECURITY] KEY DERIVATION DETAILS: sharedSecretFingerprint=${derivedKeys.sharedSecretFingerprint}, sessionId=${derivedKeys.sessionId}');
-
     // Version range negotiation
     final localMin = kMinSupportedProtocolVersion;
     final localMax = kCurrentProtocolVersion;
@@ -1466,9 +1479,44 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
 
     _securitySessions[identity.peerId] = secSession;
+
+    print('[VANTRA][SECURITY] STATE: KEY_DERIVED');
+    print('[VANTRA][SECURITY] KEY DERIVATION DETAILS: sharedSecretFingerprint=${derivedKeys.sharedSecretFingerprint}, sessionId=${derivedKeys.sessionId}');
+    print('[VANTRA][SECURITY] secure session registered');
+    print('[VANTRA][SECURITY] HANDSHAKE WATCHDOG CANCELLED');
+
+    // Cancel/remove the original handshake watchdog timer
+    final wasHandshakeCancelled = _handshakeTimers.containsKey(identity.endpointId);
+    _handshakeTimers[identity.endpointId]?.cancel();
+    _handshakeTimers.remove(identity.endpointId);
+    if (wasHandshakeCancelled) {
+      print('[VANTRA][CONNECTION][HANDSHAKE WATCHDOG CANCELLED]\npeerId=${identity.peerId}\nendpointId=${identity.endpointId}');
+    }
+
     if (isV1) {
       _completeSecureHandshake(identity.endpointId, identity.peerId, 'secure_identity_v1');
+    } else {
+      // Start the V2 capability-negotiation watchdog
+      print('[VANTRA][CONNECTION][CAPABILITY_WATCHDOG_START] endpointId=${identity.endpointId} duration=15s');
+      _capabilityWatchdogTimers[identity.endpointId]?.cancel();
+      _capabilityWatchdogTimers[identity.endpointId] = Timer(capabilityWatchdogDuration, () async {
+        _capabilityWatchdogTimers.remove(identity.endpointId);
+        final pId = state.endpointToPeerId[identity.endpointId];
+        final sess = pId != null ? state.sessions[pId] : null;
+        if (sess == null || sess.status != SessionStatus.connected || sess.enabledCapabilities == null) {
+          print('[VANTRA][CONNECTION][CAPABILITY_TIMEOUT]\nendpointId=${identity.endpointId}');
+          if (pId != null) {
+            _releaseConnectLock(pId, 'capability_timeout');
+            _securitySessions.remove(pId);
+          }
+          _pendingEphemeralKeys.remove(identity.endpointId);
+          try {
+            await ref.read(transportProvider).disconnect(identity.endpointId);
+          } catch (_) {}
+        }
+      });
     }
+
     _reconnectBackoff.remove(identity.peerId);
     _lastConnectAttempt.remove(identity.peerId);
 
@@ -1702,7 +1750,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         _handshakeTimers[update.endpointId]?.cancel();
         
         print('[HANDSHAKE_TIMER][CREATE] endpointId=${update.endpointId} reason=connected_status_received sessionStatus=${existingSession?.status.name ?? "none"} isSecure=${existingSession?.isSecure ?? false}');
-        _handshakeTimers[update.endpointId] = Timer(const Duration(seconds: 15), () async {
+        _handshakeTimers[update.endpointId] = Timer(handshakeWatchdogDuration, () async {
           final pId = state.endpointToPeerId[update.endpointId];
           final sess = pId != null ? state.sessions[pId] : null;
           final currentSecSession = pId != null ? _securitySessions[pId] : null;
@@ -1970,6 +2018,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
       print('[HANDSHAKE_TIMER][CANCEL] endpointId=${update.endpointId} reason=disconnected_status_received sessionStatus=none isSecure=false');
       _handshakeTimers.remove(update.endpointId)?.cancel();
+      _capabilityWatchdogTimers.remove(update.endpointId)?.cancel();
 
       _printHandshakeTrace('ConnectionStatus.${update.status.name} received', endpointId: update.endpointId, peerId: candidatePeerId);
 
@@ -2161,6 +2210,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
       print('[VANTRA][HANDSHAKE][WATCHDOG_CANCEL] endpoint=$endpointId');
       _handshakeTimers[endpointId]?.cancel();
       _handshakeTimers.remove(endpointId);
+    }
+
+    if (_capabilityWatchdogTimers.containsKey(endpointId)) {
+      print('[VANTRA][CONNECTION][CAPABILITY_WATCHDOG_CANCEL] endpointId=$endpointId');
+      _capabilityWatchdogTimers[endpointId]?.cancel();
+      _capabilityWatchdogTimers.remove(endpointId);
     }
     
     _releaseConnectLock(peerId, 'handshake_complete_$source');
