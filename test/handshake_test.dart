@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -731,7 +733,286 @@ void main() {
         expect(mockTransport.disconnectCalled, isFalse);
       });
     });
+
+    group('Stale Handshake Continuation Race Prevention Tests', () {
+      test('TEST: stale handshake continuation after disconnect', () async {
+        final pausableCrypto = PausableCryptoService();
+        pausableCrypto.deriveSessionKeysCompleter = Completer<void>();
+
+        final testContainer = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(await SharedPreferences.getInstance()),
+            transportProvider.overrideWithValue(fakeTransport),
+            appDatabaseProvider.overrideWithValue(testDb),
+            secureStorageServiceProvider.overrideWithValue(FakeSecureStorageService()),
+            cryptoServiceProvider.overrideWithValue(pausableCrypto),
+          ],
+        );
+        addTearDown(testContainer.dispose);
+
+        await testContainer.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
+        final notifier = testContainer.read(messagingStateProvider.notifier);
+
+        final remoteIdentityKeyPair = await cryptoService.generateIdentityKeyPair();
+        final remoteEphemeralKeyPair = await cryptoService.generateEphemeralKeyPair();
+        final remoteIdPub = await remoteIdentityKeyPair.extractPublicKey();
+        final remoteEphPub = await remoteEphemeralKeyPair.extractPublicKey();
+        final remotePeerId = const Uuid().v4();
+
+        // 1. Start handshake for endpoint E (QHZD)
+        fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'RemoteStaleTestPeer:$remotePeerId',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final sigBytes = await cryptoService.signHandshake(
+          identityKeyPair: remoteIdentityKeyPair,
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemoteStaleTestPeer',
+          identityPublicKeyBytes: remoteIdPub.bytes,
+          ephemeralPublicKeyBytes: remoteEphPub.bytes,
+        );
+
+        final handshakeMessage = DomainHandshakePayload(
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: remotePeerId,
+          displayName: 'RemoteStaleTestPeer',
+          identityPublicKey: Uint8List.fromList(remoteIdPub.bytes),
+          ephemeralPublicKey: Uint8List.fromList(remoteEphPub.bytes),
+          signature: Uint8List.fromList(sigBytes),
+          minSupportedVersion: kMinSupportedProtocolVersion,
+          maxSupportedVersion: kCurrentProtocolVersion,
+        );
+
+        // Deliver handshake payload
+        fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(handshakeMessage));
+
+        // 2. Pause deriveSessionKeys() - wait until paused
+        await Future.delayed(const Duration(milliseconds: 50));
+        expect(pausableCrypto.deriveSessionKeysCompleter!.isCompleted, isFalse);
+
+        // 3. Emit ConnectionStatus.disconnected for E (QHZD)
+        fakeTransport.triggerConnectionUpdate(ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.disconnected,
+          endpointName: 'RemoteStaleTestPeer:$remotePeerId',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // 4. Verify:
+        // - endpoint removed from alive endpoints
+        // - security session removed
+        // - PeerSession becomes disconnected
+        expect(notifier.aliveEndpoints.contains('QHZD'), isFalse);
+        expect(notifier.securitySessions[remotePeerId], isNull);
+        final stateAfterDisconnect = testContainer.read(messagingStateProvider);
+        expect(stateAfterDisconnect.sessions[remotePeerId]?.status, SessionStatus.disconnected);
+        expect(stateAfterDisconnect.sessions[remotePeerId]?.isSecure, isFalse);
+
+        // Clear sent payloads tracking to observe any stale outbound packets
+        fakeTransport.sentPayloads.clear();
+        fakeTransport.disconnectCalled = false;
+
+        // 5. Resume deriveSessionKeys()
+        pausableCrypto.deriveSessionKeysCompleter!.complete();
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // 6. Verify handshake continuation aborts
+        // 7. Verify:
+        // - no security session is recreated
+        // - state is NOT changed back to handshaking/secure
+        // - no capabilities exchange is sent
+        // - no transport disconnect is triggered by the stale continuation
+        expect(notifier.securitySessions[remotePeerId], isNull);
+        final stateAfterResume = testContainer.read(messagingStateProvider);
+        expect(stateAfterResume.sessions[remotePeerId]?.status, SessionStatus.disconnected);
+        expect(stateAfterResume.sessions[remotePeerId]?.isSecure, isFalse);
+        expect(fakeTransport.sentPayloads.isEmpty, isTrue);
+        expect(fakeTransport.disconnectCalled, isFalse);
+      });
+
+      test('TEST: old handshake cannot overwrite newer connection', () async {
+        final pausableCrypto = PausableCryptoService();
+        pausableCrypto.deriveSessionKeysCompleter = Completer<void>();
+
+        final testContainer = ProviderContainer(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(await SharedPreferences.getInstance()),
+            transportProvider.overrideWithValue(fakeTransport),
+            appDatabaseProvider.overrideWithValue(testDb),
+            secureStorageServiceProvider.overrideWithValue(FakeSecureStorageService()),
+            cryptoServiceProvider.overrideWithValue(pausableCrypto),
+          ],
+        );
+        addTearDown(testContainer.dispose);
+
+        await testContainer.read(localIdentityStateProvider.notifier).ensureKeysLoaded();
+        final notifier = testContainer.read(messagingStateProvider.notifier);
+
+        // 1. Start handshake generation 1 on endpoint E (QHZD) for peer 1
+        fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'QHZD',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final peer1IdentityKeyPair = await cryptoService.generateIdentityKeyPair();
+        final peer1EphemeralKeyPair = await cryptoService.generateEphemeralKeyPair();
+        final peer1IdPub = await peer1IdentityKeyPair.extractPublicKey();
+        final peer1EphPub = await peer1EphemeralKeyPair.extractPublicKey();
+        final peer1Id = const Uuid().v4();
+
+        final peer1Sig = await cryptoService.signHandshake(
+          identityKeyPair: peer1IdentityKeyPair,
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: peer1Id,
+          displayName: 'Gen1Peer',
+          identityPublicKeyBytes: peer1IdPub.bytes,
+          ephemeralPublicKeyBytes: peer1EphPub.bytes,
+        );
+
+        final peer1Payload = DomainHandshakePayload(
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: peer1Id,
+          displayName: 'Gen1Peer',
+          identityPublicKey: Uint8List.fromList(peer1IdPub.bytes),
+          ephemeralPublicKey: Uint8List.fromList(peer1EphPub.bytes),
+          signature: Uint8List.fromList(peer1Sig),
+          minSupportedVersion: kMinSupportedProtocolVersion,
+          maxSupportedVersion: kCurrentProtocolVersion,
+        );
+
+        fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(peer1Payload));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final gen1Completer = pausableCrypto.deriveSessionKeysCompleter!;
+        expect(gen1Completer.isCompleted, isFalse);
+        final initialGen = notifier.handshakeGenerations['QHZD'];
+        expect(initialGen, isNotNull);
+
+        // 2. Disconnect E
+        fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.disconnected,
+          endpointName: 'QHZD',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+        expect(notifier.handshakeGenerations['QHZD'], isNull);
+
+        // 3. Start generation 2 on endpoint E for peer 2
+        fakeTransport.triggerConnectionUpdate(const ConnectionUpdate(
+          endpointId: 'QHZD',
+          status: ConnectionStatus.connected,
+          endpointName: 'QHZD',
+        ));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // Gen 2 will complete immediately
+        pausableCrypto.deriveSessionKeysCompleter = null;
+
+        final peer2IdentityKeyPair = await cryptoService.generateIdentityKeyPair();
+        final peer2EphemeralKeyPair = await cryptoService.generateEphemeralKeyPair();
+        final peer2IdPub = await peer2IdentityKeyPair.extractPublicKey();
+        final peer2EphPub = await peer2EphemeralKeyPair.extractPublicKey();
+        final peer2Id = const Uuid().v4();
+
+        final peer2Sig = await cryptoService.signHandshake(
+          identityKeyPair: peer2IdentityKeyPair,
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: peer2Id,
+          displayName: 'Gen2Peer',
+          identityPublicKeyBytes: peer2IdPub.bytes,
+          ephemeralPublicKeyBytes: peer2EphPub.bytes,
+        );
+
+        final peer2Payload = DomainHandshakePayload(
+          protocolVersion: kCurrentProtocolVersion,
+          peerId: peer2Id,
+          displayName: 'Gen2Peer',
+          identityPublicKey: Uint8List.fromList(peer2IdPub.bytes),
+          ephemeralPublicKey: Uint8List.fromList(peer2EphPub.bytes),
+          signature: Uint8List.fromList(peer2Sig),
+          minSupportedVersion: kMinSupportedProtocolVersion,
+          maxSupportedVersion: kCurrentProtocolVersion,
+        );
+
+        fakeTransport.triggerIncomingPayload('QHZD', codec.encodeWireEnvelope(peer2Payload));
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        final gen2 = notifier.handshakeGenerations['QHZD'];
+        expect(gen2, isNotNull);
+        expect(gen2, isNot(equals(initialGen)));
+        expect(notifier.securitySessions[peer2Id], isNotNull);
+        expect(testContainer.read(messagingStateProvider).sessions[peer2Id]?.isSecure, isTrue);
+
+        // 4. Resume generation 1
+        gen1Completer.complete();
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // 5. Verify generation 1 cannot modify:
+        // - securitySessions
+        // - state.sessions
+        // - endpoint mappings
+        // - capabilities exchange
+        expect(notifier.securitySessions[peer1Id], isNull);
+        expect(notifier.securitySessions[peer2Id]?.peerId, peer2Id);
+        final finalState = testContainer.read(messagingStateProvider);
+        expect(finalState.sessions[peer1Id]?.isSecure ?? false, isFalse);
+        expect(finalState.sessions[peer2Id]?.isSecure, isTrue);
+        expect(finalState.endpointToPeerId['QHZD'], peer2Id);
+      });
+
+      test('TEST: initializeDoubleRatchet succeeds without empty key platform exceptions', () async {
+        final localKeyPair = await cryptoService.generateEphemeralKeyPair();
+        final remoteKeyPair = await cryptoService.generateEphemeralKeyPair();
+        final remotePub = await remoteKeyPair.extractPublicKey();
+
+        final session = SecuritySession(
+          peerId: 'test-peer-id',
+          endpointId: 'QHZD',
+          sessionId: 'test-session-id',
+          sessionSalt: List<int>.filled(64, 1),
+          remoteIdentityPublicKey: 'test-pub-key',
+          remoteFingerprint: 'test-fingerprint',
+          sendKey: SecretKey([]),
+          receiveKey: SecretKey([]),
+        );
+
+        // After the fix, this must complete successfully without throwing
+        await cryptoService.initializeDoubleRatchet(
+          session: session,
+          handshakeLocalKeyPair: localKeyPair,
+          handshakeRemotePublicKeyBytes: remotePub.bytes,
+          isDeviceA: true,
+        );
+
+        expect(session.rootKey, isNotNull);
+        expect(session.sendingChainKey, isNotNull);
+      });
+    });
   });
+}
+
+class PausableCryptoService extends CryptoService {
+  Completer<void>? deriveSessionKeysCompleter;
+
+  @override
+  Future<DerivedSessionKeys> deriveSessionKeys({
+    required SimpleKeyPair localEphemeralKeyPair,
+    required List<int> remoteEphemeralPublicKeyBytes,
+  }) async {
+    if (deriveSessionKeysCompleter != null) {
+      await deriveSessionKeysCompleter!.future;
+    }
+    return super.deriveSessionKeys(
+      localEphemeralKeyPair: localEphemeralKeyPair,
+      remoteEphemeralPublicKeyBytes: remoteEphemeralPublicKeyBytes,
+    );
+  }
 }
 
 class DelayedCryptoService extends CryptoService {

@@ -380,6 +380,44 @@ class MessagingNotifier extends Notifier<MessagingState> {
     );
   }
 
+  int _handshakeAttemptCounter = 0;
+  final Map<String, int> _handshakeGenerations = {};
+  int _handshakeGenerationCounter = 0;
+
+  bool _isHandshakeStillCurrent(
+    String endpointId,
+    int generation,
+  ) {
+    return !_isDisposed &&
+        _aliveEndpoints.contains(endpointId) &&
+        _handshakeGenerations[endpointId] == generation;
+  }
+
+  @visibleForTesting
+  Map<String, int> get handshakeGenerations => _handshakeGenerations;
+
+  Future<void> _disconnectTransport({
+    required String site,
+    required String endpointId,
+    required String? peerId,
+    required String reason,
+  }) async {
+    _handshakeGenerations.remove(endpointId);
+    print('[VANTRA][FORENSIC][EXPLICIT_DISCONNECT]\n'
+          'site=$site\n'
+          'peerId=${peerId ?? "unknown"}\n'
+          'endpointId=$endpointId\n'
+          'reason=$reason\n'
+          'stack=${StackTrace.current}');
+    try {
+      final transport = ref.read(transportProvider);
+      await transport.disconnect(endpointId);
+    } catch (e, st) {
+      print('[VANTRA][FORENSIC][DISCONNECT_ERROR] site=$site endpoint=$endpointId error=$e\n$st');
+      rethrow;
+    }
+  }
+
   // Connection Request Idempotency Tracking
   final Set<String> _acceptedEndpoints = {};
   final Set<String> _rejectedEndpoints = {};
@@ -529,6 +567,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
         t.cancel();
       }
       _capabilityWatchdogTimers.clear();
+      _handshakeGenerations.clear();
     });
 
     // Persistent Recovery on App Boot
@@ -812,10 +851,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
         if (plaintext.minSupportedVersion != activeSession.remoteMinVersion ||
             plaintext.maxSupportedVersion != activeSession.remoteMaxVersion) {
           print('[VANTRA][SECURITY] Version range mismatch! Handshake advertised [${activeSession.remoteMinVersion}..${activeSession.remoteMaxVersion}], exchange claimed [${plaintext.minSupportedVersion}..${plaintext.maxSupportedVersion}]. Terminating connection.');
-          print('[FORENSIC][DISCONNECT_SITE_1] Version mismatch in CapabilitiesExchange peerId=$peerId endpointId=$endpointId');
-          print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site1\nendpoint=$endpointId\npeerId=$peerId\nreason=Version range mismatch in CapabilitiesExchange\nstack=${StackTrace.current}');
-          final transport = ref.read(transportProvider);
-          await transport.disconnect(endpointId);
+          await _disconnectTransport(
+            site: 'Site 1 (_processDecryptedPlaintext - version range mismatch)',
+            endpointId: endpointId,
+            peerId: peerId,
+            reason: 'Version range mismatch: advertised [${activeSession.remoteMinVersion}..${activeSession.remoteMaxVersion}], claimed [${plaintext.minSupportedVersion}..${plaintext.maxSupportedVersion}]',
+          );
           return;
         }
 
@@ -825,10 +866,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
         if (!listsMatch) {
           print('[VANTRA][SECURITY] Capability advertisement mismatch! Terminating connection.');
-          print('[FORENSIC][DISCONNECT_SITE_2] Capability list mismatch in CapabilitiesExchange peerId=$peerId endpointId=$endpointId');
-          print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site2\nendpoint=$endpointId\npeerId=$peerId\nreason=Capability list mismatch in CapabilitiesExchange\nstack=${StackTrace.current}');
-          final transport = ref.read(transportProvider);
-          await transport.disconnect(endpointId);
+          await _disconnectTransport(
+            site: 'Site 2 (_processDecryptedPlaintext - capability list mismatch)',
+            endpointId: endpointId,
+            peerId: peerId,
+            reason: 'Capability list mismatch: expected $remoteCaps, claimed ${plaintext.supportedCapabilities}',
+          );
           return;
         }
       }
@@ -1301,27 +1344,33 @@ class MessagingNotifier extends Notifier<MessagingState> {
   }
 
   Future<void> _handleSecureIdentityReceived(SessionSecureIdentity identity) async {
+    final generation = ++_handshakeGenerationCounter;
+    _handshakeGenerations[identity.endpointId] = generation;
+    print('[VANTRA][HANDSHAKE][ATTEMPT_START] attemptId=$generation peerId=${identity.peerId} endpointId=${identity.endpointId}');
+
     final activeSession = state.sessions[identity.peerId];
     if (activeSession != null &&
         activeSession.status == SessionStatus.connected &&
         activeSession.endpointId == identity.endpointId) {
-      print('[VANTRA][SESSION][HANDSHAKE] stage=HANDSHAKE_RECEIVED peerId=${identity.peerId} endpoint=${identity.endpointId} info=Duplicate handshake ignored on active connection');
+      print('[VANTRA][SESSION][HANDSHAKE] stage=HANDSHAKE_RECEIVED attemptId=$generation peerId=${identity.peerId} endpoint=${identity.endpointId} info=Duplicate handshake ignored on active connection');
       return;
     }
 
-    print('[VANTRA][SESSION][HANDSHAKE] stage=HANDSHAKE_RECEIVED peerId=${identity.peerId} endpoint=${identity.endpointId}');
+    print('[VANTRA][SESSION][HANDSHAKE] stage=HANDSHAKE_RECEIVED attemptId=$generation peerId=${identity.peerId} endpoint=${identity.endpointId}');
     print('[VANTRA][PIPELINE] HANDSHAKE_RECEIVED endpoint=${identity.endpointId} peerId=${identity.peerId}');
     print('[VANTRA][SESSION][IDENTITY] Handshake packet received from displayName=${identity.displayName} peerId=${identity.peerId}');
-    print('[VANTRA][SECURITY] INBOUND HANDSHAKE: peerId=${identity.peerId}, displayName=${identity.displayName}, endpointId=${identity.endpointId}, v=${identity.protocolVersion}');
+    print('[VANTRA][SECURITY] INBOUND HANDSHAKE: attemptId=$generation, peerId=${identity.peerId}, displayName=${identity.displayName}, endpointId=${identity.endpointId}, v=${identity.protocolVersion}');
 
     // Reject unsupported protocol versions
     if (identity.protocolVersion < kMinSupportedProtocolVersion || identity.protocolVersion > kCurrentProtocolVersion) {
-      print('[VANTRA][SESSION][HANDSHAKE] stage=HANDSHAKE_DECODED peerId=${identity.peerId} endpoint=${identity.endpointId} error=Unsupported protocol version');
+      print('[VANTRA][SESSION][HANDSHAKE] stage=HANDSHAKE_DECODED attemptId=$generation peerId=${identity.peerId} endpoint=${identity.endpointId} error=Unsupported protocol version');
       print('[VANTRA][SECURITY] Unsupported protocol version: ${identity.protocolVersion}');
-      print('[FORENSIC][DISCONNECT_SITE_3] Unsupported protocol version=${identity.protocolVersion} peerId=${identity.peerId} endpointId=${identity.endpointId}');
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site3\nendpoint=${identity.endpointId}\npeerId=${identity.peerId}\nreason=Unsupported protocol version ${identity.protocolVersion}\nstack=${StackTrace.current}');
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
+      await _disconnectTransport(
+        site: 'Site 3 (_handleSecureIdentityReceived - unsupported protocol version)',
+        endpointId: identity.endpointId,
+        peerId: identity.peerId,
+        reason: 'Unsupported protocol version: ${identity.protocolVersion} (supported: $kMinSupportedProtocolVersion..$kCurrentProtocolVersion)',
+      );
       return;
     }
 
@@ -1329,10 +1378,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
     final ephKeyBytes = _hexDecode(identity.ephemeralPublicKeyHex);
     final sigBytes = _hexDecode(identity.signatureHex);
 
-    print('[VANTRA][SESSION][HANDSHAKE] stage=HANDSHAKE_DECODED peerId=${identity.peerId} endpoint=${identity.endpointId}');
+    print('[VANTRA][SESSION][HANDSHAKE] stage=HANDSHAKE_DECODED attemptId=$generation peerId=${identity.peerId} endpoint=${identity.endpointId}');
 
     final remoteFingerprint = await _cryptoService.computeFingerprint(idKeyBytes);
-    if (_isDisposed) return;
+    if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+      print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=computeFingerprint_resumed_stale');
+      return;
+    }
     print('[VANTRA][SECURITY] REMOTE ID FINGERPRINT: $remoteFingerprint, ephemeralPubLen=${ephKeyBytes.length}, sigLen=${sigBytes.length}');
 
     // 1. Verify Ed25519 canonical signature
@@ -1344,20 +1396,25 @@ class MessagingNotifier extends Notifier<MessagingState> {
       displayName: identity.displayName,
       ephemeralPublicKeyBytes: ephKeyBytes,
     );
-    if (_isDisposed) return;
-
-    if (!isValid) {
-      print('[VANTRA][SESSION][HANDSHAKE] stage=IDENTITY_VERIFIED peerId=${identity.peerId} endpoint=${identity.endpointId} error=Signature verification failed');
-      print('[VANTRA][SESSION][IDENTITY] Signature verification failed for peer ${identity.peerId}');
-      print('[VANTRA][SECURITY] SIGNATURE VERIFICATION: result=FAILED! Disconnecting untrusted peer.');
-      print('[FORENSIC][DISCONNECT_SITE_4] Signature verification FAILED peerId=${identity.peerId} endpointId=${identity.endpointId}');
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site4\nendpoint=${identity.endpointId}\npeerId=${identity.peerId}\nreason=Signature verification failed\nstack=${StackTrace.current}');
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
+    if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+      print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=verifyHandshake_resumed_stale');
       return;
     }
 
-    print('[VANTRA][SESSION][HANDSHAKE] stage=IDENTITY_VERIFIED peerId=${identity.peerId} endpoint=${identity.endpointId}');
+    if (!isValid) {
+      print('[VANTRA][SESSION][HANDSHAKE] stage=IDENTITY_VERIFIED attemptId=$generation peerId=${identity.peerId} endpoint=${identity.endpointId} error=Signature verification failed');
+      print('[VANTRA][SESSION][IDENTITY] Signature verification failed for peer ${identity.peerId}');
+      print('[VANTRA][SECURITY] SIGNATURE VERIFICATION: result=FAILED! Disconnecting untrusted peer.');
+      await _disconnectTransport(
+        site: 'Site 4 (_handleSecureIdentityReceived - signature verification failed)',
+        endpointId: identity.endpointId,
+        peerId: identity.peerId,
+        reason: 'Ed25519 canonical signature verification failed',
+      );
+      return;
+    }
+
+    print('[VANTRA][SESSION][HANDSHAKE] stage=IDENTITY_VERIFIED attemptId=$generation peerId=${identity.peerId} endpoint=${identity.endpointId}');
     print('[VANTRA][SESSION][IDENTITY] Signature verification succeeded for peer ${identity.peerId}');
     print('[VANTRA][SECURITY] SIGNATURE VERIFICATION: result=SUCCESS');
     print('[VANTRA][SECURITY] STATE: IDENTITY_VERIFIED');
@@ -1365,16 +1422,21 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     final repo = ref.read(messagingRepositoryProvider);
     final existingPeer = await repo.getPeer(identity.peerId);
-    if (_isDisposed) return;
+    if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+      print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=getPeer_resumed_stale');
+      return;
+    }
     final trustState = existingPeer?.trustState ?? PeerTrustState.untrusted;
 
     if (trustState == PeerTrustState.distrusted) {
       print('[VANTRA][SECURITY] BLOCKED PEER CONNECTION REJECTED: peerId=${identity.peerId}, endpointId=${identity.endpointId}');
-      print('[FORENSIC][DISCONNECT_SITE_5] Peer is distrusted peerId=${identity.peerId} endpointId=${identity.endpointId}');
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site5\nendpoint=${identity.endpointId}\npeerId=${identity.peerId}\nreason=Peer is distrusted\nstack=${StackTrace.current}');
       _pendingEphemeralKeys.remove(identity.endpointId);
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
+      await _disconnectTransport(
+        site: 'Site 5 (_handleSecureIdentityReceived - peer distrusted)',
+        endpointId: identity.endpointId,
+        peerId: identity.peerId,
+        reason: 'Peer trust state is distrusted',
+      );
       return;
     }
 
@@ -1382,11 +1444,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
         existingPeer?.verifiedPublicKey != null &&
         existingPeer!.verifiedPublicKey != identity.identityPublicKeyHex) {
       print('[VANTRA][NEARBY] IDENTITY_MISMATCH (VERIFIED) peerId=${identity.peerId} verifiedKey=${existingPeer.verifiedPublicKey} newKey=${identity.identityPublicKeyHex}');
-      print('[FORENSIC][DISCONNECT_SITE_6] Identity mismatch (verified) peerId=${identity.peerId} endpointId=${identity.endpointId}');
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site6\nendpoint=${identity.endpointId}\npeerId=${identity.peerId}\nreason=Identity mismatch for verified peer\nstack=${StackTrace.current}');
       _pendingEphemeralKeys.remove(identity.endpointId);
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
+      await _disconnectTransport(
+        site: 'Site 6 (_handleSecureIdentityReceived - verified peer identity mismatch)',
+        endpointId: identity.endpointId,
+        peerId: identity.peerId,
+        reason: 'Verified peer public key changed (stored=${existingPeer.verifiedPublicKey}, received=${identity.identityPublicKeyHex})',
+      );
 
       final session = state.sessions[identity.peerId];
       state = state.copyWith(
@@ -1412,11 +1476,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
         existingPeer?.publicKey != null &&
         existingPeer!.publicKey != identity.identityPublicKeyHex) {
       print('[VANTRA][NEARBY] IDENTITY_MISMATCH peerId=${identity.peerId} oldKey=${existingPeer.publicKey} newKey=${identity.identityPublicKeyHex}');
-      print('[FORENSIC][DISCONNECT_SITE_7] Identity mismatch (trusted) peerId=${identity.peerId} endpointId=${identity.endpointId}');
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site7\nendpoint=${identity.endpointId}\npeerId=${identity.peerId}\nreason=Identity mismatch for trusted peer\nstack=${StackTrace.current}');
       _pendingEphemeralKeys.remove(identity.endpointId);
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
+      await _disconnectTransport(
+        site: 'Site 7 (_handleSecureIdentityReceived - trusted peer identity mismatch)',
+        endpointId: identity.endpointId,
+        peerId: identity.peerId,
+        reason: 'Trusted peer public key changed (stored=${existingPeer.publicKey}, received=${identity.identityPublicKeyHex})',
+      );
 
       final session = state.sessions[identity.peerId];
       state = state.copyWith(
@@ -1442,7 +1508,10 @@ class MessagingNotifier extends Notifier<MessagingState> {
     var localEphKeyPair = _pendingEphemeralKeys[identity.endpointId];
     if (localEphKeyPair == null) {
       localEphKeyPair = await _cryptoService.generateEphemeralKeyPair();
-      if (_isDisposed) return;
+      if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+        print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=generateEphemeralKeyPair_resumed_stale');
+        return;
+      }
       _pendingEphemeralKeys[identity.endpointId] = localEphKeyPair;
     }
 
@@ -1452,17 +1521,25 @@ class MessagingNotifier extends Notifier<MessagingState> {
         localEphemeralKeyPair: localEphKeyPair,
         remoteEphemeralPublicKeyBytes: ephKeyBytes,
       );
-      if (_isDisposed) return;
-      print('[VANTRA][SESSION][HANDSHAKE] stage=SESSION_DERIVED peerId=${identity.peerId} endpoint=${identity.endpointId}');
+      if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+        print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=deriveSessionKeys_resumed_stale');
+        return;
+      }
+      print('[VANTRA][SESSION][HANDSHAKE] stage=SESSION_DERIVED attemptId=$generation peerId=${identity.peerId} endpoint=${identity.endpointId}');
       print('[VANTRA][SESSION][CRYPTO] Session keys derived successfully for peer ${identity.peerId}');
     } catch (e) {
-      if (_isDisposed) return;
-      print('[VANTRA][SESSION][HANDSHAKE] stage=SESSION_DERIVED peerId=${identity.peerId} endpoint=${identity.endpointId} error=Key derivation failed: $e');
+      if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+        print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=deriveSessionKeys_catch_stale');
+        return;
+      }
+      print('[VANTRA][SESSION][HANDSHAKE] stage=SESSION_DERIVED attemptId=$generation peerId=${identity.peerId} endpoint=${identity.endpointId} error=Key derivation failed: $e');
       print('[VANTRA][SESSION][CRYPTO] Key derivation failed for peer ${identity.peerId}: $e');
-      print('[FORENSIC][DISCONNECT_SITE_8] Key derivation failed peerId=${identity.peerId} endpointId=${identity.endpointId} error=$e');
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site8\nendpoint=${identity.endpointId}\npeerId=${identity.peerId}\nreason=Key derivation failed: $e\nstack=${StackTrace.current}');
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
+      await _disconnectTransport(
+        site: 'Site 8 (_handleSecureIdentityReceived - key derivation failed)',
+        endpointId: identity.endpointId,
+        peerId: identity.peerId,
+        reason: 'Key derivation exception: $e',
+      );
       return;
     }
 
@@ -1477,10 +1554,12 @@ class MessagingNotifier extends Notifier<MessagingState> {
 
     if (start > end) {
       print('[VANTRA][SECURITY] Incompatible version range: local [$localMin..$localMax], remote [$remoteMin..$remoteMax]. Disconnecting.');
-      print('[FORENSIC][DISCONNECT_SITE_9] Incompatible version range local=[$localMin..$localMax] remote=[$remoteMin..$remoteMax] peerId=${identity.peerId} endpointId=${identity.endpointId}');
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site9\nendpoint=${identity.endpointId}\npeerId=${identity.peerId}\nreason=Incompatible version range local=[$localMin..$localMax] remote=[$remoteMin..$remoteMax]\nstack=${StackTrace.current}');
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
+      await _disconnectTransport(
+        site: 'Site 9 (_handleSecureIdentityReceived - incompatible version range)',
+        endpointId: identity.endpointId,
+        peerId: identity.peerId,
+        reason: 'Incompatible version range: local [$localMin..$localMax], remote [$remoteMin..$remoteMax]',
+      );
       return;
     }
     final negotiatedVersion = end;
@@ -1498,7 +1577,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
       receiveKey: derivedKeys.receiveKey,
     );
 
-    print('[SECURITY] DOUBLE_RATCHET_INIT_START peerId=${identity.peerId} endpointId=${identity.endpointId}');
+    print('[SECURITY] DOUBLE_RATCHET_INIT_START attemptId=$generation peerId=${identity.peerId} endpointId=${identity.endpointId}');
     try {
       await _cryptoService.initializeDoubleRatchet(
         session: secSession,
@@ -1506,13 +1585,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
         handshakeRemotePublicKeyBytes: ephKeyBytes,
         isDeviceA: derivedKeys.isDeviceA,
       );
-      if (_isDisposed) return;
-      print('[SECURITY] DOUBLE_RATCHET_INIT_SUCCESS peerId=${identity.peerId} endpointId=${identity.endpointId}');
+      if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+        print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=initializeDoubleRatchet_resumed_stale');
+        return;
+      }
+      print('[SECURITY] DOUBLE_RATCHET_INIT_SUCCESS attemptId=$generation peerId=${identity.peerId} endpointId=${identity.endpointId}');
     } catch (e, stackTrace) {
-      if (_isDisposed) return;
-      print('[SECURITY] DOUBLE_RATCHET_INIT_FAILED peerId=${identity.peerId} endpointId=${identity.endpointId} error=$e\n$stackTrace');
-      print('[FORENSIC][DISCONNECT_SITE_10] Double ratchet init FAILED peerId=${identity.peerId} endpointId=${identity.endpointId} error=$e');
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site10\nendpoint=${identity.endpointId}\npeerId=${identity.peerId}\nreason=Double ratchet init failed: $e\nstack=${StackTrace.current}');
+      if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+        print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=initializeDoubleRatchet_catch_stale');
+        return;
+      }
+      print('[SECURITY] DOUBLE_RATCHET_INIT_FAILED attemptId=$generation peerId=${identity.peerId} endpointId=${identity.endpointId} error=$e\n$stackTrace');
       
       // Clean up partially created SecuritySession
       _securitySessions.remove(identity.peerId);
@@ -1531,8 +1614,17 @@ class MessagingNotifier extends Notifier<MessagingState> {
         );
       }
       
-      final transport = ref.read(transportProvider);
-      await transport.disconnect(identity.endpointId);
+      await _disconnectTransport(
+        site: 'Site 10 (_handleSecureIdentityReceived - double ratchet init failed)',
+        endpointId: identity.endpointId,
+        peerId: identity.peerId,
+        reason: 'Double ratchet initialization exception: $e',
+      );
+      return;
+    }
+
+    if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+      print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=before_session_registration_stale');
       return;
     }
 
@@ -1578,10 +1670,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
             _securitySessions.remove(pId);
           }
           _pendingEphemeralKeys.remove(identity.endpointId);
-          print('[FORENSIC][DISCONNECT_SITE_11] Capability watchdog fired peerId=$pId endpointId=${identity.endpointId}');
-          print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site11\nendpoint=${identity.endpointId}\npeerId=$pId\nreason=Capability watchdog timeout\nstack=${StackTrace.current}');
           try {
-            await ref.read(transportProvider).disconnect(identity.endpointId);
+            await _disconnectTransport(
+              site: 'Site 11 (capabilityWatchdogTimers - timeout)',
+              endpointId: identity.endpointId,
+              peerId: pId,
+              reason: 'Capability negotiation watchdog timed out after 15s without receiving negotiated capabilities',
+            );
           } catch (_) {}
         }
       });
@@ -1631,6 +1726,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
       remoteCapabilities: remoteCapabilities,
     );
 
+    if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+      print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=before_state_write_stale');
+      return;
+    }
+
     // Sync in-memory state immediately (synchronously) before any asynchronous DB writes
     state = state.copyWith(
       sessions: {
@@ -1654,6 +1754,11 @@ class MessagingNotifier extends Notifier<MessagingState> {
       protocolVersion: negotiatedVersion,
     );
 
+    if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+      print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=upsertPeer_resumed_stale');
+      return;
+    }
+
     print('[VANTRA][SECURITY] STATE: SECURE with peer ${identity.peerId} (SessionId: ${derivedKeys.sessionId}, NegotiatedVersion: $negotiatedVersion)');
 
     if (isV1) {
@@ -1666,7 +1771,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
         print('[FORENSIC][CAPS_EXCHANGE_START] isDeviceA=true peerId=${identity.peerId} endpointId=${identity.endpointId}');
         print('[FORENSIC][SECESSION_PRECHECK] secSession_in_map=${_securitySessions.containsKey(identity.peerId)} sessionStatus=${state.sessions[identity.peerId]?.status.name ?? "null"}');
         try {
+          if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+            print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=before_sendCapabilities_stale');
+            return;
+          }
           await _sendCapabilitiesExchange(identity.peerId);
+          if (!_isHandshakeStillCurrent(identity.endpointId, generation)) {
+            print('[VANTRA][HANDSHAKE][STALE_ABORT] attemptId=$generation endpointId=${identity.endpointId} peerId=${identity.peerId} reason=after_sendCapabilities_stale');
+            return;
+          }
           print('[FORENSIC][CAPS_EXCHANGE_SENT] peerId=${identity.peerId} endpointId=${identity.endpointId}');
         } catch (e, st) {
           print('[FORENSIC][CAPS_EXCHANGE_FAILED] peerId=${identity.peerId} endpointId=${identity.endpointId} error=$e\n$st');
@@ -1854,12 +1967,15 @@ class MessagingNotifier extends Notifier<MessagingState> {
               print('[VANTRA][SECURITY] Handshake timed out for peer $pId. Destroying session and disconnecting.');
               print('[VANTRA][SESSION] SESSION_INVALIDATED peerId=$pId reason=Handshake timeout');
               print('[VANTRA][PIPELINE] STATE_INVALIDATION source=watchdog_timer endpoint=${update.endpointId} peerId=$pId reason=Handshake timeout');
-              print('[FORENSIC][DISCONNECT_SITE_12] Handshake watchdog TIMEOUT peerId=$pId endpointId=${update.endpointId} isSecure=${sess.isSecure}');
-              print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site12\nendpoint=${update.endpointId}\npeerId=$pId\nreason=Handshake watchdog timeout\nstack=${StackTrace.current}');
               _securitySessions.remove(pId);
               _pendingEphemeralKeys.remove(update.endpointId);
               try {
-                await ref.read(transportProvider).disconnect(update.endpointId);
+                await _disconnectTransport(
+                  site: 'Site 12 (handshakeTimers - watchdog timeout)',
+                  endpointId: update.endpointId,
+                  peerId: pId,
+                  reason: 'Handshake watchdog timed out after 15s while session was still insecure (isSecure=${sess.isSecure})',
+                );
               } catch (_) {}
             }
           }
@@ -1978,9 +2094,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
             print('[VANTRA][CONNECTION] Outgoing request abandoned due to simultaneous incoming request from initiator $remotePeerId');
             // Cancel/abandon outgoing attempt by calling disconnect() at transport layer
             final outgoingEndpointId = existingEndpointForPeer;
-            print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site13\nendpoint=$outgoingEndpointId\npeerId=$candidatePeerId\nreason=Outgoing request abandoned due to simultaneous incoming request\nstack=${StackTrace.current}');
             try {
-              ref.read(transportProvider).disconnect(outgoingEndpointId);
+              _disconnectTransport(
+                site: 'Site 13 (_handleConnectionUpdate - outgoing request abandoned)',
+                endpointId: outgoingEndpointId,
+                peerId: candidatePeerId,
+                reason: 'Outgoing connection attempt abandoned because incoming connection request arrived from initiator peer $remotePeerId',
+              );
             } catch (_) {}
             
             // Clean up the outgoing session local state to prepare for accepting the incoming request
@@ -2085,6 +2205,7 @@ class MessagingNotifier extends Notifier<MessagingState> {
     } else if (update.status == ConnectionStatus.disconnected ||
         update.status == ConnectionStatus.rejected ||
         update.status == ConnectionStatus.error) {
+      _handshakeGenerations.remove(update.endpointId);
       print('[VANTRA][CONNECTION][RESULT]\nendpointId=${update.endpointId}\nstatus=${update.status.name}');
       _aliveEndpoints.remove(update.endpointId);
       _endpointNames.remove(update.endpointId);
@@ -3354,10 +3475,13 @@ class MessagingNotifier extends Notifier<MessagingState> {
     // Terminate active transport and session if connected
     final session = state.sessions[peerId];
     if (session != null) {
-      final transport = ref.read(transportProvider);
-      print('[FORENSIC][EXPLICIT_DISCONNECT]\nsite=Site14\nendpoint=${session.endpointId}\npeerId=$peerId\nreason=User manually blocked peer\nstack=${StackTrace.current}');
       try {
-        await transport.disconnect(session.endpointId);
+        await _disconnectTransport(
+          site: 'Site 14 (blockPeer)',
+          endpointId: session.endpointId,
+          peerId: peerId,
+          reason: 'User manually blocked peer $peerId',
+        );
       } catch (_) {}
       VantraLogger.log('[VANTRA][CRYPTO] SESSION DESTROYED endpointId=${session.endpointId}');
       print('[VANTRA][SESSION] SESSION_INVALIDATED peerId=$peerId reason=Peer blocked');

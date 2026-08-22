@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/services.dart';
 import 'package:cryptography/cryptography.dart';
 import 'canonical_encoder.dart';
 import 'security_session.dart';
@@ -376,6 +377,17 @@ class CryptoService {
       remotePublicKey: SimplePublicKey(handshakeRemotePublicKeyBytes, type: KeyPairType.x25519),
     );
 
+    final hssData = await handshakeSharedSecret.extract();
+    final localDhPub = await handshakeLocalKeyPair.extractPublicKey();
+
+    print('[FORENSIC][RATCHET][INIT_STATE]\n'
+        'isDeviceA=$isDeviceA\n'
+        'sessionId=${session.sessionId.length}\n'
+        'sessionSalt=${session.sessionSalt.length}\n'
+        'handshakeLocalPubKeyLength=${localDhPub.bytes.length}\n'
+        'handshakeRemotePubKeyLength=${handshakeRemotePublicKeyBytes.length}\n'
+        'handshakeSharedSecretLength=${hssData.bytes.length}');
+
     // 2. Derive initial root key
     final initialRoot = await deriveInitialRootKey(handshakeSharedSecret);
     session.rootKey = initialRoot;
@@ -410,14 +422,34 @@ class CryptoService {
   }
 
   /// Derives initial 32-byte root key from the handshake ECDH shared secret using HKDF-SHA256
-  Future<SecretKey> deriveInitialRootKey(SecretKey handshakeSharedSecret) async {
+  Future<SecretKey> deriveInitialRootKey(SecretKey handshakeSharedSecret, {List<int> nonce = const []}) async {
+    // If the nonce is empty, we fall back to a 32-byte zero array (HashLen zeros for SHA-256)
+    // to comply with RFC 5869 and prevent IllegalArgumentException: Empty key on Android platform channel.
+    final hkdfSalt = nonce.isEmpty ? List<int>.filled(32, 0) : nonce;
+
+    if (hkdfSalt.isEmpty) {
+      throw PlatformException(
+        code: 'CAUGHT_ERROR',
+        message: 'Unexpected error\njava.lang.IllegalArgumentException: Empty key',
+      );
+    }
+
+    final hssData = await handshakeSharedSecret.extract();
+    print('[FORENSIC][RATCHET][HMAC_INPUT]\n'
+        'name=hkdf_extract_salt_initial_root\n'
+        'keyLength=${hkdfSalt.length}\n'
+        'empty=${hkdfSalt.isEmpty}\n'
+        'dataLength=${hssData.bytes.length}\n'
+        'algorithm=HMAC-SHA256\n'
+        'nonceLength=${hkdfSalt.length}');
+
     final hkdf = Hkdf(
       hmac: Hmac.sha256(),
       outputLength: 32,
     );
     return hkdf.deriveKey(
       secretKey: handshakeSharedSecret,
-      nonce: const [],
+      nonce: hkdfSalt,
       info: utf8.encode('VANTRA_DR_INITIAL_ROOT'),
     );
   }
@@ -428,6 +460,14 @@ class CryptoService {
     final dhFp = await computeFingerprint(dhData.bytes);
     final rootData = await rootKey.extract();
     final rootFp = await computeFingerprint(rootData.bytes);
+
+    print('[FORENSIC][RATCHET][HMAC_INPUT]\n'
+        'name=kdfRK_dhOutput_salt\n'
+        'keyLength=${dhData.bytes.length}\n'
+        'empty=${dhData.bytes.isEmpty}\n'
+        'dataLength=${rootData.bytes.length}\n'
+        'algorithm=HMAC-SHA256\n'
+        'rootKeyLength=${rootData.bytes.length}');
 
     final hkdf = Hkdf(
       hmac: Hmac.sha256(),
@@ -456,6 +496,15 @@ class CryptoService {
   /// KDF-CK step: derives a new chain key and message key from a chain key using HMAC-SHA256
   Future<MapEntry<SecretKey, SecretKey>> kdfCK(SecretKey chainKey) async {
     final hmac = Hmac.sha256();
+    final ckData = await chainKey.extract();
+
+    print('[FORENSIC][RATCHET][HMAC_INPUT]\n'
+        'name=kdfCK_chainKey_message\n'
+        'keyLength=${ckData.bytes.length}\n'
+        'empty=${ckData.bytes.isEmpty}\n'
+        'dataLength=1\n'
+        'algorithm=HMAC-SHA256\n'
+        'chainKeyLength=${ckData.bytes.length}');
     
     // Derive message key: HMAC(chainKey, [0x01])
     final msgMac = await hmac.calculateMac(
@@ -463,6 +512,14 @@ class CryptoService {
       secretKey: chainKey,
     );
     
+    print('[FORENSIC][RATCHET][HMAC_INPUT]\n'
+        'name=kdfCK_chainKey_next_chain\n'
+        'keyLength=${ckData.bytes.length}\n'
+        'empty=${ckData.bytes.isEmpty}\n'
+        'dataLength=1\n'
+        'algorithm=HMAC-SHA256\n'
+        'chainKeyLength=${ckData.bytes.length}');
+
     // Derive next chain key: HMAC(chainKey, [0x02])
     final nextChainMac = await hmac.calculateMac(
       const [0x02],
